@@ -1,0 +1,66 @@
+[build-system]
+requires = ["setuptools>=75"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "invoice-print-layout"
+version = "0.1.0"
+description = "Local ride-hailing trip-sheet and electronic-invoice PDF imposition tool"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+  "keyring>=25,<26",
+  "lark-oapi>=1.7.3,<2",
+  "Pillow>=10,<12",
+  "PyMuPDF>=1.24,<2",
+  "rapidocr-onnxruntime>=1.4,<2",
+  "typer>=0.12,<1",
+]
+
+[project.optional-dependencies]
+dev = [
+  "mypy>=1.11,<2",
+  "pytest>=8,<9",
+]
+
+[project.scripts]
+invoice-print-layout = "invoice_print_layout.cli:app"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+addopts = "-q"
+testpaths = ["tests"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+packages = ["invoice_print_layout"]
+
+[[tool.mypy.overrides]]
+module = ["pymupdf", "pymupdf.*"]
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = ["rapidocr_onnxruntime", "rapidocr_onnxruntime.*"]
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = ["lark_oapi", "lark_oapi.*"]
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = [
+  "invoice_print_layout.documents",
+  "invoice_print_layout.courier",
+  "invoice_print_layout.workbench_export",
+  "invoice_print_layout.delivery",
+  "invoice_print_layout.layout",
+  "tests.helpers",
+  "tests.test_layout",
+]
+disallow_untyped_calls = false
+
+[tool.setuptools.package-data]
+invoice_print_layout = ["web/*.html", "web/*.css", "web/*.js"]
