@@ -111,6 +111,21 @@ def detect_provider(text: str) -> RideProvider:
     return RideProvider.UNKNOWN
 
 
+def _freight_evidence(text: str) -> str | None:
+    """Find explicit freight signals without interpreting company material rules.
+
+    This only requests review: a brand mention is not enough to assert the
+    reimbursement category. Generic transportation or unknown sellers alone
+    must not block the existing invoice path.
+    """
+    compact = compact_text(text)
+    for marker in ("货拉拉", "货物运输", "货运", "拉货服务"):
+        if marker in compact:
+            return marker
+    match = re.search(r"\b(?:freight|cargo\s+transport(?:ation)?|lalamove|huolala)\b", text, re.IGNORECASE)
+    return match.group(0) if match else None
+
+
 def _parse_positioned_invoice_amount(page: pymupdf.Page) -> Decimal:
     anchors = (
         page.search_for("小写")
@@ -233,6 +248,11 @@ def inspect_pdf(path: Path) -> PdfDocument:
         if not compact_text(text):
             raise PdfInspectionError("PDF 无可提取文字，可能是扫描件")
         kind = classify_text(text)
+        freight_evidence = _freight_evidence(text)
+        if freight_evidence is not None:
+            raise PdfInspectionError(
+                f"检测到货运相关标识“{freight_evidence}”，不能按打车自动配对；请核对业务类别和所需材料"
+            )
         provider = detect_provider(text)
         try:
             amount = parse_amount(text, kind)

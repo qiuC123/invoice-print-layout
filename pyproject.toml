@@ -55,6 +55,7 @@ module = [
   "invoice_print_layout.documents",
   "invoice_print_layout.courier",
   "invoice_print_layout.workbench_export",
+  "invoice_print_layout.reimbursement",
   "invoice_print_layout.delivery",
   "invoice_print_layout.layout",
   "tests.helpers",
@@ -63,4 +64,4 @@ module = [
 disallow_untyped_calls = false
 
 [tool.setuptools.package-data]
-invoice_print_layout = ["web/*.html", "web/*.css", "web/*.js"]
+invoice_print_layout = ["web/*.html", "web/*.css", "web/*.js", "*.mjs"]

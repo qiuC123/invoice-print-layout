@@ -184,6 +184,12 @@ def decode_event(data: P2ImMessageReceiveV1) -> IncomingMessage | None:
     )
 
 
+def is_lodging_message(message: IncomingMessage, owner: str | None) -> bool:
+    return (message.message_type == 'text' and (message.text or '').strip().startswith('住宿')
+            and message.sender_type == 'user' and message.chat_type == 'p2p'
+            and owner is not None and message.sender_open_id == owner)
+
+
 def run_feishu_bot(
     workspace_root: Path,
     config_path: Path,
@@ -255,10 +261,64 @@ def _run_feishu_bot(
     )
     work_queue = DurableQueue(paths.root / '机器人任务' / 'messages.sqlite3')
 
+    # Opt-in owner-only lodging uses a separate durable queue and worker.
+    lodging_config = paths.root / 'lodging.json'
+    lodging_queue: DurableQueue | None = None
+    lodging_service: Any = None
+    if lodging_config.exists():
+        try:
+            from invoice_print_layout.lodging import LodgingService
+            from invoice_print_layout.lodging_remote import FeishuLodgingBackend, jev_intent
+            config = json.loads(lodging_config.read_text(encoding='utf-8'))
+            if config.get('enabled') is True and settings.owner_open_id:
+                if not all(isinstance(config.get(k), str) and config[k] for k in ('base_token', 'table_id')):
+                    raise ValueError('Invalid lodging configuration')
+                lodging_client = lark.Client.builder().app_id(settings.app_id).app_secret(app_secret).timeout(15).log_level(lark.LogLevel.ERROR).build()
+                lodging_service = LodgingService(paths.root / '住宿任务', settings.owner_open_id,
+                    FeishuLodgingBackend(lodging_client, config['base_token'], config['table_id']),
+                    jev_intent if config.get('jev_enabled') is True else None)
+                lodging_queue = DurableQueue(paths.root / '住宿任务' / 'messages.sqlite3')
+        except Exception:
+            lodging_queue = None
+            logging.error('住宿模块配置或存储不可用，住宿未启用；原发票收件继续运行')
+
     def handle_event(data: P2ImMessageReceiveV1) -> None:
         incoming = decode_event(data)
         if incoming is not None:
+            if lodging_queue is not None and is_lodging_message(incoming, settings.owner_open_id):
+                lodging_queue.put(incoming.message_id, asdict(incoming))
+                return
             work_queue.put(incoming.message_id, asdict(incoming))
+
+    def lodging_worker() -> None:
+        assert lodging_queue is not None
+        while True:
+            queued = lodging_queue.next()
+            if queued is None:
+                time.sleep(1)
+                continue
+            message_id, payload = queued
+            try:
+                reply = lodging_service.handle(payload['sender_open_id'], payload['chat_id'], message_id, payload['text'])
+                gateway.reply_text(message_id, reply)
+                lodging_queue.done(message_id)
+            except Exception:
+                if lodging_queue.fail(message_id):
+                    logging.error('住宿消息处理未完成，消息ID=%s；原任务已保留', message_id)
+                    try:
+                        gateway.reply_text(message_id, '住宿任务暂未完成，原任务已保留，请维护者核对。不要重复新建同一笔住宿。')
+                    except Exception:
+                        logging.error('住宿失败通知暂未送达，消息ID=%s', message_id)
+
+    def supervised_lodging_worker() -> None:
+        try:
+            lodging_worker()
+        except BaseException:
+            logging.error('住宿工作线程退出，交由服务恢复')
+            os._exit(1)
+
+    if lodging_queue is not None:
+        threading.Thread(target=supervised_lodging_worker, name='lodging-worker', daemon=True).start()
 
     def worker() -> None:
         last_delivery = 0.0

@@ -193,6 +193,23 @@ class ExpenseStore:
             db.execute('INSERT INTO events(item_id,at,message) VALUES (?,?,?)', (item_id, now(), label))
         return self.get(item_id)
 
+    def submit_report(self, snapshots: list[dict[str, Any]], files: dict[str, str]) -> None:
+        """Commit all report matters together; reject edits made during rendering."""
+        with self.connect() as db:
+            db.execute('BEGIN IMMEDIATE')
+            for expected in snapshots:
+                current = self.get(expected['id'])
+                if current['stage'] != 'draft' or not current['ready']:
+                    raise ValueError('制作期间事项状态已变化，请刷新后重试')
+                row = db.execute('SELECT data FROM expenses WHERE id=?', (expected['id'],)).fetchone()
+                data = json.loads(row['data'])
+                if any(expected.get(key) != value for key, value in data.items()) or current['attachments'] != expected['attachments']:
+                    raise ValueError('制作期间事项或材料已变化，请刷新后重试')
+                data.update(stage='submitted', updated_at=now(), report_files=files)
+                db.execute('UPDATE expenses SET data=? WHERE id=?', (json.dumps(data, ensure_ascii=False), data['id']))
+                db.execute('INSERT INTO events(item_id,at,message) VALUES (?,?,?)',
+                           (data['id'], now(), '报销包制作成功，自动标记已提交：' + files['pdf']))
+
     def add_attachment(self, item_id: str, filename: str, payload: bytes, role: str = 'other') -> dict[str, Any]:
         if role not in ROLES or role == 'package':
             raise ValueError('附件用途无效')

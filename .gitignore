@@ -34,3 +34,8 @@ feishu_bot.toml
 bot-service.json
 config.toml
 *.jsonl
+
+# Private local task history and migration records.
+/TASK.md
+/HANDOFF.md
+/迁移说明.md

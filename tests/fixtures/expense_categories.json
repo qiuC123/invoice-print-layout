@@ -1,0 +1,10 @@
+[
+  {"id":"heldout-1","goods":"绝缘防滑劳保鞋，两双","expected":"材料采购"},
+  {"id":"heldout-2","goods":"美工刀替换刀片，一盒","expected":"材料采购"},
+  {"id":"heldout-3","goods":"冰美式咖啡两杯，外卖订单","expected":"外卖"},
+  {"id":"heldout-4","goods":"咖啡滤纸100张，用于滤杯","expected":"材料采购"},
+  {"id":"heldout-5","goods":"酒店会议场地租赁服务，不含住宿","expected":null},
+  {"id":"heldout-6","goods":"仅有超市消费总计，没有商品明细","expected":null},
+  {"id":"heldout-7","goods":"橙汁两瓶和尼龙扎带一包，同一订单","expected":null},
+  {"id":"heldout-8","goods":"中通快递寄件费用","expected":null}
+]

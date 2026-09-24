@@ -138,6 +138,8 @@ def compose_print_package(trip_path: Path, invoice_path: Path, output_path: Path
             raise LayoutError("加密 PDF 不能拼版")
         if invoice.page_count != 1:
             raise LayoutError("第一版只支持单页电子发票")
+        trip.bake(annots=True, widgets=False)
+        invoice.bake(annots=True, widgets=False)
 
         logical_pages: list[tuple[pymupdf.Document, int, pymupdf.Rect]] = []
         for page_index in range(trip.page_count):
@@ -223,6 +225,7 @@ def compose_takeout_print_package(
                 opened_pdfs.append(source)
                 if source.needs_pass or source.page_count != 1:
                     raise LayoutError(f"外卖电子发票必须是未加密的单页 PDF：{path.name}")
+                source.bake(annots=True, widgets=False)
                 target_page.show_pdf_page(
                     target,
                     source,
