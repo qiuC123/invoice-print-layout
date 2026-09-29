@@ -18,7 +18,7 @@ const {chromium}=require('playwright');
    if(fail)return route.fulfill({status:400,contentType:'application/json',body:JSON.stringify({error:'Jev暂时不可用'})});
    return json({category:'材料采购',source:'jev',reason:'依据商品文字',evidence:{goods:'<img src=x onerror=alert(1)>扎带'},warnings:[]});
   }
-  if(url.pathname==='/api/update'){posts.push(route.request().postDataJSON());return json({ok:true});}
+  if(url.pathname==='/api/update'){const data=route.request().postDataJSON();posts.push(data);Object.assign(item,data);return json({ok:true});}
   const name=url.pathname==='/'?'index.html':url.pathname.slice(1);
   if(!['index.html','app.js','receipt.js','report.js','mail-search.js','expense-classifier.js','style.css'].includes(name))return route.fulfill({status:404,body:''});
   return route.fulfill({contentType:name.endsWith('.js')?'text/javascript':name.endsWith('.css')?'text/css':'text/html',body:await fs.readFile(path.resolve(__dirname,'../src/invoice_print_layout/web',name))});
@@ -30,9 +30,8 @@ const {chromium}=require('playwright');
   assert.equal(await page.locator('#editForm [name=category]').inputValue(),'其他');
   assert.equal(await page.locator('#categorySuggestion img').count(),0);
   await page.locator('#applyCategorySuggestion').click();
-  assert.equal(await page.locator('#editForm [name=category]').inputValue(),'材料采购');assert.equal(posts.length,1);
-  await page.locator('#suggestCategory').click();assert.match(await page.locator('#categorySuggestionResult').innerText(),/先保存/);assert.equal(posts.length,1);
-  await page.getByRole('button',{name:'保存事项',exact:true}).click();await page.waitForFunction(()=>document.getElementById('notice').textContent.includes('已保存'));
+  await page.waitForFunction(()=>document.getElementById('notice').textContent.includes('分类已保存'));
+  assert.equal(await page.locator('#editForm [name=category]').inputValue(),'材料采购');assert.equal(posts.length,2);
   assert.equal(posts[1].category,'材料采购');
   // In-flight result must not overwrite edits or another selected matter.
   delay=true;await page.locator('#suggestCategory').click();

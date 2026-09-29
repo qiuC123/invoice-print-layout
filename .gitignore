@@ -39,3 +39,11 @@ config.toml
 /TASK.md
 /HANDOFF.md
 /迁移说明.md
+
+# Private report templates, office reports and media exports.
+*.pptx
+*.ppt
+*.docx
+*.doc
+*.mp4
+*.mov

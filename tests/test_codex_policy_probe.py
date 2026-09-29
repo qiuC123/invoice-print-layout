@@ -31,10 +31,25 @@ def test_literal_parse_never_evaluates(tmp_path):
     assert probe.literal_command(code+code) is None
 
 
+def test_url_features_are_not_claimed_as_parsed_decision():
+    data = probe.command_features("Start-Process python; Invoke-RestMethod 'http://127.0.0.1:8765/api/state'; 'https://secret.invalid/private?token=PRIVATE_TOKEN'")
+    assert data['launch_and_url_text_cooccurrence']
+    assert data['url_kinds'] == {'loopback': 1, 'other_or_unresolved': 1}
+    assert 'PRIVATE_TOKEN' not in json.dumps(data) and 'secret.invalid' not in json.dumps(data)
+    assert 'not parser' in data['scope']
+
+
+def test_invocation_options_redact_paths_and_do_not_claim_equivalent_replay():
+    data = probe.invocation_summary('tools.exec_command({cmd:"Get-Date",login:false,workdir:"PRIVATE_PATH",shell:"PRIVATE_SHELL"})')
+    assert data['login'] is False and data['exact_argv_recovered'] is False
+    assert 'PRIVATE' not in json.dumps(data)
+
+
 def test_refusals_ignore_quoted_error_and_return_correlated_literal(tmp_path):
     path=tmp_path/'session.jsonl'
     prefix='Script error:\nexec_command failed: CreateProcess {message: "blocked by policy"}'
     records=[
+        {'type':'turn_context','payload':{'approval_policy':'never','sandbox_policy':{'type':'danger-full-access'},'cwd':'PRIVATE_PATH'}},
         {'payload':{'type':'custom_tool_call','name':'exec','call_id':'call1','input':'tools.exec_command({cmd:"Stop-Process -Id 123"})'}},
         {'timestamp':'2026-01-01T00:00:00Z','payload':{'type':'custom_tool_call_output','call_id':'call1','output':[{'text':prefix}]}},
         {'payload':{'type':'custom_tool_call_output','call_id':'other','output':[{'text':'Quoted prior log: '+prefix}]}},
@@ -42,6 +57,8 @@ def test_refusals_ignore_quoted_error_and_return_correlated_literal(tmp_path):
     path.write_text('\n'.join(json.dumps(r) for r in records),encoding='utf-8')
     result=probe.refusals(path)
     assert len(result)==1 and result[0]['command']=='Stop-Process -Id 123'
+    assert result[0]['historical_turn_context']['approval_policy']=='never'
+    assert 'PRIVATE_PATH' not in json.dumps(result)
 
 
 def test_only_execpolicy_is_launched_and_raw_patterns_not_exported(tmp_path,monkeypatch):

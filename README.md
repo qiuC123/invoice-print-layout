@@ -4,7 +4,7 @@ Windows 本地 CLI：可从 163 邮箱或飞书机器人接收票据，整理网
 
 也可使用本机报销工作台：上传购买凭证截图，本地 OCR 预填信息、分类和查重；按事项管理缺失材料、提交与报销进度。最终总 PDF 打印选择 **A4、1×1**，不要再次二合一。
 
-日常使用请看 [操作指南](操作指南.md)：包含飞书指令、上传步骤、打印设置、文件位置和故障处理。本 README 主要用于安装、配置和维护。
+日常使用请看 [操作指南](操作指南.md)：包含飞书指令、上传步骤、打印设置、文件位置和故障处理。本 README 主要用于安装、配置和维护。当前能力及未完成部分见[项目状态报告](docs/project-status-2026-09-29.md)。
 
 ## 当前范围
 
@@ -19,7 +19,10 @@ Windows 本地 CLI：可从 163 邮箱或飞书机器人接收票据，整理网
 
 ## 后勤扩展
 
-- **项目切换与消息分类**：`/logistics` 按项目管理群用途、消息归属和任务。微信读取适配器与离线测试已实现，持续接收、自动发送、每日调度尚未完成实机联通。[项目与收件箱](docs/logistics-projects.md)
+- **项目待办与辅助消息**：`/logistics` 按项目管理来源群、临时待办和定时照片任务。普通聊天收件器尚未接通常驻采集，消息区用于照片和报销辅助资料。[项目与收件箱](docs/logistics-projects.md)
+- **现场照片**：上传、递归读取文件夹、按指定群和日期读取微信本机缓存；本地OCR与可选Jev文字分类后按项目归档，区分原图、普通缓存和待核对记录。微信读取器需另行配置。[照片管理](docs/photo-management.md)
+- **定时照片与飞书简报**：后端定时读取，可向已绑定本人飞书账号发送简报及三列照片审阅PDF。需要电脑、微信和服务运行；飞书内添加微信群、手机在线核对尚未实现。[照片简报](docs/photo-briefs.md)
+- **固定模板卸货日报**：工作台手动匹配工厂/现场车头照、替换允许的日期和工时字段，使用本机PowerPoint检查并提供HTML预览与可编辑PPTX。通用施工日报、结算报告和人员考勤尚未形成自动闭环。[日报说明](docs/daily-reports.md)
 - **查找邮箱发票**：按事项回查历史邮件，提取附件、受支持的淘宝与发票通下载链接；预览后手动关联原事项。[邮箱查找](docs/mail-invoice-search.md)
 - **费用分类建议**：固定规则优先，模糊商品文字可交给 Jev；采用后仍须保存、核对，不自动提交报销。[分类说明](docs/expense-classification.md)
 - **住宿**：本人飞书指令、草稿确认、幂等写入与回读；房间容量计算已实现，人员变化、酒店经验、多人成员权限和真实登记验收仍需继续。[住宿指令](docs/lodging-usage.md)
@@ -56,6 +59,7 @@ py -3.12 -m venv .venv
 验证代码：
 
 ```powershell
+$env:PYTHONPATH = Join-Path (Get-Location) "src"
 .\.venv\Scripts\python.exe -m pytest
 .\.venv\Scripts\python.exe -m mypy src/invoice_print_layout
 ```
@@ -178,6 +182,7 @@ Disable-ScheduledTask -TaskName InvoicePrintLayoutBot
 ## 验证
 
 ```powershell
+$env:PYTHONPATH = Join-Path (Get-Location) "src"
 .\.venv\Scripts\python.exe -m pytest
 .\.venv\Scripts\python.exe -m mypy src
 ```

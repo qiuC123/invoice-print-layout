@@ -1,16 +1,16 @@
 :root {
-  color-scheme: light dark;
+  color-scheme: dark;
   font-family: "Segoe UI", "Microsoft YaHei", sans-serif;
   font-size: 14px;
-  --desk-bg: light-dark(#f7f8f6, #202421);
-  --desk-rail: light-dark(#eaf0e9, #19201b);
-  --desk-panel: light-dark(#fff, #282e29);
-  --desk-text: light-dark(#263c32, #e1e9e2);
-  --desk-muted: light-dark(#64746a, #a4b3a7);
-  --desk-line: light-dark(#dce4db, #3b473e);
-  --desk-accent: light-dark(#216354, #8fc5ad);
-  --desk-selected: light-dark(#d6e5d6, #344b3a);
-  --desk-soft: light-dark(#edf3ed, #303a31);
+  --desk-bg: #181818;
+  --desk-rail: #212121;
+  --desk-panel: #232323;
+  --desk-text: #ececec;
+  --desk-muted: #a3a3a3;
+  --desk-line: #363636;
+  --desk-accent: #dedede;
+  --desk-selected: #353535;
+  --desk-soft: #2b2b2b;
   color: var(--desk-text);
   background: var(--desk-bg);
 }
@@ -20,7 +20,7 @@ button, input, select { font: inherit; color: inherit; max-width: 100%; }
 button { cursor: pointer; border: 1px solid var(--desk-line); background: var(--desk-panel); border-radius: 7px; padding: 8px 12px; white-space: normal; }
 button:hover { background: var(--desk-soft); }
 button:disabled { opacity: .5; cursor: wait; }
-button.primary { background: var(--desk-accent); color: light-dark(#fff, #18241c); border-color: var(--desk-accent); }
+button.primary { background: var(--desk-accent); color: #181818; border-color: var(--desk-accent); }
 button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible, summary:focus-visible { outline: 2px solid var(--desk-accent); outline-offset: 3px; }
 input, select { display: block; width: 100%; min-width: 0; border: 1px solid var(--desk-line); background: var(--desk-panel); border-radius: 6px; padding: 9px 10px; }
 label { display: block; font-size: 12px; color: var(--desk-muted); min-width: 0; }
@@ -28,12 +28,12 @@ label input, label select { margin-top: 6px; }
 a { color: var(--desk-accent); }
 p { line-height: 1.7; }
 h1, h2, h3 { margin: 0; font-weight: 500; }
-h1 { font-size: 25px; line-height: 1.4; }
+h1 { font-size: 24px; line-height: 1.4; }
 h2 { font-size: 16px; }
 h3 { font-size: 14px; }
 .project-rail { background: var(--desk-rail); border-right: 1px solid var(--desk-line); padding: 27px 14px; min-width: 0; }
-.brand { display: block; text-decoration: none; color: var(--desk-text); font-size: 21px; font-weight: 500; letter-spacing: 1px; padding: 0 9px; }
-.brand span { display: block; font-size: 11px; letter-spacing: 3px; color: var(--desk-muted); margin-top: 5px; }
+.brand { display: block; text-decoration: none; color: var(--desk-text); font-size: 21px; font-weight: 500; letter-spacing: 0; padding: 0 9px; }
+.brand span { display: block; font-size: 11px; letter-spacing: 2px; color: var(--desk-muted); margin-top: 5px; }
 .rail-heading { display: flex; align-items: center; justify-content: space-between; padding: 0 7px 10px; margin-top: 30px; }
 .rail-heading h2 { font-size: 12px; color: var(--desk-muted); }
 .rail-heading button { border: 0; background: transparent; font-size: 12px; padding: 6px; }
@@ -57,10 +57,13 @@ main { min-width: 0; max-width: 1450px; padding: 30px; }
 .heading > button { flex: none; }
 .heading h1 { overflow-wrap: anywhere; }
 .heading p { color: var(--desk-muted); font-size: 12px; margin: 8px 0 22px; overflow-wrap: anywhere; }
-.banner { border-radius: 8px; padding: 12px 15px; background: light-dark(#fff4dc, #3d3525); color: light-dark(#725c2b, #e2c68a); font-size: 12px; line-height: 1.8; overflow-wrap: anywhere; }
+.banner { border-radius: 8px; padding: 12px 15px; background: #302b23; color: #ddc393; font-size: 12px; line-height: 1.8; overflow-wrap: anywhere; }
 .error, .notice { padding: 12px 15px; border-radius: 7px; white-space: pre-wrap; overflow-wrap: anywhere; font-size: 12px; }
-.error { color: light-dark(#98382c, #ffb4a4); background: light-dark(#fff0e9, #412e29); }
+.error { color: #ffb4a4; background: #382726; }
 .notice { color: var(--desk-accent); background: var(--desk-soft); }
+.notice { position:relative; padding-right:46px; }
+#logisticsNotice .notice-close { position:absolute; top:6px; right:6px; margin:0; padding:0; width:30px; height:30px; min-height:30px; border:0; background:transparent; color:var(--desk-muted); }
+.notice-close::before { content:'×'; font-size:22px; }
 .tabs { display: flex; gap: 22px; border-bottom: 1px solid var(--desk-line); margin: 23px 0 20px; flex-wrap: wrap; }
 .tabs button { background: transparent; border: 0; border-bottom: 2px solid transparent; border-radius: 0; padding: 9px 0; color: var(--desk-muted); }
 .tabs button.active { border-bottom-color: var(--desk-accent); color: var(--desk-accent); }
@@ -122,3 +125,21 @@ footer { color: var(--desk-muted); font-size: 11px; line-height: 1.8; margin-top
   input, select { font-size: 16px; }
 }
 @media (pointer: coarse) { button, summary { min-height: 44px; } }
+
+#invoiceFrame, #photosFrame { display:block; width:100%; height:calc(100dvh - 230px); min-height:560px; border:0; color-scheme:dark; }
+#invoicesPanel, #photosPanel { margin-top:16px; }
+@media(max-width:700px){#invoiceFrame,#photosFrame{height:80dvh;min-height:550px;}}
+
+.support-actions,.todo-actions{display:flex;gap:12px;flex-wrap:wrap;margin:16px 0}
+.todo-line{display:flex;align-items:flex-start;gap:12px}
+.todo-line input{width:auto;flex:none;margin-top:4px}
+.todo-line strong,.todo-note{overflow-wrap:anywhere;white-space:pre-wrap}
+.todo-done{text-decoration:line-through;opacity:.7}
+#todoForm textarea{box-sizing:border-box;width:100%;padding:10px;font:inherit;color:inherit;background:transparent;border:1px solid var(--desk-line);border-radius:5px;resize:vertical}
+
+.todo-check{display:flex;align-items:center;gap:8px;margin:10px 0}.todo-check input{width:auto}#todoSchedule{border:1px solid var(--desk-line);border-radius:6px;margin:16px 0;min-width:0}.todo-actions button[aria-pressed="true"]{background:var(--desk-selected);color:var(--desk-text)}#todoKind{max-width:360px;margin-bottom:12px}
+
+/* Neutral desktop controls, including browser-native date and checkbox UI. */
+input[type=checkbox],progress{accent-color:#b9c9e2}input::placeholder,textarea::placeholder{color:#858585;opacity:1}textarea:focus-visible{outline:2px solid #a5bce3;outline-offset:2px}button.primary:hover{background:#f0f0f0;color:#181818}.todo-actions button[aria-pressed="true"]{border-color:#515151}.project-option:hover{background:var(--desk-soft)}
+
+.todo-item{position:relative;padding-right:58px}.todo-delete{position:absolute;top:10px;right:10px;width:32px;height:32px;padding:0;border:0;background:transparent;color:#f87171;font-size:25px;line-height:1;min-height:32px}.todo-delete:hover{color:#fca5a5;background:#402525}.todo-delete:focus-visible{outline-color:#f87171}.todo-item .todo-actions{margin-bottom:0}#logisticsNotice button{margin-left:12px}

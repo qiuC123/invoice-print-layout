@@ -6,7 +6,7 @@ import json
 import os
 import sqlite3
 import uuid
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from collections.abc import Iterator
 from datetime import date, datetime
 from decimal import Decimal, InvalidOperation
@@ -17,7 +17,7 @@ from invoice_print_layout.storage import ensure_workspace, read_history
 from invoice_print_layout.memory import _record_from_entry
 from invoice_print_layout.reliability import save_json
 
-CATEGORIES = ('材料采购', '酒店', '高铁', '外卖', '打车', '顺丰', '其他')
+CATEGORIES = ('材料采购', '酒店', '高铁', '外卖', '餐饮', '打车', '顺丰', '其他')
 ROLES = {'purchase': '购买明细／收据', 'invoice': '发票', 'payment': '微信／支付宝扣费记录',
          'order': '订单记录', 'trip': '行程单', 'detail': '运单明细', 'other': '待分类材料', 'package': '历史打印包'}
 STAGES = {'draft': '待提交', 'submitted': '已提交', 'reimbursed': '已报销', 'cancelled': '已取消'}
@@ -38,8 +38,12 @@ def amount_cents(value: object) -> int:
         raise ValueError('金额无效') from exc
 
 
-def evaluate(category: str, roles: set[str], *, legacy: bool = False) -> dict[str, Any]:
+def evaluate(category: str, roles: set[str], *, legacy: bool = False, material_basis: str = 'standard') -> dict[str, Any]:
     missing: list[str] = []
+    if material_basis == 'payment_only':
+        return {'missing': [] if 'payment' in roles else ['支付凭证'],
+                'complete': 'payment' in roles, 'alternative': True,
+                'basis': '此事项已确认仅需支付凭证；打印按A4纸2×2排列'}
     if legacy and 'package' in roles:
         return {'missing': [], 'complete': True, 'alternative': False, 'basis': '历史成功打印包；报销状态未确认'}
     if category == '材料采购':
@@ -50,6 +54,11 @@ def evaluate(category: str, roles: set[str], *, legacy: bool = False) -> dict[st
     elif category in {'酒店', '高铁'}:
         if 'invoice' not in roles:
             missing.append('发票' if category == '酒店' else '12306发票')
+    elif category == '餐饮':
+        if 'invoice' not in roles:
+            missing.append('发票')
+        if not roles.intersection({'order', 'purchase'}):
+            missing.append('订单记录或购买明细／收据')
     elif category in {'打车', '外卖', '顺丰'}:
         second = {'打车': 'trip', '外卖': 'order', '顺丰': 'detail'}[category]
         missing.extend(ROLES[role] for role in ('invoice', second) if role not in roles)
@@ -78,6 +87,8 @@ class ExpenseStore:
                 CREATE TABLE IF NOT EXISTS events (
                     id INTEGER PRIMARY KEY, item_id TEXT, at TEXT, message TEXT);
                 CREATE TABLE IF NOT EXISTS selections (owner TEXT PRIMARY KEY, item_id TEXT);
+                CREATE TABLE IF NOT EXISTS automatic_ride_files (
+                    digest TEXT PRIMARY KEY, item_id TEXT REFERENCES expenses(id), material_key TEXT NOT NULL);
             ''')
 
     @contextmanager
@@ -124,6 +135,26 @@ class ExpenseStore:
         if invoice_state not in {'not_requested', 'requested', 'unavailable'}:
             raise ValueError('开票状态无效')
         result['invoice_state'] = invoice_state
+        material_basis = values.get('material_basis', 'standard')
+        if material_basis not in {'standard', 'payment_only'}:
+            raise ValueError('材料要求无效')
+        result['material_basis'] = material_basis
+        for field in ('display_name', 'report_section', 'report_group'):
+            result[field] = str(values.get(field, '')).strip()
+            if len(result[field]) > 200:
+                raise ValueError('报表设置文字过长')
+        from invoice_print_layout.report_snapshot import REPORT_SECTIONS
+        if result['report_section'] and result['report_section'] not in REPORT_SECTIONS:
+            raise ValueError('报表栏目无效')
+        from invoice_print_layout.logistics import LogisticsStore
+        projects = LogisticsStore(self.workspace / '后勤' / 'tasks.sqlite3').snapshot()['projects']
+        project_id = str(values.get('project_id', ''))
+        matches = [p for p in projects if p['id'] == project_id] if project_id else [p for p in projects if p['name'] == result['project']]
+        if project_id and len(matches) != 1:
+            raise ValueError('项目不存在，请刷新后重试')
+        result['project_id'] = matches[0]['id'] if len(matches) == 1 else ''
+        if len(matches) == 1:
+            result['project'] = matches[0]['name']
         return result
 
     def get(self, item_id: str) -> dict[str, Any]:
@@ -134,10 +165,12 @@ class ExpenseStore:
             data: dict[str, Any] = json.loads(row['data'])
             data['attachments'] = [dict(a) for a in db.execute('SELECT id,name,role,path FROM attachments WHERE item_id=?', (item_id,))]
             data['events'] = [dict(e) for e in db.execute('SELECT at,message FROM events WHERE item_id=? ORDER BY id DESC LIMIT 30', (item_id,))]
+        data['version'] = hashlib.sha256(json.dumps(data, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
         roles = {a['role'] for a in data['attachments'] if Path(a['path']).is_file()}
         for a in data['attachments']:
             a['available'] = Path(a.pop('path')).is_file()
-        data.update(evaluate(data['category'], roles, legacy=bool(data.get('legacy'))))
+        data.setdefault('material_basis', 'standard')
+        data.update(evaluate(data['category'], roles, legacy=bool(data.get('legacy')), material_basis=data['material_basis']))
         data['amount'] = f"{data['amount_cents'] / 100:.2f}"
         data['overdue'] = bool(data['followup_date'] and data['followup_date'] <= date.today().isoformat()
                                and data['stage'] == 'draft' and not data['complete'])
@@ -157,7 +190,9 @@ class ExpenseStore:
             if not row:
                 raise ValueError('事项不存在')
             old = json.loads(row['data'])
-            changes = self._validate(values)
+            if 'expected_version' in values and values['expected_version'] != self.get(item_id)['version']:
+                raise ValueError('事项或材料已变化，请刷新后重新保存')
+            changes = self._validate({**{k: old.get(k, '') for k in ('display_name', 'report_section', 'report_group')}, 'material_basis': old.get('material_basis', 'standard'), **values})
             data = {**old, **changes, 'updated_at': now()}
             if any(old.get(key) != value for key, value in changes.items()):
                 if old['stage'] != 'draft':
@@ -167,12 +202,18 @@ class ExpenseStore:
                 data['legacy'] = False
             db.execute('UPDATE expenses SET data=? WHERE id=?', (json.dumps(data, ensure_ascii=False), item_id))
             db.execute('INSERT INTO events(item_id,at,message) VALUES (?,?,?)', (item_id, now(), '更新事项；内容变更后需重新核对'))
-        return self.get(item_id)
+        current = self.get(item_id)
+        if old['category'] != current['category']:
+            from invoice_print_layout.automatic_category import AutomaticCategory
+            AutomaticCategory(self, nullcontext()).feedback(old, current)
+        return current
 
-    def transition(self, item_id: str, action: str) -> dict[str, Any]:
+    def transition(self, item_id: str, action: str, *, expected_version: str | None = None) -> dict[str, Any]:
         with self.connect() as db:
             db.execute('BEGIN IMMEDIATE')
             current = self.get(item_id)
+            if expected_version is not None and current['version'] != expected_version:
+                raise ValueError('事项或材料已变化，请重新核对')
             data = json.loads(db.execute('SELECT data FROM expenses WHERE id=?', (item_id,)).fetchone()['data'])
             if action == 'verify':
                 if not current['complete'] or data['stage'] != 'draft':
@@ -180,6 +221,8 @@ class ExpenseStore:
                 data['verified'] = True
                 label = '人工确认材料内容及金额'
             elif action in STAGES:
+                if data.get('merged_into'):
+                    raise ValueError('此记录已合并，请在合并去向处理，不能恢复重复费用')
                 if action in {'submitted', 'reimbursed'} and not current['ready']:
                     raise ValueError('请先补齐材料并核对完成')
                 if action == 'reimbursed' and data['stage'] != 'submitted':

@@ -201,14 +201,15 @@ class WeChatInbox:
                 results[chat] = {'status': 'error'}
         return results
 
-    def snapshot(self, project_id: str = '') -> dict[str, Any]:
+    def snapshot(self, project_id: str = '', *, support_only: bool = False) -> dict[str, Any]:
         with self.store.connect() as db:
             if project_id:
                 self.store._project(db, project_id)
             groups = [dict(r) for r in db.execute('SELECT * FROM wx_groups WHERE project_id=? ORDER BY rowid', (project_id,))]
             for group in groups:
                 group['status'] = 'bound' if group['account_id'] else 'unbound'
-            rows = db.execute('SELECT * FROM wx_messages WHERE project_id IS ? ORDER BY timestamp DESC,key LIMIT 500',
+            scope = " AND category IN ('materials','invoices')" if support_only and project_id else ''
+            rows = db.execute('SELECT * FROM wx_messages WHERE project_id IS ?' + scope + ' ORDER BY timestamp DESC,key LIMIT 500',
                               (project_id or None,)).fetchall()
             messages = [{k: r[k] for k in r.keys() if k != 'source'} for r in rows]
             for message in messages:
@@ -220,6 +221,6 @@ class WeChatInbox:
             if checks:
                 receiver['status'] = 'error' if any(c['status'] == 'error' for c in checks) else 'not_monitoring'
                 receiver['detail'] = '最近读取失败，请检查接收状态。' if receiver['status'] == 'error' else '已有读取记录，持续在线接收尚未启用。'
-            total = db.execute('SELECT count(*) FROM wx_messages WHERE project_id IS ?', (project_id or None,)).fetchone()[0]
+            total = db.execute('SELECT count(*) FROM wx_messages WHERE project_id IS ?' + scope, (project_id or None,)).fetchone()[0]
         return {'groups': groups, 'messages': messages, 'total': total, 'receiver': receiver,
                 'group_categories': GROUP_CATEGORIES, 'message_categories': MESSAGE_CATEGORIES}

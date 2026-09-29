@@ -1,6 +1,7 @@
 import io
 import json
 import threading
+from pathlib import Path
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
@@ -135,3 +136,63 @@ def test_http_auth_and_readonly(tmp_path, monkeypatch):
         with urlopen(base+'/expense-classifier.js') as response:assert response.status==200
     finally:
         server.shutdown();server.server_close();thread.join()
+
+
+def test_slow_classification_does_not_block_update_and_rejects_stale(tmp_path, monkeypatch):
+    from concurrent.futures import ThreadPoolExecutor
+    store = ExpenseStore(tmp_path)
+    item = store.create({'title': 'test', 'amount': '10', 'note': 'before'})
+    entered, release = threading.Event(), threading.Event()
+    def slow_collect(*args):
+        entered.set()
+        assert release.wait(10)
+        return evidence('住宿费'), []
+    monkeypatch.setattr(classifier, 'collect', slow_collect)
+    server = make_server(tmp_path, 0)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    base = f'http://127.0.0.1:{server.server_port}'
+    try:
+        with urlopen(base+'/api/state') as response:
+            token = json.load(response)['token']
+        def post(path, body):
+            request = Request(base+path, data=json.dumps(body).encode(), headers={'X-Workbench-Token': token})
+            try:
+                with urlopen(request, timeout=5) as response:
+                    return response.status, json.load(response)
+            except HTTPError as exc:
+                return exc.code, json.load(exc)
+        with ThreadPoolExecutor(2) as pool:
+            pending = pool.submit(post, '/api/category/suggest', {'id': item['id']})
+            try:
+                assert entered.wait(3)
+                updated = pool.submit(post, '/api/update', {**item, 'note': 'after'})
+                assert updated.result(timeout=3)[0] == 200
+            finally:
+                release.set()
+            status, result = pending.result(timeout=3)
+            assert status == 400 and '已变化' in result['error']
+        assert store.get(item['id'])['note'] == 'after'
+        assert store.get(item['id'])['category'] == item['category']
+    finally:
+        release.set()
+        server.shutdown(); server.server_close(); thread.join()
+
+
+def test_attachment_changed_on_disk_invalidates_suggestion(tmp_path, monkeypatch):
+    import pymupdf
+    store = ExpenseStore(tmp_path)
+    item = store.create({'title': 'test', 'amount': '10'})
+    with pymupdf.open() as doc:
+        doc.new_page()
+        store.add_attachment(item['id'], 'test.pdf', doc.tobytes(), 'invoice')
+    # Capture the actual local file; no remote model or real invoice is used.
+    with store.connect() as db:
+        path = Path(db.execute('SELECT path FROM attachments WHERE item_id=?', (item['id'],)).fetchone()[0])
+    monkeypatch.setattr(classifier, 'collect', lambda *args: (evidence('住宿费'), []))
+    def changed(_):
+        path.write_bytes(path.read_bytes()+b'\n% changed')
+        return {'category': '酒店'}
+    monkeypatch.setattr(classifier, 'decide', changed)
+    with pytest.raises(ValueError, match='已变化'):
+        classifier.suggest(store, item['id'])

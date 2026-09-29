@@ -98,6 +98,22 @@ def test_project_scope_classification_direction_and_durable_replay(setup):
     assert store.snapshot()['tasks'] == store.snapshot()['outbox'] == []
 
 
+def test_support_query_filters_before_limit_and_preserves_original_messages(setup):
+    _, inbox, first, second = setup
+    bind(inbox, first)
+    for key, text in [('meal', '午饭21份'), ('photo', '进场资料'), ('invoice', '发票报销')]:
+        inbox.receive_batch(ACCOUNT, batch(text=text, key=key), verified_self_id=ACCOUNT)
+    messages = inbox.snapshot(first)['messages']
+    for message in messages:
+        if message['text'] == '进场资料':
+            inbox.assign(message['key'], first, 'materials')
+    support = inbox.snapshot(first, support_only=True)
+    assert support['total'] == 2
+    assert {m['category'] for m in support['messages']} == {'materials', 'invoices'}
+    assert inbox.snapshot(first)['total'] == 3
+    assert inbox.snapshot(second, support_only=True)['total'] == 0
+
+
 def test_shared_group_and_shared_private_chat_never_guess_project(setup):
     _, inbox, first, second = setup
     for chat in [CHAT, 'wxid_test_contact']:

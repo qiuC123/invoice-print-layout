@@ -2,11 +2,12 @@
 from __future__ import annotations
 
 import json
+from contextlib import nullcontext
 import math
 import os
 from pathlib import Path
 import re
-from typing import Any
+from typing import Any, ContextManager
 import urllib.request
 
 import pymupdf
@@ -21,16 +22,18 @@ CRITERIA = {
     'hotel': '酒店：实际住宿、客房费用，不是酒店内的餐饮、会议或其他服务。',
     'rail': '高铁：铁路客运车票，不是货运。',
     'food': '外卖：餐食、饮品订单，不是餐具、厨具、食品包装或其他物资。',
+    'dining': '餐饮：店内用餐、途中餐饮，不是外卖配送订单。明确食品和场景才判断，不能仅凭便利店名。',
     'taxi': '打车：人员出行的出租车或网约车客运，不含搬家、货拉拉、物流货运。',
     'sf': '顺丰：明确由顺丰提供的快递服务，不是其他物流或货运。',
     'unknown': '其他：完全没有具体商品或服务，只有商家名称或笼统日用百货；或者多种不同类别混合、未覆盖的费用。明确的物品无需额外提供项目用途。',
 }
-CATEGORY = dict(zip(CRITERIA, ('材料采购', '酒店', '高铁', '外卖', '打车', '顺丰', '其他')))
+CATEGORY = dict(zip(CRITERIA, ('材料采购', '酒店', '高铁', '外卖', '餐饮', '打车', '顺丰', '其他')))
 RULES = {
     'materials': ('口罩', '胶带', '螺丝', '电线', '插座', '垃圾袋', '手套', '文具', '纸巾'),
     'hotel': ('住宿费', '客房费', '房费'),
     'rail': ('铁路客运', '高铁车票', '动车车票'),
     'food': ('奶茶', '咖啡饮品', '盒饭', '外卖餐费'),
+    'dining': ('店内餐饮', '途中餐饮', '堂食餐费'),
     'taxi': ('网约车客运', '出租汽车客运', '出租车费'),
     'sf': ('顺丰快递费', '顺丰速运费'),
 }
@@ -188,12 +191,32 @@ def decide(evidence: dict[str, str]) -> dict[str, Any]:
             'model': answer['model'], 'reason': 'Jev建议按以下范围分类：' + CRITERIA[key] + ' 请结合下方提取文字核对。'}
 
 
-def suggest(store: ExpenseStore, item_id: str) -> dict[str, Any]:
-    item = store.get(item_id)
+def attachment_version(store: ExpenseStore, item_id: str) -> list[tuple[Any, ...]]:
+    """Include recorded digest and on-disk identity; paths stay local."""
+    with store.connect() as db:
+        rows = db.execute('SELECT id,path,role,digest FROM attachments WHERE item_id=? ORDER BY id',
+                          (item_id,)).fetchall()
+    result = []
+    for row in rows:
+        try:
+            stat = Path(row['path']).stat()
+            version = (stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns, stat.st_ino)
+        except OSError:
+            version = None
+        result.append((*tuple(row), version))
+    return result
+
+
+def suggest(store: ExpenseStore, item_id: str, *, lock: ContextManager[Any] | None = None) -> dict[str, Any]:
+    guard = lock if lock is not None else nullcontext()
+    with guard:
+        item = store.get(item_id)
+        attachments = attachment_version(store, item_id)
     if item['stage'] != 'draft':
         raise ValueError('仅支持待提交事项的分类建议。')
     evidence, warnings = collect(store, item)
     result = decide(evidence)
-    if store.get(item_id) != item:
-        raise ValueError('事项或附件已变化，请重新判断。')
+    with guard:
+        if store.get(item_id) != item or attachment_version(store, item_id) != attachments:
+            raise ValueError('事项或附件已变化，请重新判断。')
     return {**result, 'item_id': item_id, 'warnings': warnings, 'saved': False}

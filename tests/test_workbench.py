@@ -33,6 +33,19 @@ def test_hotel_rail_require_invoice(category: str) -> None:
     assert not evaluate(category, {'payment','order','purchase'})['complete']
 
 
+def test_dining_persists_without_becoming_delivery_or_verified(tmp_path: Path) -> None:
+    store = ExpenseStore(tmp_path)
+    item = store.create({'title': '店内餐饮', 'category': '餐饮', 'amount': '15.00'})
+    saved = ExpenseStore(tmp_path).get(item['id'])
+    assert saved['category'] == '餐饮'
+    assert saved['stage'] == 'draft' and not saved['verified']
+    assert not evaluate('餐饮', {'payment'})['complete']
+    assert not evaluate('餐饮', {'invoice'})['complete']
+    assert evaluate('餐饮', {'invoice', 'purchase'})['complete']
+    assert evaluate('餐饮', {'invoice', 'order'})['complete']
+    assert not evaluate('外卖', {'invoice', 'purchase'})['complete']
+
+
 @pytest.mark.parametrize('amount', ['NaN','Infinity','-1','1.001','bad'])
 def test_invalid_amount(amount: str) -> None:
     with pytest.raises(ValueError):

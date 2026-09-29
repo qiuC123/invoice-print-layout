@@ -84,6 +84,17 @@ def test_missing_material_or_review_cannot_report(store: ExpenseStore) -> None:
         report.create_report(store,[x['id']])
 
 
+def test_trial_report_keeps_unverified_draft_unchanged(store: ExpenseStore, tmp_path: Path) -> None:
+    item = store.create({'title': '审阅酒店', 'category': '酒店', 'amount': '123.45'})
+    store.add_attachment(item['id'], 'invoice.pdf', make_invoice_pdf(tmp_path / 'trial.pdf').read_bytes(), 'invoice')
+    before = store.get(item['id'])
+    assert before['complete'] and not before['verified']
+    result = report.create_report(store, [item['id']], submit=False)
+    assert set(result) == {'pdf', 'md', 'xlsx'}
+    assert store.get(item['id']) == before
+    assert '未改变提交状态' in (store.root / '导出' / result['md']).read_text(encoding='utf-8')
+
+
 def test_duplicate_source_or_order_is_rejected(store: ExpenseStore, tmp_path: Path) -> None:
     file=make_invoice_pdf(tmp_path/'invoice.pdf')
     a=matter(store,'酒店','123.45',[('invoice',file)])
@@ -181,6 +192,35 @@ def test_report_http_and_three_downloads(store: ExpenseStore, tmp_path: Path) ->
         server.shutdown();server.server_close();thread.join()
 
 
+def test_trial_http_renders_pages_without_submitting(store: ExpenseStore, tmp_path: Path) -> None:
+    from urllib.parse import quote
+    x = matter(store, '酒店', '123.45', [('invoice', make_invoice_pdf(tmp_path / 'trial-view.pdf'))])
+    before = store.get(x['id'])
+    server = make_server(store.workspace, 0)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    url = f'http://127.0.0.1:{server.server_port}'
+    try:
+        with urlopen(url + '/api/state') as response:
+            state = json.load(response)
+        body = json.dumps({'ids': [x['id']], 'options': {'person': 'Test'}}).encode()
+        with urlopen(Request(url + '/api/report-preview', data=body,
+                             headers={'Content-Type': 'application/json', 'X-Workbench-Token': state['token']})) as response:
+            result = json.load(response)
+        assert len(result['preview_pages']) == 1
+        with urlopen(url + '/export/' + quote(result['preview_pages'][0])) as response:
+            assert response.headers['Content-Type'] == 'image/png'
+            assert response.read().startswith(b'\x89PNG\r\n\x1a\n')
+        with pymupdf.open(store.root / '导出' / result['pdf']) as pdf:
+            assert '123.45' in pdf[0].get_text()
+        after = store.get(x['id'])
+        assert after['stage'] == before['stage'] == 'draft'
+        assert after['events'] == before['events']
+        assert after['attachments'] == before['attachments']
+    finally:
+        server.shutdown(); server.server_close(); thread.join()
+
+
 def test_company_excel_integration(tmp_path: Path) -> None:
     template=os.environ.get('INVOICE_TEST_REPORT_TEMPLATE')
     if not template:
@@ -191,6 +231,8 @@ def test_company_excel_integration(tmp_path: Path) -> None:
     items=[{'id':f'synthetic{i}', 'project':'测试项目', 'expense_date':'2026-09-21' if i else '',
             'category':'材料采购','title':'=literal' if i==0 else f'测试材料{i}', 'merchant':'测试商店',
             'amount_cents':1001,'alternative':i==0,'pages':str(i+1),'order_number':'1000000000000000001'} for i in range(7)]
+    items.extend({**items[1], 'id': category, 'category': category, 'material_basis': 'payment_only'}
+                 for category in ('餐饮', '其他'))
     create_excel(source,items,{'person':'Test','payment':'personal','period':'2026-09'},output)
     ns={'s':'http://schemas.openxmlformats.org/spreadsheetml/2006/main'}
     with zipfile.ZipFile(output) as z:
@@ -200,7 +242,10 @@ def test_company_excel_integration(tmp_path: Path) -> None:
             assert found is not None
             return found
         total=cell('H35').find('s:v',ns)
-        assert total is not None and round(float(total.text or '0')*100)==7007
+        assert total is not None and round(float(total.text or '0')*100)==9009
+        for ref in ('H19', 'H30'):
+            value = cell(ref).find('s:v', ns)
+            assert value is not None and round(float(value.text or '0')*100) == 1001
         assert cell('H35').find('s:f',ns) is not None
         assert cell('H28').find('s:f',ns) is not None
         for row in range(8,36):

@@ -17,3 +17,9 @@
 2026-09-24本机结果：4次拒绝、4次本地规则检查均no_match，包含一次无Stop-Process的隔离预览启动。当前任务sandbox disabled、approval never；探针仍未取得具体拒绝规则。私有报告在`workspace/policy-probe/20260924/`，后续反馈工具问题可使用其中时间和调用编号定位，发送前仍应人工查看报告。
 
 官方资料：[规则检查](https://learn.chatgpt.com/docs/agent-configuration/rules)、[审批与安全](https://learn.chatgpt.com/docs/agent-approvals-security)。
+
+## 增强与源码级离线验证
+
+探针现在额外记录：调用前的历史 turn_context 权限类型、可恢复的字面工具参数摘要、规则文件 SHA256、HTTP URL 数量及本机/其他类型。URL 地址、查询参数和工作目录正文不导出；文本共现不伪称同一解析片段命中。完整 argv 无法无损恢复时明确标为 `exact_argv_recovered=false`，本地规则回放不能宣称与真实执行链等价。
+
+2026-09-25 的进一步验证编译了 `rust-v0.154.0-alpha.6.2` 官方的 PowerShell tree-sitter 解析模块与 Windows 危险检查模块，未修改这两个文件。历史脚本文本仅作为标准输入字符串，未调用 PowerShell、启动器或任何被拒命令。结果和限制见 [源码对照结论](policy-source-review.md)。探针自身的 Python 测试不代替这个真实 Rust 源码实验。

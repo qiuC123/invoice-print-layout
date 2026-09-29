@@ -17,6 +17,7 @@ from invoice_print_layout.layout import (A4_WIDTH, A4_HEIGHT, compose_print_pack
     compose_takeout_print_package, required_source_fragments, validate_print_package,
     validate_takeout_print_package)
 from invoice_print_layout.report_excel import create_excel, validate_template, spreadsheet_runtime, TEMPLATE_NAME, PAYMENTS
+from invoice_print_layout.payment_layout import append_payments, payment_groups
 from invoice_print_layout.storage import safe_filename_part
 from invoice_print_layout.workbench import ExpenseStore
 
@@ -43,6 +44,8 @@ def _full_pages(paths: list[Path], destination: Path) -> None:
 
 
 def selected_attachments(item: dict[str, Any]) -> list[dict[str, Any]]:
+    if item.get('material_basis') == 'payment_only':
+        return [a for a in item['attachments'] if a['role'] == 'payment' and a['available']]
     if item.get('legacy'):
         packages = [a for a in item['attachments'] if a['role'] == 'package' and a['available']]
         if len(packages) != 1:
@@ -50,6 +53,7 @@ def selected_attachments(item: dict[str, Any]) -> list[dict[str, Any]]:
         return packages
     required = {'酒店': {'invoice'}, '高铁': {'invoice'}, '打车': {'trip', 'invoice'},
                 '外卖': {'order', 'invoice'}, '顺丰': {'detail', 'invoice'},
+                '餐饮': {'invoice', 'order', 'purchase'},
                 '材料采购': {'purchase', 'payment' if item['alternative'] else 'invoice'}}
     return sorted((a for a in item['attachments'] if a['role'] in required[item['category']] and a['available']),
                   key=lambda a: (a['role'] in {'invoice', 'payment'}, a['name']))
@@ -57,6 +61,11 @@ def selected_attachments(item: dict[str, Any]) -> list[dict[str, Any]]:
 
 def compose_matter(store: ExpenseStore, item: dict[str, Any], folder: Path) -> tuple[Path, str]:
     destination = folder / (item['id'] + '.pdf')
+    if item.get('material_basis') == 'payment_only':
+        with pymupdf.open() as output:
+            append_payments(output, store, [item])
+            output.save(destination, garbage=4, deflate=True)
+        return destination, item['layout']
     attachments = selected_attachments(item)
     paths = [(a['role'], store.attachment_path(a['id'])[0]) for a in attachments]
     if item.get('legacy'):
@@ -130,11 +139,11 @@ def normalize_options(options: dict[str, Any] | None, items: list[dict[str, Any]
     return result
 
 
-def create_report(store: ExpenseStore, ids: list[str], options: dict[str, Any] | None = None) -> dict[str, str]:
+def create_report(store: ExpenseStore, ids: list[str], options: dict[str, Any] | None = None, *, submit: bool = True) -> dict[str, str]:
     if not isinstance(ids, list) or not ids or len(ids) > 200 or not all(isinstance(x, str) for x in ids) or len(ids) != len(set(ids)):
         raise ValueError('请选择1至200个不重复事项')
     items = [store.get(key) for key in ids]
-    invalid = [x['title'] for x in items if not x['ready'] or x['stage'] != 'draft']
+    invalid = [x['title'] for x in items if not (x['ready'] if submit else x['complete']) or x['stage'] != 'draft']
     if invalid:
         raise ValueError('制作新报销包只接收材料齐全、已核对且未提交的事项：' + '、'.join(invalid[:5]))
     options = normalize_options(options, items)
@@ -166,6 +175,8 @@ def create_report(store: ExpenseStore, ids: list[str], options: dict[str, Any] |
             staging = Path(temporary)
             with pymupdf.open() as output:
                 for item in items:
+                    if item.get('material_basis') == 'payment_only':
+                        continue
                     try:
                         package, note = compose_matter(store, item, staging)
                         start = len(output) + 1
@@ -175,6 +186,8 @@ def create_report(store: ExpenseStore, ids: list[str], options: dict[str, Any] |
                         item['layout'] = note
                     except Exception as exc:
                         raise ValueError(f"{item['title']}：{exc}") from exc
+                for group in payment_groups(items):
+                    append_payments(output, store, group)
                 output.save(staging / 'report.pdf', garbage=4, deflate=True)
             with pymupdf.open(staging / 'report.pdf') as checked:
                 if not len(checked) or any(abs(p.rect.width-A4_WIDTH)>1 or abs(p.rect.height-A4_HEIGHT)>1 for p in checked):
@@ -182,9 +195,9 @@ def create_report(store: ExpenseStore, ids: list[str], options: dict[str, Any] |
             create_excel(template, items, options, staging / 'report.xlsx')
             def clean(value: object) -> str:
                 return str(value).replace('|', '/').replace('\n', ' ').replace('\r', ' ')
-            lines = ['# 报销材料清单', '', '打印：A4、1×1。组内已排版，不要再次选择1×2；不同事项不共用空位。',
+            lines = ['# 报销材料清单', '', '打印：A4、每张纸1页。已确认仅需支付凭证的事项按2×2拼版，同项目每页最多4张；其他事项保持各自排版。不要在打印窗口再次设置多页合一。',
                      f"报销人：{clean(options['person'] or '待填写')}；期间：{clean(options['period'])}",
-                     f"付款来源：{PAYMENTS[options['payment']][1]}。制作成功后自动标记已提交，不代表报销到账。", '',
+                     f"付款来源：{PAYMENTS[options['payment']][1]}。{'制作成功后自动标记已提交，不代表报销到账。' if submit else '试生成，仅供审阅，未改变提交状态。'}", '',
                      '| 事项编号 | 项目 | 类别 | 事项 | 消费日期 | 金额 | PDF页码 | 排版／凭证方式 |',
                      '| --- | --- | --- | --- | --- | ---: | --- | --- |']
             totals: dict[str, int] = {}
@@ -194,13 +207,16 @@ def create_report(store: ExpenseStore, ids: list[str], options: dict[str, Any] |
                 label = '咖啡' if x['category'] == '外卖' and '咖啡' in (x['title']+x['merchant']) else x['category']
                 totals[label] = totals.get(label,0)+x['amount_cents']
             lines += ['', '## 分类合计', '']+[f'- {key}：{value/100:.2f}元' for key,value in totals.items()]
+            from invoice_print_layout.report_snapshot import snapshot
+            lines += ['', '## 报表汇总（与HTML及Excel相同）', ''] + [f"- H{r['row']} {r['name']}：{r['amount_cents']/100:.2f}元" for r in snapshot(items)['rows']]
             lines += [f'- 总计：{total/100:.2f}元', '', 'Excel使用同一份已核对台账金额；附件不另行计费。活动日期、签字等未知内容留空。']
             (staging / 'report.md').write_text('\n'.join(lines), encoding='utf-8')
             for kind, final in outputs.items():
                 (staging / ('report.'+kind)).replace(final)
                 published.append(final)
         result = {kind: path.name for kind,path in outputs.items()}
-        store.submit_report(items, result)
+        if submit:
+            store.submit_report(items, result)
         return result
     except Exception:
         for path in published:

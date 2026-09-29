@@ -15,6 +15,7 @@ import re
 import sqlite3
 import subprocess
 import tomllib
+from urllib.parse import urlsplit
 from typing import Any
 
 
@@ -46,8 +47,45 @@ def literal_command(source: str) -> str | None:
     return str(json.loads(values[0]))
 
 
+def invocation_summary(source: str) -> dict[str, Any]:
+    """Report only literal tool options. Missing defaults are not recovered argv."""
+    result: dict[str, Any] = {'exact_argv_recovered': False,
+                             'replay_equivalence': 'unproven: tool defaults and rendered argv are not losslessly recovered'}
+    for key in ('login', 'tty', 'shell', 'workdir', 'sandbox_permissions'):
+        found = re.findall(r'\b'+key+r'\s*:\s*("(?:\\.|[^"\\])*"|true|false)(?=\s*[,}])', source)
+        if len(found) != 1:
+            continue
+        value = json.loads(found[0])
+        if key in {'shell', 'workdir'}:
+            result[key+'_sha256'] = hashlib.sha256(str(value).encode()).hexdigest()
+        else:
+            result[key] = value
+    return result
+
+
+def command_features(command: str) -> dict[str, Any]:
+    features: dict[str, Any] = {name: bool(re.search(re.escape(name), command, re.I))
+                              for name in ('Stop-Process', 'Start-Process', 'WindowStyle Hidden', 'if (', 'for (')}
+    urls = re.findall(r'https?://[^\s\'"<>`]+', command, re.I)
+    kinds: Counter[str] = Counter()
+    for url in urls:
+        try:
+            host = urlsplit(url).hostname
+        except ValueError:
+            host = None
+        kinds['loopback' if host in {'127.0.0.1', 'localhost', '::1'} else 'other_or_unresolved'] += 1
+    features['http_url_count'] = len(urls)
+    features['url_kinds'] = dict(kinds)
+    features['launch_and_url_text_cooccurrence'] = bool(urls) and bool(re.search(
+        r'\b(?:Start-Process|start|saps|Invoke-Item|ii)\b', command, re.I))
+    features['scope'] = 'Text features only; not parser segments, builtin decision or proof of causation.'
+    return features
+
+
 def refusals(path: Path) -> list[dict[str, Any]]:
     calls: dict[str, str] = {}
+    contexts: dict[str, dict[str, Any]] = {}
+    context: dict[str, Any] = {}
     found = []
     with path.open(encoding='utf-8') as file:
         for line in file:
@@ -56,8 +94,13 @@ def refusals(path: Path) -> list[dict[str, Any]]:
             except ValueError:
                 continue
             data = event.get('payload', {})
+            if event.get('type') == 'turn_context':
+                sandbox = data.get('sandbox_policy')
+                context = {'approval_policy': data.get('approval_policy'),
+                           'sandbox_policy': {'type': sandbox.get('type')} if isinstance(sandbox, dict) else None}
             if data.get('type') == 'custom_tool_call' and data.get('name') in {'exec', 'functions.exec'}:
                 calls[data.get('call_id', '')] = data.get('input', '')
+                contexts[data.get('call_id', '')] = context.copy()
             if data.get('type') != 'custom_tool_call_output':
                 continue
             output = data.get('output', [])
@@ -69,7 +112,9 @@ def refusals(path: Path) -> list[dict[str, Any]]:
             if refusal:
                 call_id = data.get('call_id', '')
                 found.append({'at': event.get('timestamp'), 'call_id': call_id,
-                              'command': literal_command(calls.get(call_id, ''))})
+                              'command': literal_command(calls.get(call_id, '')),
+                              'historical_turn_context': contexts.get(call_id, {}),
+                              'invocation': invocation_summary(calls.get(call_id, ''))})
     return found
 
 
@@ -139,24 +184,25 @@ def build_report(home: Path, project: Path, thread_id: str, cli: Path, shell: Pa
     results = []
     for event in events[-10:]:
         command = event['command']
-        entry = {key: event[key] for key in ('at', 'call_id')}
+        entry = {key: event[key] for key in ('at', 'call_id', 'historical_turn_context', 'invocation')}
         entry['failure'] = 'CreateProcess rejected: blocked by policy'
         entry['command_recovered'] = command is not None
         if command is not None:
             entry['command_sha256'] = hashlib.sha256(command.encode()).hexdigest()
             entry['command_chars'] = len(command)
-            entry['features'] = {name: bool(re.search(re.escape(name), command, re.I))
-                                 for name in ('Stop-Process', 'Start-Process', 'WindowStyle Hidden', 'if (', 'for (')}
+            entry['features'] = command_features(command)
             entry['local_rule_check'] = check_rules(cli, rules, shell, command)
         entry['logs'] = nearby_logs(home / 'logs_2.sqlite', event)
         results.append(entry)
     return {'created_at': datetime.now(timezone.utc).isoformat(), 'task': task,
             'config_defaults_not_effective_session': config_summary(home / 'config.toml', project),
-            'local_rules': {'files': [str(p) for p in rules], 'explicit_decision_counts': dict(counts)},
+            'local_rules': {'files': [str(p) for p in rules], 'explicit_decision_counts': dict(counts),
+                            'sha256': [hashlib.sha256(p.read_bytes()).hexdigest() for p in rules]},
             'refusals': results, 'shell_for_offline_check': str(shell),
             'limits': ['No recorded command was executed. No permissions/configuration were changed.',
                        'No matching local rule does not imply execution is allowed by other enforcement layers.',
                        'Task database shows current stored settings, not necessarily historical settings for every event.',
+                       'Historical turn context is reported when present; exact executed argv and historical runtime binary remain unproven.',
                        'Log lookup is bounded to 3 seconds around refusal, selected targets only; absent evidence is not proof of no review.',
                        'No credentials, raw scripts, raw rule patterns or raw logs are exported.'],
             'root_cause': 'Execution policy rejected process creation; specific rule/reviewer reason remains unproven.'}
@@ -170,16 +216,17 @@ def markdown(report: dict[str, Any]) -> str:
         f"- approval_mode：`{report['task']['approval_mode']}`",
         f"- CLI版本：`{report['task']['cli_version']}`", '',
         '## 历史拦截与本地规则离线检查', '',
-        '| UTC时间 | Stop-Process | Start-Process | 本地规则检查 | 命中数 |',
-        '|---|---|---|---|---|']
+        '| UTC时间 | Stop-Process | Start-Process | HTTP URL数 | 本地规则检查 | 命中数 |',
+        '|---|---|---|---|---|---|']
     for event in report['refusals']:
         features, check = event.get('features', {}), event.get('local_rule_check', {})
-        lines.append(f"| {event['at']} | {features.get('Stop-Process')} | {features.get('Start-Process')} | {check.get('decision', check.get('status', 'not_checked'))} | {check.get('matched_count', '-')} |")
+        lines.append(f"| {event['at']} | {features.get('Stop-Process')} | {features.get('Start-Process')} | {features.get('http_url_count')} | {check.get('decision', check.get('status', 'not_checked'))} | {check.get('matched_count', '-')} |")
     lines += ['', '## 结论与边界', '',
         '- 拒绝发生在工具创建进程之前，不能归因为工作台Python异常。',
         '- `no_match`仅表示本次提供的本地规则没有命中，不表示完整运行策略允许。',
         '- 现有日志未提供可归因的具体规则或审查理由，不能断言由自动审批、某个命令或Windows策略造成。',
         '- 即使多次命令共同包含Start-Process，也只是相关性，不是因果证明。',
+        '- HTTP URL只记录数量和本机/其他类型；文本共现不是同一解析片段命中的证明。历史turn_context可补充当时权限，但完整argv与历史运行时仍需另证。',
         '- 未导出密钥、完整命令、规则正文或原始日志；详细时间、调用编号和日志行编号见同目录JSON。', '',
         '[OpenAI规则检查文档](https://learn.chatgpt.com/docs/agent-configuration/rules)',
         '[OpenAI审批说明](https://learn.chatgpt.com/docs/agent-approvals-security)', '']

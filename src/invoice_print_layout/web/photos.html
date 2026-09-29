@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>项目照片管理</title><link rel="stylesheet" href="/photos.css"></head>
+<body><main>
+<header><div><h1>照片管理</h1><p id="summary">正在读取…</p></div><button id="refresh">刷新</button></header>
+<p id="error" role="alert" hidden></p><p id="notice" role="status" hidden></p>
+<section class="intake" aria-label="读取照片">
+ <div class="upload"><label class="button">导入照片<input id="uploads" type="file" accept="image/jpeg,image/png,image/webp" multiple></label><span>保留文件与水印，重复照片自动去重</span></div>
+ <details><summary>采集照片</summary>
+  <form id="folderForm"><label>本地文件夹（包含所有子文件夹）<input name="path" id="sourceFolder" placeholder="填写照片文件夹完整路径" required></label><button type="submit" data-job>读取文件夹</button></form>
+  <form id="wechatForm"><label>来源群<select name="group_id" id="sourceGroup" required></select></label><label>开始日期<input name="start" id="startDate" type="date" required></label><label>结束日期<input name="end" id="endDate" type="date" required></label><button type="submit" data-job>读取微信群</button></form>
+  <p class="help" id="readerStatus"></p><p class="help">读取本机已缓存的图片，优先读取原图版本。微信中尚未下载的图片，下载后可重新读取。自动分类时核对水印项目、地点和来源，共用群不默认归属本项目。</p>
+ </details>
+</section>
+<details id="settings"><summary>采集与归档设置</summary><form id="settingsForm">
+ <label>当前项目照片保存目录<input name="output_root" id="outputRoot" required></label>
+ <label><input id="autoClassify" type="checkbox"> 获取后自动 OCR → Jev 分类 → 保存到对应文件夹</label>
+ <label>项目城市／地点<input id="projectLocation" placeholder="例如：南昌"></label>
+ <p class="help">仅向 Jev 发送提取文字、项目及相关来源信息，图片保留本机。明确的结果自动保存，依据不足的留待核对；已有核对结果保留。</p>
+ <p class="help">车辆：进场／撤场 → 车牌号-到场日期 → 工厂／现场。人员：进场／展期／撤场 → 拍摄日期。修改目录后，照片在下次保存时写入新位置。</p>
+ <details><summary>微信来源</summary><label>当前微信账号目录标识<input name="account" id="account" placeholder="wxid_…"></label><label>来源群（每行：群名 | 稳定群ID）<textarea id="groups" rows="3" placeholder="现场群 | 123@chatroom"></textarea></label></details>
+ <button type="submit">保存设置</button>
+</form></details>
+<section id="job" hidden aria-live="polite"><strong id="jobMessage"></strong><button id="closeJob" class="feedback-close" type="button" aria-label="收起处理结果" hidden></button><progress id="jobProgress" max="1" value="0"></progress><p id="jobCounts"></p><details id="jobIssues" hidden><summary>查看未完成项</summary><ul></ul></details></section>
+<details id="jobHistory" hidden><summary id="jobHistoryLabel">最近处理记录</summary><div id="jobHistoryList"></div></details>
+<details id="briefSettings"><summary>飞书简报</summary>
+ <form id="briefForm"><label><input id="briefEnabled" type="checkbox"> 整理完成后发送到我已绑定的飞书账号</label><label><input id="briefPDF" type="checkbox"> 附三列照片审阅 PDF（将项目已归档照片发送到本人飞书）</label><button type="submit">保存简报设置</button></form>
+ <p class="help">按本项目定时任务执行；简报说明新增、重复及未完成情况。PDF包含本轮实际读取的已归档照片，待归属照片不上传，源文件保留在电脑。关闭浏览器不影响，电脑与工作台服务须保持运行。</p>
+ <p id="briefStatus" role="status"></p><div id="reviewFiles"></div><button type="button" id="sendBriefPreview">发送现有照片试用汇总</button>
+ <form id="readBriefForm"><label>补读日期<input id="briefReadDate" type="date" required></label><button type="submit" id="readBrief" data-job>读取全部来源群并发送审阅</button></form>
+ <p class="help">补读使用本项目所有已配置照片来源群，只读取所选日期；完成后发送简报及已启用的 PDF。</p>
+ <p class="help">试用简报汇总当前项目已有照片，不会重新读取微信群。相同内容重复点击不会重复发送。</p>
+</details>
+<details id="dailyReports"><summary>生成卸货日报</summary>
+ <p id="dailyInfo" class="help">使用已确认模板，按运输日期匹配同车工厂与现场车头照。</p>
+ <form id="dailyForm" hidden>
+  <label>报告／运输日期<input id="dailyDate" type="date" required></label>
+  <label>开始时间<input id="dailyStart" type="time" required></label>
+  <label>结束时间<input id="dailyEnd" type="time" required></label>
+  <label>此前已确认累计工时<input id="dailyPrior" type="number" min="0" max="10000" step="0.01" required></label>
+  <button id="dailyMatch" type="button">匹配车头照片</button>
+  <div id="dailySlots" class="grid" style="width:100%"></div>
+  <p id="dailyIssues" role="status" style="width:100%"></p>
+  <label class="confirm" style="width:100%"><input id="dailyConfirmed" type="checkbox" required> 已确认此模板的固定施工内容与次日计划适用于本次日报</label>
+  <button id="dailyGenerate" type="submit" disabled>生成预览并检查 PPT</button>
+ </form>
+ <p id="dailyStatus" role="status"></p><div id="dailyResult"></div>
+ <details><summary>已生成日报</summary><div id="dailyHistory"></div></details>
+</details>
+<section class="toolbar" aria-label="筛选照片">
+ <label>状态<select id="stateFilter"><option value="">全部</option><option value="pending">待核对</option><option value="saved">已保存</option></select></label>
+ <label>类别<select id="kindFilter"><option value="">全部类别</option><option>车辆</option><option>人员</option><option>其他</option></select></label>
+ <label>位置<select id="placeFilter"><option value="">全部位置</option><option>工厂</option><option>现场</option></select></label>
+ <label>拍摄日期<input id="dateFilter" type="date"></label><button id="clearFilters">清除筛选</button>
+</section>
+<div class="selection"><label><input type="checkbox" id="selectAll"> 选择当前筛选</label><span id="selectedCount">已选0张</span><button id="recognize" data-job>识别所选照片</button><button id="clearSelection">清空选择</button></div>
+<p class="help" id="classificationStatus"></p>
+<p class="help">拍摄时间对应搭建／展期／撤展排期；姓名、岗位和完整出勤时长不自动判断。选中待核对照片可重新识别分类。</p>
+<section id="photoList" class="grid" aria-label="项目照片"></section>
+</main>
+<dialog id="editor"><header><h2>核对与分类</h2><button id="closeEditor" type="button">关闭</button></header><div class="editor-grid">
+ <div><a id="fullImage" target="_blank" rel="noopener"><img id="preview" alt="待核对照片"></a><p id="imageQuality" class="help"></p><p id="imageSource" class="help"></p><details><summary>OCR文字与候选结果</summary><pre id="ocrText"></pre><button id="applySuggestions" type="button">填入识别候选</button></details></div>
+ <form id="reviewForm"><p id="reviewError" role="alert" hidden></p>
+  <p id="projectPhase" class="help"></p>
+  <div class="form-grid"><label>类别<select name="kind" required><option value="">请选择</option><option>车辆</option><option>人员</option><option>其他</option></select></label><label>归档环节<select name="movement" required><option value="">请选择</option><option>进场</option><option>展期</option><option>撤场</option></select></label>
+  <label>拍摄日期<input name="captured_date" type="date" required></label><label>拍摄时间<input name="captured_time" type="time"></label></div>
+  <fieldset id="vehicleFields"><legend>车辆分类</legend><div class="form-grid"><label>车牌号<input name="plate" placeholder="看清后填写"></label><label>到场日期<input name="trip_date" type="date"></label><label>拍摄位置<select name="place"><option value="">请选择</option><option>工厂</option><option>现场</option></select></label></div><p class="help">同一次运输的工厂照和现场照使用同一个到场日期；各照片仍保留自己的拍摄日期。</p></fieldset>
+  <fieldset id="personFields"><legend>人员记录（可留空）</legend><div class="form-grid"><label>姓名<input name="person_name"></label><label>岗位<input name="person_role"></label><label>本张主体人数<input name="visible_count" type="number" min="0" max="1000"></label></div></fieldset>
+  <label>照片名称<input name="label" placeholder="如车头、侧面、单人到场照、合影"></label><label>水印地点<input name="location"></label><label>水印项目文字<input name="watermark_project"></label><label>备注<textarea name="note" rows="2"></textarea></label>
+  <label class="confirm"><input id="confirmed" type="checkbox" required> 已看图核对，确认这张照片属于当前项目，分类与日期正确</label>
+  <p id="savedPath" class="help"></p><button type="submit" id="savePhoto" class="primary">保存核对结果与照片</button>
+ </form></div></dialog><script src="/photos.js"></script><script src="/daily-reports.js"></script></body></html>

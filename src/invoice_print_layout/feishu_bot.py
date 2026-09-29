@@ -67,6 +67,41 @@ class FeishuGateway:
         response = self.client.im.v1.message.reply(request)
         self._require_success(response, "回复消息")
 
+    def send_card(self, owner_open_id: str, card: dict[str, Any], delivery_id: str) -> str:
+        request = (CreateMessageRequest.builder().receive_id_type('open_id')
+                   .request_body(CreateMessageRequestBody.builder().receive_id(owner_open_id)
+                                 .msg_type('interactive').content(json.dumps(card, ensure_ascii=False))
+                                 .uuid(delivery_id).build()).build())
+        response = self.client.im.v1.message.create(request)
+        if not response.success():
+            raise BotError(f'飞书简报发送未完成（错误码 {response.code}）')
+        if response.data is None or not response.data.message_id:
+            raise BotError('飞书响应缺少消息回执，请核对是否已收到')
+        return str(response.data.message_id)
+
+    def upload_review(self, path: Path) -> str:
+        with path.open('rb') as stream:
+            request = (CreateFileRequest.builder().request_body(CreateFileRequestBody.builder()
+                       .file_type('pdf').file_name(path.name).file(stream).build()).build())
+            response = self.client.im.v1.file.create(request)
+        if not response.success():
+            raise BotError(f'飞书PDF上传未完成（错误码 {response.code}）')
+        if response.data is None or not response.data.file_key:
+            raise BotError('PDF上传缺少文件回执')
+        return str(response.data.file_key)
+
+    def send_review(self, owner_open_id: str, file_key: str, delivery_id: str) -> str:
+        request = (CreateMessageRequest.builder().receive_id_type('open_id')
+                   .request_body(CreateMessageRequestBody.builder().receive_id(owner_open_id)
+                                 .msg_type('file').content(json.dumps({'file_key': file_key}))
+                                 .uuid(delivery_id).build()).build())
+        response = self.client.im.v1.message.create(request)
+        if not response.success():
+            raise BotError(f'飞书PDF发送未完成（错误码 {response.code}）')
+        if response.data is None or not response.data.message_id:
+            raise BotError('PDF发送缺少消息回执，请核对飞书是否收到')
+        return str(response.data.message_id)
+
     def download_resource(
         self,
         message_id: str,

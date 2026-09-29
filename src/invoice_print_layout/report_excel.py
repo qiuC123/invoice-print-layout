@@ -58,7 +58,8 @@ def create_excel(template: Path, items: list[dict[str, Any]], options: dict[str,
         raise ValueError('当前报销表仅填写现场现金支付（需报销）列，请刷新工作台后重试')
     column, label = PAYMENTS[options['payment']]
     projects = list(dict.fromkeys(x['project'] for x in items))
-    payload = {'template': str(template), 'output': str(output), 'items': items,
+    from invoice_print_layout.report_snapshot import snapshot
+    payload = {'template': str(template), 'output': str(output), 'items': items, 'snapshot': snapshot(items),
                'project': projects[0] if len(projects) == 1 else '多个项目（详见明细）',
                'person': options['person'], 'period': options['period'],
                'payment_column': column, 'payment_label': label,
