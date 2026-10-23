@@ -12,7 +12,6 @@ from pathlib import Path
 from typing import Any
 
 from PIL import Image
-from rapidocr_onnxruntime import RapidOCR
 
 from invoice_print_layout.documents import (
     PdfInspectionError,
@@ -242,7 +241,7 @@ def _extract_invoice_pdfs(archive: Path, directory: Path) -> list[Path]:
 def inspect_takeout_files(
     files: list[Path], staging: Path
 ) -> tuple[list[OrderReceipt], list[TakeoutInvoice]]:
-    engine = RapidOCR()
+    from invoice_print_layout.receipt_intake import read_receipt
     orders: list[OrderReceipt] = []
     invoices: list[TakeoutInvoice] = []
     derived = staging / "extracted"
@@ -258,7 +257,7 @@ def inspect_takeout_files(
             continue
         if suffix not in _IMAGE_SUFFIXES:
             raise TakeoutError(f"不支持的外卖附件：{path.name}")
-        lines = _ocr_lines(path, engine)
+        lines = read_receipt(path.read_bytes(), path.suffix.lower())
         compact = _compact(lines)
         if "订单号" in compact and "实付" in compact:
             orders.append(_parse_order(path, lines))

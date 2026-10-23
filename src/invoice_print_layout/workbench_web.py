@@ -858,6 +858,8 @@ def main() -> None:
     parser.add_argument('--port', type=int, default=8765)
     parser.add_argument('--mode', choices=APP_MODES, default='workbench')
     args = parser.parse_args()
+    from invoice_print_layout.receipt_intake import configure_ocr_cache
+    configure_ocr_cache(args.workspace / '工作台' / 'ocr-cache.sqlite3')
     # Windows process-owned byte lock: closing/crashing releases it automatically.
     # It also prevents launching the same workspace on a second port.
     import msvcrt

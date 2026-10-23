@@ -9,6 +9,7 @@ import re
 import tempfile
 import threading
 import uuid
+from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 from typing import Any
 
@@ -19,9 +20,27 @@ from invoice_print_layout.takeout import OcrLine, _ocr_lines, TakeoutError
 from invoice_print_layout.workbench import ExpenseStore, MAX_BYTES, ROLES, amount_cents, now, expense_identifier_keys
 from invoice_print_layout.transaction_evidence import extract_transaction_evidence, record_identifier_keys
 from invoice_print_layout.local_payment_fields import is_payment_payee_metadata, payment_title_payee
+from invoice_print_layout.ocr_cache import CACHE_VERSION, ReceiptOcrCache
 
 _engine: Any = None
 _ocr_lock = threading.Lock()
+_ocr_cache = ReceiptOcrCache()
+OCR_INTRA_THREADS = 2
+OCR_INTER_THREADS = 1
+
+
+def configure_ocr_cache(path: Path | None) -> None:
+    """Called at process startup; unit/library users default to bounded memory."""
+    global _ocr_cache
+    _ocr_cache = ReceiptOcrCache(path.resolve() if path is not None else None)
+
+
+def ocr_engine_signature() -> str:
+    try:
+        engine_version = version('rapidocr-onnxruntime')
+    except PackageNotFoundError:
+        engine_version = 'unknown'
+    return f'rapidocr:{engine_version}:intra={OCR_INTRA_THREADS}:inter={OCR_INTER_THREADS}:v={CACHE_VERSION}'
 
 
 def validate_image(name: str, payload: bytes) -> str:
@@ -43,13 +62,23 @@ def validate_image(name: str, payload: bytes) -> str:
 
 def read_receipt(payload: bytes, suffix: str) -> list[OcrLine]:
     global _engine
+    digest, signature = hashlib.sha256(payload).hexdigest(), ocr_engine_signature()
+    cache = _ocr_cache
+    cached = cache.get(digest, signature)
+    if cached is not None:
+        return cached
     # A lazy, bounded CPU engine; originals never leave this computer.
     with _ocr_lock, tempfile.TemporaryDirectory(prefix='receipt-ocr-') as folder:
+        cached = cache.get(digest, signature)
+        if cached is not None:
+            return cached
         path = Path(folder) / ('receipt' + suffix)
         path.write_bytes(payload)
         if _engine is None:
-            _engine = RapidOCR(intra_op_num_threads=2, inter_op_num_threads=1)
-        return _ocr_lines(path, _engine)
+            _engine = RapidOCR(intra_op_num_threads=OCR_INTRA_THREADS, inter_op_num_threads=OCR_INTER_THREADS)
+        lines = _ocr_lines(path, _engine)
+        cache.put(digest, signature, lines)
+        return lines
 
 
 def rows_of(lines: list[OcrLine]) -> list[str]:
