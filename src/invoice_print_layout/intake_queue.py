@@ -453,9 +453,13 @@ class IntakeQueue:
         with self.store.connect() as db:
             db.execute('BEGIN IMMEDIATE')
             current = self.get(key)
-            if current['revision'] != data['revision'] or current['status'] in INACTIVE_STATUSES:
+            if (current['revision'] != data['revision'] or current['digest'] != data['digest'] or
+                    current.get('project_id') != data.get('project_id') or current.get('item_id') != data.get('item_id') or
+                    current['status'] in {'linked', 'duplicate', 'converted'} | INACTIVE_STATUSES):
                 raise ValueError('收件已变化，请刷新后重试')
             target = self.get(replacement['id'])
+            if target['revision'] != replacement['revision'] or target['digest'] != replacement['digest']:
+                raise ValueError('二维码对应发票已变化，请刷新后重试')
             if target['status'] in INACTIVE_STATUSES:
                 raise ValueError('二维码对应发票已归档或删除，请在归档区处理')
             source_ids = list(dict.fromkeys([*target.get('source_entry_ids', []), key]))

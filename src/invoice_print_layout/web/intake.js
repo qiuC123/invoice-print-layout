@@ -3,6 +3,8 @@
  const dialog=document.createElement('dialog');dialog.id='intakeDialog';dialog.style.cssText='width: min(1200px,95vw);max-width:95vw';
  dialog.innerHTML='<div class="dialoghead"><h2>统一收件与待处理</h2><button data-close class="dialog-close" type="button" aria-label="关闭">×</button></div><p>材料已保存在本机。补充材料不增加金额，自动整理不会核对或提交。</p><div class="actions"><input id="intakeFiles" type="file" multiple accept=".pdf,.png,.jpg,.jpeg,.webp"><button id="claimInvoice">二维码／链接领票</button><button id="intakeMail">纳入已补收邮件</button><select id="intakeFilter"><option value="">全部收件</option><option>金额冲突</option><option>疑似重复</option><option>手写难辨</option></select><button id="intakeRefresh">刷新</button></div><p id="intakeSummary" role="status"></p><div id="intakeRows"></div>';
  document.body.append(dialog);
+ const backgroundStatus=document.createElement('div');backgroundStatus.id='intakeBackgroundStatus';backgroundStatus.hidden=true;
+ $('intakeSummary').after(backgroundStatus);
  $('intakeFilter').append(new Option('归档','归档'),new Option('已删除','已删除'));
  let entries=[];
  async function refresh(){const res=await fetch('/api/intake');if(!res.ok)throw Error('无法读取收件');entries=(await res.json()).queue.filter(q=>!projectScope||q.project_id===projectScope).map(q=>({...q,issues:(q.issues||[]).filter(issue=>!['商品不明','归属不明','归属未定'].includes(issue))}));draw();}
@@ -12,7 +14,7 @@
   $('intakeSummary').textContent=`已保存 ${entries.length} 份 · 新增费用 ${counts['新增费用']||0} · 补充材料 ${counts['补充材料']||0} · 重复文件 ${entries.filter(q=>q.status==='duplicate').length} · 归档 ${entries.filter(archived).length} · 已删除 ${entries.filter(q=>q.status==='deleted').length} · 待处理 ${entries.filter(q=>!['linked','duplicate','unused','archived','deleted','converted'].includes(q.status)).length}`;
   $('intakeRows').innerHTML=entries.filter(q=>!$('intakeFilter').value||($('intakeFilter').value==='归档'?archived(q):$('intakeFilter').value==='已删除'?q.status==='deleted':!inactive(q)&&q.issues.includes($('intakeFilter').value))).map(q=>`<article class="mailrow"><a target="_blank" rel="noopener" href="/intake-file/${esc(q.id)}">${esc(q.name)}</a><p>${esc(q.source)} · ${esc(q.status==='unused'?q.unused_reason||q.result:q.result)}${inactive(q)?'':' · '+esc(q.issues.join('、'))}</p>${inactive(q)?`<span class="badge neutral">${q.status==='deleted'?'已删除 · 可恢复':'归档 · 原件保留'}</span>`:q.item_id?`<a href="/?matter=${encodeURIComponent(q.item_id)}${projectScope?'&project='+encodeURIComponent(projectScope):''}" target="_blank">查看所属费用</a>`:`<button data-analyze="${esc(q.id)}">识别／重试</button><button data-claim="${esc(q.id)}">识别领票二维码</button><button data-resolve="${esc(q.id)}">对照原件处理</button>`}</article>`).join('');
  }
- async function open(){await refresh();$('intakeMail').hidden=!!projectScope;dialog.showModal();}
+ async function open(){await refresh();$('intakeMail').hidden=!!projectScope;dialog.showModal();void window.invoiceIntakeProgress?.refresh(projectScope);}
  window.openUnifiedIntake=open;
  if($('recognizeReceipt')){$('recognizeReceipt').onclick=()=>act(open);$('recognizeReceipt').textContent='＋ 收图片／PDF并整理';}
  dialog.querySelector('[data-close]').onclick=()=>dialog.close();$('intakeRefresh').onclick=()=>act(refresh);$('intakeFilter').onchange=draw;
@@ -23,6 +25,7 @@
   if(!files.length)return;
   const batch=crypto.randomUUID(),project=projectContext(),uploadProject=project?.id||projectScope||'',agent=window.manualInvoiceAgent;
   const organizer=uploadProject&&typeof agent?.shouldAutoOrganize==='function'&&typeof agent?.startReceived==='function'&&agent.shouldAutoOrganize(uploadProject)?agent:null;
+  const background=!organizer&&window.invoiceIntakeProgress?.available();
   const entryIds=new Set();let received=0;
   let duplicates=0,failed=0,converted=0,unused=0,matched=0,recognitionReviews=0,autoError='',autoFeedback='';
   intakeUploadBusy=true;dialog.querySelectorAll('button,input,select').forEach(control=>control.disabled=true);
@@ -33,7 +36,7 @@
      const data=await new Promise((resolve,reject)=>{const r=new FileReader();r.onload=()=>resolve(r.result.split(',')[1]);r.onerror=reject;r.readAsDataURL(file);});
      const q=await api('intake/receive',{name:file.name,data,project_id:uploadProject,batch});received++;
      if(q.duplicate||q.status==='duplicate')duplicates++;
-     else if(organizer){if(typeof q.id==='string'&&q.id&&q.project_id===uploadProject&&!q.item_id&&['received','review'].includes(q.status))entryIds.add(q.id);}
+     else if(organizer||background){if(typeof q.id==='string'&&q.id&&q.project_id===uploadProject&&!q.item_id&&['received','review'].includes(q.status))entryIds.add(q.id);}
      else{const prepared=await api('intake/prepare',{id:q.id});if(prepared.converted_to_pdf)converted++;if(prepared.entry?.status==='unused')unused++;else if(['failed','review'].includes(prepared.entry?.ai_analysis?.status))recognitionReviews++;}
     }catch(error){failed++;notify(file.name+'：'+error.message,true);}
    }
@@ -46,12 +49,31 @@
     if(started){dialog.close();notify(summary,failed>0);try{await organizer.open?.();}catch(error){notify(summary+` 助手显示未完成：${error.message}；任务已启动，请刷新查看，无需重新上传。`,true);}}else{let refreshError='';try{await refresh();}catch(error){refreshError=' 材料刷新未完成：'+error.message;}notify(summary+refreshError,!!startError||failed>0||!!refreshError);}
     return;
    }
+   if(background){
+    $('intakeFiles').value='';
+    try{if(entryIds.size)await window.invoiceIntakeProgress.enqueue(batch,[...entryIds],uploadProject);
+     notify(`本批已保存 ${received} 份，重复 ${duplicates} 份，上传失败 ${failed} 份。${entryIds.size?'已交给后台逐份识别，可以关闭窗口；完成后会刷新建议组合。':'没有新的待识别材料。'}`,failed>0);
+    }catch(error){notify(`原件已保存，后台识别未能启动：${error.message}。可刷新后点击继续识别。`,true);void window.invoiceIntakeProgress.refresh(uploadProject);}
+    void refresh().catch(error=>notify(error.message,true));return;
+   }
    try{const result=await api('material-matching/auto',{project_id:project?.id||projectScope||''});matched=result.suggested||0;autoFeedback=[...new Set((result.conflicts||[]).map(value=>value.reason).filter(Boolean))].join(' ');}catch(error){autoError=' 建议组合扫描未完成：'+error.message;}
    $('intakeFiles').value='';await refresh();await load();if(window.synthesisSuggestionsLoaded?.())await window.refreshSynthesisCandidates?.();notify(`本批 ${files.length} 份，重复 ${duplicates} 份，失败 ${failed} 份，转为发票PDF ${converted} 份，无需使用 ${unused} 份，建议组合 ${matched} 组。请在材料合成台查看建议组合，确认创建后进入待核对。${recognitionReviews?` ${recognitionReviews}份识别需人工处理。`:''}已收到的材料可在收件区重试。${agent&&!uploadProject?' 自动整理请先从侧栏选择项目。':''}${autoError}${autoFeedback}`,!!autoError||recognitionReviews>0);
   }finally{
    intakeUploadBusy=false;dialog.querySelectorAll('button,input,select').forEach(control=>control.disabled=false);
   }
  });
+ document.addEventListener('intake-progress',event=>{
+  if(event.detail.projectId!==(projectScope||''))return;
+  window.invoiceIntakeProgress.render(backgroundStatus,event.detail);
+  if(intakeUploadBusy)backgroundStatus.querySelectorAll('button').forEach(button=>button.disabled=true);
+  if(event.detail.finished.length){
+   if(dialog.open&&!intakeUploadBusy)void refresh().catch(error=>notify(error.message,true));
+   void load().catch(error=>notify(error.message,true));
+  }
+ });
+ document.addEventListener('intake-progress-error',event=>{if(dialog.open&&event.detail.projectId===(projectScope||'')){backgroundStatus.hidden=false;backgroundStatus.textContent=event.detail.message+'；可点刷新查看进度。';}});
+ const refreshIntake=$('intakeRefresh').onclick;
+ $('intakeRefresh').onclick=()=>{refreshIntake();void window.invoiceIntakeProgress?.refresh(projectScope);};
  // Use a page-owned form: embedded browsers do not support native prompt().
  window.openInvoiceClaim=({project_id='',onComplete}={})=>{
   if(document.getElementById('invoiceClaimDialog'))return;

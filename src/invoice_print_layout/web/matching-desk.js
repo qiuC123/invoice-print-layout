@@ -19,6 +19,7 @@
     <p id="matchingMessage" class="matching-message" role="status"></p>
     <div id="matchingMailFeedback" class="matching-message is-error" hidden></div>
     <div id="matchingUploadProgress" class="matching-progress" hidden><progress id="matchingProgressBar"></progress><span id="matchingProgressText"></span></div>
+    <div id="matchingBackgroundStatus" class="matching-progress" hidden></div>
     <div id="matchingLoadState" hidden></div>
     <div class="matching-layout">
       <div class="matching-pools" tabindex="0" role="region" aria-label="材料列表，可独立滚动">
@@ -175,6 +176,7 @@
     updateSaveState();
     for (const id of ['matchingAuto', 'matchingAmountPair', 'matchingClaim', 'matchingMail', 'matchingUpload', 'matchingRefresh']) el(id).disabled = value || !projectId;
     for (const button of dialog.querySelectorAll('[data-undo-group]')) button.disabled = value || !button.dataset.groupVersion;
+    if (!value) queueMicrotask(showBackgroundResult);
     window.lockSynthesisSuggestions?.(value);
     updateSupplementButtons();
     updatePeopleButton();
@@ -527,6 +529,7 @@
     if (files.some(file => file.size > 20 * 1024 * 1024) || files.reduce((sum, file) => sum + file.size, 0) > 200 * 1024 * 1024) {message('每份最多20MB，每批合计最多200MB，请分批上传。', true); return;}
     const uploadProject = projectId, agent = window.manualInvoiceAgent;
     const organizer = uploadProject && typeof agent?.shouldAutoOrganize === 'function' && typeof agent?.startReceived === 'function' && agent.shouldAutoOrganize(uploadProject) ? agent : null;
+    const background = !organizer && window.invoiceIntakeProgress?.available();
     lock(true);
     el('matchingUploadProgress').hidden = false;
     const batch = crypto.randomUUID(), failures = [], entryIds = new Set();
@@ -539,7 +542,7 @@
           const data = await new Promise((resolve, reject) => {const reader = new FileReader(); reader.onload = () => resolve(reader.result.split(',')[1]); reader.onerror = reject; reader.readAsDataURL(file);});
           const entry = await api('intake/receive', {name: file.name, data, project_id: uploadProject, batch}); received++;
           if (entry.duplicate || entry.status === 'duplicate') duplicates++;
-          else if (organizer) {
+          else if (organizer || background) {
             if (typeof entry.id === 'string' && entry.id && entry.project_id === uploadProject && !entry.item_id && ['received', 'review'].includes(entry.status)) entryIds.add(entry.id);
           } else {const prepared = await api('intake/prepare', {id: entry.id}); if (prepared.converted_to_pdf) converted++;
             if (prepared.entry?.status === 'unused') unused++;
@@ -568,6 +571,18 @@
           message(summary + (failures.length ? ' ' + failures.join('；') : ''), !!failures.length || !!startError);
         }
         return;
+      }
+      if (background) {
+        el('matchingFiles').value = '';
+        try {
+          if (entryIds.size) await window.invoiceIntakeProgress.enqueue(batch, [...entryIds], uploadProject);
+          message(`本批已保存 ${received} 份 · 重复 ${duplicates} 份 · 上传失败 ${failures.length} 份。${entryIds.size ? '已交给后台逐份识别，可以关闭窗口；完成后会刷新建议组合。' : '没有新的待识别材料。'}`, !!failures.length);
+        } catch (error) {
+          message(`原件已保存，后台识别未能启动：${error.message}。可刷新后点击继续识别。`, true);
+          void window.invoiceIntakeProgress.refresh(uploadProject);
+        }
+        el('matchingProgressText').textContent = '文件已保存，可以关闭窗口。';
+        void refreshBoard().catch(error => message(error.message, true)); return;
       }
       try {const automatic = await autoMatch(); suggested = automatic.suggested; autoFeedback = automatic.feedback;}
       catch (error) {failures.push(`自动配对：${error.message}`);}
@@ -630,7 +645,7 @@
     isBusy: () => busy, closeAfterCommit: closeMatchingAfterCommit};
   el('matchingClose').onclick = closeMatching;
   dialog.addEventListener('cancel', event => {event.preventDefault(); closeMatching();});
-  el('matchingRefresh').onclick = () => mutation(async () => {await refreshBoard(); message('材料已刷新；失效的选择已清除。');});
+  el('matchingRefresh').onclick = () => mutation(async () => {await refreshBoard(); void window.invoiceIntakeProgress?.refresh(projectId); message('材料已刷新；失效的选择已清除。');});
   el('matchingAssignPeople').onclick = async () => {
     if (busy) return;
     const cards = [...currentVouchers(), ...currentPayments(), ...currentSupports()], error = peopleSelectionError(cards);
@@ -793,6 +808,7 @@
         else if (suggestion) applySuggestion(suggestion);
         else message('在左侧选择建议组合或任意材料，右侧预览并确认后进入待核对；缺材料可以后补。');
         opening = false; loading.hidden = true; dialog.querySelector('.matching-layout').hidden = false; lock(false);
+        void window.invoiceIntakeProgress?.refresh(projectId);
       } catch (error) {
         if (!current()) return;
         loading.innerHTML = dialogLoadErrorMarkup(error.message);
@@ -805,4 +821,25 @@
   const openButton = el('materialMatching');
   openButton.onclick = window.openMaterialMatching;
   openButton.disabled = false;
+  let backgroundDirty = false;
+  async function showBackgroundResult() {
+    if (!backgroundDirty || busy || !dialog.open || dialog.querySelector('input:focus,select:focus,textarea:focus') ||
+        [...document.querySelectorAll('dialog[open]')].at(-1) !== dialog) return;
+    backgroundDirty = false;
+    const fields = el('matchingProjectType') ? readFields() : null;
+    try {await refreshBoard(true, fields); message('后台识别完成，建议组合已刷新；请对照原件确认。');}
+    catch (error) {message(error.message, true);}
+  }
+  document.addEventListener('intake-progress', event => {
+    if (event.detail.projectId !== projectId) return;
+    window.invoiceIntakeProgress.render(el('matchingBackgroundStatus'), event.detail);
+    if (busy) el('matchingBackgroundStatus').querySelectorAll('button').forEach(button => button.disabled = true);
+    if (event.detail.finished.length) {backgroundDirty = true; void showBackgroundResult();}
+  });
+  dialog.addEventListener('focusout', () => setTimeout(showBackgroundResult, 0));
+  document.addEventListener('intake-progress-error', event => {
+    if (!dialog.open || event.detail.projectId !== projectId) return;
+    const status = el('matchingBackgroundStatus'); status.hidden = false;
+    status.textContent = event.detail.message + '；可点刷新材料查看进度。';
+  });
 })();

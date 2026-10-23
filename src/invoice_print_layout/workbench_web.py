@@ -180,6 +180,13 @@ def make_server(workspace: Path, port: int = 8765, *, mode: str = 'workbench') -
     write_lock = threading.Lock()
     intake_run_lock = threading.Lock()
     matching_run_lock = threading.Lock()
+    from invoice_print_layout.intake_background import BackgroundIntake
+
+    def scan_received_batch(project_id: str) -> dict[str, Any]:
+        with matching_run_lock:
+            return matching.suggest(project_id)
+
+    background_intake = BackgroundIntake(intake, intake_run_lock, scan_received_batch)
     automatic_category = AutomaticCategory(store, write_lock)
     from invoice_print_layout.agent_jobs import AgentService
     invoice_agent = AgentService(store)
@@ -289,7 +296,7 @@ def make_server(workspace: Path, port: int = 8765, *, mode: str = 'workbench') -
                     if not file.is_relative_to(folder) or file.suffix.lower() not in {'.html', '.jpg', '.jpeg', '.png', '.webp'}:
                         raise ValueError('无效照片文件')
                     self.send(file.read_bytes(), 'text/html; charset=utf-8' if name == 'index.html' else mimetypes.guess_type(file.name)[0] or 'application/octet-stream')
-                elif path in {'/phone-link.js', '/phone-link.css', '/app.js', '/workbench-theme.js', '/workbench-theme.css', '/project-menu.js', '/project-menu.css', '/review-edit.js', '/review-edit.css', '/review-batch.js', '/review-batch.css', '/amount-pairing.js', '/amount-pairing.css', '/reimbursement-people.js', '/reimbursement-people.css', '/intake.js', '/matching-desk.js', '/matching-desk.css', '/synthesis.js', '/receipt.js', '/report.js', '/report-preview.css', '/multi-filter.js', '/multi-filter.css', '/mail-search.js', '/expense-classifier.js', '/logistics.js', '/style.css', '/logistics.css', '/photos.js', '/photos.css'}:
+                elif path in {'/phone-link.js', '/phone-link.css', '/app.js', '/workbench-theme.js', '/workbench-theme.css', '/project-menu.js', '/project-menu.css', '/review-edit.js', '/review-edit.css', '/review-batch.js', '/review-batch.css', '/amount-pairing.js', '/amount-pairing.css', '/reimbursement-people.js', '/reimbursement-people.css', '/intake.js', '/intake-progress.js', '/matching-desk.js', '/matching-desk.css', '/synthesis.js', '/receipt.js', '/report.js', '/report-preview.css', '/multi-filter.js', '/multi-filter.css', '/mail-search.js', '/expense-classifier.js', '/logistics.js', '/style.css', '/logistics.css', '/photos.js', '/photos.css'}:
                     self.send((assets / path[1:]).read_bytes(), 'text/javascript' if path.endswith('.js') else 'text/css')
                 elif path == '/api/logistics':
                     self.respond({**logistics.snapshot(), 'token': token})
@@ -306,6 +313,9 @@ def make_server(workspace: Path, port: int = 8765, *, mode: str = 'workbench') -
                     self.respond(runtime)
                 elif path == '/api/intake':
                     self.respond({'queue': [{k: v for k, v in row.items() if k != 'path'} for row in intake.list()]})
+                elif path == '/api/intake/progress':
+                    progress_project = parse_qs(urlparse(self.path).query, keep_blank_values=True).get('project', [None])[0]
+                    self.respond(background_intake.progress(progress_project))
                 elif path == '/api/reimbursement-people':
                     person_project = parse_qs(urlparse(self.path).query).get('project', [''])[0]
                     self.respond(reimbursement_people.snapshot(person_project))
@@ -375,6 +385,7 @@ def make_server(workspace: Path, port: int = 8765, *, mode: str = 'workbench') -
                                   'classification': automatic_category.statuses([item for item in items if not item['deleted']]),
                                   'categories': CATEGORIES, 'roles': ROLES, 'report_types': report_types(),
                                   'stages': STAGES, 'token': token, 'mail_search_ready': True, 'category_suggestion_ready': True,
+                                  'background_intake_ready': True,
                                   'report_template_ready': (store.root / TEMPLATE_NAME).is_file(),
                                   'report_person': read_person_name(ensure_workspace(store.workspace).config) or '',
                                   'history_import': read_json(store.root / 'history-import.json'),
@@ -555,17 +566,23 @@ def make_server(workspace: Path, port: int = 8765, *, mode: str = 'workbench') -
                     return
                 if path in {'/api/intake/analyze', '/api/intake/prepare'} and type(body.get('force_ai', False)) is not bool:
                     raise ValueError('AI辅助识别选项必须是布尔值')
-                if invoice_ai.enabled and path in {'/api/intake/analyze', '/api/intake/prepare', '/api/material-matching/auto'}:
-                    # Extraction may call the model; matching uses local rules.
-                    # Neither holds the lock used for ordinary edits.
-                    # Candidate scans only read. Manual creation rechecks
-                    # revisions and the candidate pool before writing.
+                if path == '/api/intake/enqueue':
+                    self.respond(background_intake.enqueue(body.get('batch'), body.get('ids'),
+                                                           force_ai=body.get('force_ai', False)))
+                    return
+                if path in {'/api/intake/analyze', '/api/intake/prepare', '/api/material-matching/auto'}:
+                    # Single-proof writes recheck revisions in immediate transactions;
+                    # OCR/model work must not hold the global editing lock. Legacy
+                    # analyze may create expenses and still retains that lock.
                     run_lock = matching_run_lock if path.endswith('/auto') else intake_run_lock
                     if not run_lock.acquire(blocking=False):
                         raise ValueError('材料正在识别或配对，请稍后刷新；本次没有重复执行')
                     try:
                         if path.endswith('/auto'):
                             cloud_result = matching.suggest(body['project_id'])
+                        elif path.endswith('/analyze') and not invoice_ai.enabled and not body.get('force_ai'):
+                            with write_lock:
+                                cloud_result = intake.analyze(body['id'])
                         else:
                             entry = (intake.prepare_batch_entry(body['id'], force_ai=True)
                                      if body.get('force_ai') else intake.prepare_batch_entry(body['id']))
@@ -641,15 +658,6 @@ def make_server(workspace: Path, port: int = 8765, *, mode: str = 'workbench') -
                     elif path == '/api/intake/receive':
                         result = intake.receive(body['name'], base64.b64decode(body['data'], validate=True),
                                                 project_id=body.get('project_id', ''), batch=body.get('batch', ''))
-                    elif path == '/api/intake/analyze':
-                        result = (intake.prepare_batch_entry(body['id'], force_ai=True)
-                                  if body.get('force_ai') else intake.analyze(body['id']))
-                    elif path == '/api/intake/prepare':
-                        entry = (intake.prepare_batch_entry(body['id'], force_ai=True)
-                                 if body.get('force_ai') else intake.prepare_batch_entry(body['id']))
-                        result = {'entry': {k: v for k, v in entry.items() if k != 'path'},
-                                  'converted_to_pdf': bool(entry.get('source_entry_id')),
-                                  'message': entry.get('result', '')}
                     elif path == '/api/intake/classify':
                         result = classify_intake(intake, body)
                     elif path in {'/api/intake/archive', '/api/intake/restore', '/api/intake/delete', '/api/intake/restore-deleted'}:
@@ -685,8 +693,6 @@ def make_server(workspace: Path, port: int = 8765, *, mode: str = 'workbench') -
                                                      revisions=body.get('revisions', {}))
                     elif path == '/api/material-matching/undo':
                         result = matching.undo(body['group_id'], body['expected_version'])
-                    elif path == '/api/material-matching/auto':
-                        result = matching.suggest(body['project_id'])
                     elif path == '/api/intake/resolve':
                         result = intake.resolve(body['id'], body['revision'], body['fields'], body['role'],
                                                 body.get('item_id', ''), body.get('expected_version', ''))
@@ -821,6 +827,7 @@ def make_server(workspace: Path, port: int = 8765, *, mode: str = 'workbench') -
         next_schedule_check = 0.0
 
         def server_close(self) -> None:
+            background_intake.close()
             mail_agent.close()
             invoice_agent.close()
             phone_link.stop()
@@ -843,8 +850,12 @@ def make_server(workspace: Path, port: int = 8765, *, mode: str = 'workbench') -
                     pass
 
     def analyze_phone_material(key: str) -> dict[str, Any]:
-        with write_lock:
+        if not intake_run_lock.acquire(blocking=False):
+            raise ValueError('材料正在识别，请稍后刷新；本次没有重复执行')
+        try:
             return intake.analyze_local(key)
+        finally:
+            intake_run_lock.release()
 
     phone_link = PhoneLink(Handler, token, analyze_phone_material, workspace)
     server = WorkbenchServer(('127.0.0.1', port), Handler)
