@@ -14,6 +14,10 @@ async function run(playwright) {
   const assets = path.resolve(__dirname, '../src/invoice_print_layout/web');
   const base = 'http://127.0.0.1:18765';
   const existing = {id:'existing',title:'Synthetic existing',stage:'draft'};
+  const transactionFields = {shopping_platform:'淘宝闪购',shop_name:'合成便利店（展馆店）',payment_channel:'支付宝',
+    transaction_identifiers:[{kind:'shopping_order',namespace:'淘宝闪购',value:'4006123456789012345',
+      label:'订单号',quote:'合成订单号 4006123456789012345'}],
+    transaction_evidence:{shopping_platform:'淘宝闪购',shop_name:'商户名称：合成便利店（展馆店）',payment_channel:'支付方式：支付宝'}};
   const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aN9sAAAAASUVORK5CYII=', 'base64');
   const file = name=>({name,mimeType:'image/png',buffer:png});
   const select = i=>page.locator(`[data-receipt-index="${i}"]`).click();
@@ -31,7 +35,7 @@ async function run(playwright) {
         if(url.pathname==='/api/recognize'){
           if(body.name==='retry.png'&&failRecognition){failRecognition=false;return await json({error:'synthetic recognition failure'},400);}
           if(body.name==='existing.png')return await json({duplicates:[existing],fields:{},warnings:[]});
-          return await json({duplicates:[],fields:{title:body.name,amount:body.name==='blank.png'?'':'10.00',category:'材料采购',expense_date:'',order_number:body.name==='same-order.png'?'good.png':body.name},role:'purchase',warnings:[],evidence:{},text:'synthetic'});
+          return await json({duplicates:[],fields:{...transactionFields,title:body.name,amount:body.name==='blank.png'?'':'10.00',category:'材料采购',expense_date:'',order_number:body.name==='same-order.png'?'good.png':body.name},role:'purchase',warnings:[],evidence:{},text:'synthetic'});
         }
         if(body.name==='save-fail.png'&&failSave){failSave=false;return await json({error:'synthetic save failure'},500);}
         if(saved.has(body.fields.order_number))return await json({duplicates:[existing]});
@@ -40,8 +44,14 @@ async function run(playwright) {
       } finally {concurrent--;}
     }
     const name=url.pathname==='/'?'index.html':url.pathname.slice(1);
-    if(!['index.html','app.js','receipt.js','style.css'].includes(name))return route.abort();
-    await route.fulfill({contentType:name.endsWith('.js')?'text/javascript':name.endsWith('.css')?'text/css':'text/html',body:await fs.readFile(path.join(assets,name))});
+    if(!['index.html','workbench-theme.js','workbench-theme.css','app.js','receipt.js','style.css'].includes(name))return route.abort();
+    let body=await fs.readFile(path.join(assets,name),'utf8');
+    if(name==='index.html'){
+      assert.ok(!/id=["']recognizeReceipt["']/.test(body),'product HTML must not restore the removed collection button');
+      // This fixture alone exposes the retained legacy receipt queue, independently of the new matching-desk UI.
+      body=body.replace('</body>','<button id="recognizeReceipt" type="button">Legacy receipt batch test</button></body>');
+    }
+    await route.fulfill({contentType:name.endsWith('.js')?'text/javascript':name.endsWith('.css')?'text/css':'text/html',body});
   });
   try {
     await page.goto(base);
@@ -59,6 +69,8 @@ async function run(playwright) {
     await page.locator('#saveAllReceipts').click();await idle();
     assert.equal(saved.size,1);
     assert.equal(saved.get('good.png').fields.title,'Edited purchase');
+    for(const [key,value] of Object.entries(transactionFields))assert.deepEqual(saved.get('good.png').fields[key],value,
+      'editing or switching receipt rows must preserve extracted '+key);
     assert.match(await summary(),/重复，未新增 2/);
     assert.match(await summary(),/保存失败／需补填 2/);
     // A failed request and a required-field error must not block later saves.

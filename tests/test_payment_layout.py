@@ -40,23 +40,21 @@ def test_payment_approval_is_explicit_and_needs_existing_file(tmp_path: Path) ->
         store.transition(item['id'], 'verify')
 
 
-@pytest.mark.parametrize('count,pages', [(4, 1), (5, 2)])
-def test_grid_full_content_and_readonly_export(tmp_path: Path, count: int, pages: int) -> None:
+@pytest.mark.parametrize('count', [4, 5])
+def test_separate_expenses_keep_full_content_on_independent_pages(tmp_path: Path, count: int) -> None:
     store = ExpenseStore(tmp_path)
     items = [payment(store, i) for i in range(count)]
     originals = {p: p.read_bytes() for p in store.files.iterdir()}
     result = export_items(store, [x['id'] for x in items])
     with pymupdf.open(store.root / '导出' / result['pdf']) as pdf:
-        assert len(pdf) == pages
-        text = ''.join(p.get_text() for p in pdf)
-        for i in range(count):
-            assert f'TOP {i}' in text and f'BOTTOM {i}' in text
-        assert len(pdf[0].get_xobjects()) == 8  # four placements and their source forms
-        blocks = pdf[0].get_text('blocks')
-        assert any(b[0] < 297 and b[1] < 421 for b in blocks)
-        assert any(b[0] > 297 and b[1] < 421 for b in blocks)
-        assert any(b[0] < 297 and b[1] > 421 for b in blocks)
-        assert any(b[0] > 297 and b[1] > 421 for b in blocks)
+        assert len(pdf) == count
+        for i, page in enumerate(pdf):
+            text = page.get_text()
+            assert text.splitlines() == [f'TOP {i}', f'BOTTOM {i}']
+            assert len(page.get_xobjects()) == 2  # one placement and its source form
+            assert not page.get_images(), 'PDF originals must remain vector-based'
+            blocks = page.get_text('blocks')
+            assert all(b[0] < 297 and b[1] < 421 for b in blocks)
     assert all(x['stage'] == 'draft' and x['ready'] for x in store.list_items())
     assert all(p.read_bytes() == content for p, content in originals.items())
 
@@ -67,21 +65,21 @@ def test_projects_separate_pages_and_report_page_numbers(tmp_path: Path) -> None
     with pymupdf.open() as output:
         for group in payment_groups(items):
             append_payments(output, store, group)
-        assert len(output) == 3
-    assert items[0]['pages'] == '1' and items[5]['pages'] == '2' and items[2]['pages'] == '3'
+        assert len(output) == 6
+    assert items[0]['pages'] == '1' and items[5]['pages'] == '5' and items[2]['pages'] == '6'
 
 
-def test_formal_report_uses_shared_grid(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_formal_report_keeps_payment_expenses_on_separate_pages(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     store = ExpenseStore(tmp_path)
     items = [payment(store, i) for i in range(4)]
     (store.root / TEMPLATE_NAME).write_bytes(b'template')
     monkeypatch.setattr(report, 'validate_template', lambda _: None)
     monkeypatch.setattr(report, 'spreadsheet_runtime', lambda: None)
     def excel(template: Path, rows: list[dict[str, Any]], options: dict[str, str], path: Path) -> None:
-        assert all(x['pages'] == '1' for x in rows)
+        assert [x['pages'] for x in rows] == ['1', '2', '3', '4']
         path.write_bytes(b'excel')
     monkeypatch.setattr(report, 'create_excel', excel)
     result = report.create_report(store, [x['id'] for x in items])
     with pymupdf.open(store.root / '导出' / result['pdf']) as pdf:
-        assert len(pdf) == 1
+        assert len(pdf) == 4
     assert all(x['stage'] == 'submitted' for x in store.list_items())

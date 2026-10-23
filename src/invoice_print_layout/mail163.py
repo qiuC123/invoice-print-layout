@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import html.parser
 import imaplib
+import json
 import os
 import re
 import ssl
@@ -10,7 +11,7 @@ import tomllib
 import urllib.parse
 import urllib.request
 from collections.abc import Callable, Iterable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date, timedelta
 from email import policy
 from email.message import EmailMessage
@@ -85,12 +86,18 @@ class MailImportSummary:
     duplicates: int = 0
     ignored: int = 0
     invalid_pdf: int = 0
+    link_downloaded: int = 0
+    image_downloaded: int = 0
+    link_failures: list[dict[str, str]] = field(default_factory=list)
 
 
 class _HrefParser(html.parser.HTMLParser):
     def __init__(self) -> None:
         super().__init__(convert_charrefs=True)
         self.hrefs: list[str] = []
+        self.anchors: list[tuple[str, str]] = []
+        self._anchor_href = ""
+        self._anchor_text: list[str] = []
 
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
         if tag.lower() != "a":
@@ -98,6 +105,18 @@ class _HrefParser(html.parser.HTMLParser):
         for key, value in attrs:
             if key.lower() == "href" and value:
                 self.hrefs.append(value)
+                self._anchor_href = value
+                self._anchor_text = []
+
+    def handle_data(self, data: str) -> None:
+        if self._anchor_href:
+            self._anchor_text.append(data)
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag.lower() == "a" and self._anchor_href:
+            self.anchors.append((self._anchor_href, "".join(self._anchor_text)))
+            self._anchor_href = ""
+            self._anchor_text = []
 
 
 class _NoRedirect(urllib.request.HTTPRedirectHandler):
@@ -191,6 +210,56 @@ def _sha256_bytes(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
 
+def _selected_uidvalidity(client: ImapConnection) -> str:
+    """Read the selected mailbox epoch; missing scope never grants authority.
+
+    Legacy callers may still collect valid files when an IMAP implementation
+    omits this response. Such files deliberately retain only legacy metadata.
+    """
+    response = getattr(client, 'response', None)
+    if not callable(response):
+        return ''
+    try:
+        name, values = response('UIDVALIDITY')
+        if name not in {'UIDVALIDITY', 'OK'} or not isinstance(values, (list, tuple)) or len(values) != 1:
+            return ''
+        raw = values[0]
+        value = raw.decode('ascii') if isinstance(raw, bytes) else raw
+        if (not isinstance(value, str) or not re.fullmatch(r'[0-9]{1,10}', value) or
+                not 0 < int(value) <= 2**32 - 1):
+            return ''
+        return str(int(value))
+    except (imaplib.IMAP4.error, OSError, ValueError, TypeError, UnicodeError):
+        return ''
+
+
+def _manual_mail_origin(settings: Mail163Settings, epoch: str, message_uid: bytes,
+                        message: EmailMessage) -> dict[str, Any]:
+    """Create scoped provenance only from this fetch's server/header values."""
+    if not epoch:
+        return {}
+    try:
+        uid_text = message_uid.decode('ascii')
+    except UnicodeError:
+        return {}
+    if not re.fullmatch(r'[0-9]{1,10}', uid_text) or not 0 < int(uid_text) <= 2**32 - 1:
+        return {}
+    message_id = str(message.get('Message-ID', ''))
+    if len(message_id) > 1000 or any(char in message_id for char in '\r\n\0'):
+        return {}
+
+    def identity(value: Any) -> str:
+        encoded = json.dumps(value, ensure_ascii=False, sort_keys=True,
+                             separators=(',', ':'), allow_nan=False).encode('utf-8')
+        return _sha256_bytes(encoded)
+
+    account = identity([IMAP_HOST, settings.address, settings.folder])
+    uid = int(uid_text)
+    return {'host': IMAP_HOST, 'address': settings.address, 'account_id': account,
+            'mailbox': settings.folder, 'uidvalidity': epoch, 'uid': uid,
+            'message_id': message_id, 'message_key': identity([account, epoch, uid])}
+
+
 def _known_pdf_hashes(paths: WorkspacePaths) -> set[str]:
     hashes: set[str] = set()
     for root in (paths.incoming, paths.archived, paths.review):
@@ -272,34 +341,158 @@ def _takeout_links(message: EmailMessage) -> tuple[str, list[str]]:
     order_number = next(iter(order_numbers)) if len(order_numbers) == 1 else ""
     allowed: list[str] = []
     for link in links:
-        parsed = urllib.parse.urlparse(link)
-        suffix = Path(parsed.path).suffix.lower()
-        hostname = (parsed.hostname or "").lower()
-        if (
-            parsed.scheme == "https"
-            and hostname.endswith(".aliyuncs.com")
-            and suffix in _TAKEOUT_ALLOWED_SUFFIXES
-        ):
+        if _is_takeout_file_url(link):
             allowed.append(link)
     return order_number, list(dict.fromkeys(allowed))
 
 
+def _is_takeout_file_url(url: str) -> bool:
+    try:
+        parsed = urllib.parse.urlparse(url)
+        hostname = (parsed.hostname or "").lower()
+        return (parsed.scheme == "https" and parsed.netloc.lower() == hostname
+                and not parsed.username and not parsed.password
+                and hostname.endswith(".aliyuncs.com")
+                and Path(parsed.path).suffix.lower() in _TAKEOUT_ALLOWED_SUFFIXES)
+    except ValueError:
+        return False
+
+
+def _takeout_material_links(message: EmailMessage) -> tuple[str, list[str], list[str]]:
+    """Find invoice anchors, excluding unrelated images and navigation links."""
+    subject = str(message.get("subject", ""))
+    if not any(marker in subject for marker in _TAKEOUT_SUBJECT_MARKERS):
+        return "", [], []
+    body_parts: list[str] = []
+    candidates: list[str] = []
+    for part in message.walk():
+        if part.get_content_type() not in {"text/plain", "text/html"}:
+            continue
+        try:
+            content = str(part.get_content())
+        except (LookupError, UnicodeError):
+            continue
+        body_parts.append(content)
+        if part.get_content_type() == "text/html":
+            parser = _HrefParser()
+            parser.feed(content)
+            candidates.extend(url for url, label in parser.anchors
+                              if "发票" in label or "invoice" in urllib.parse.urlparse(url).path.lower())
+        else:
+            for line in content.splitlines():
+                for url in re.findall(r'https?://[^\s<>"\']+', line):
+                    url = url.rstrip("。，,；;）)")
+                    if "发票" in line or "invoice" in urllib.parse.urlparse(url).path.lower():
+                        candidates.append(url)
+    numbers = set(re.findall(r"(?<!\d)(\d{16,24})(?!\d)", "\n".join(body_parts)))
+    order_number = next(iter(numbers)) if len(numbers) == 1 else ""
+    allowed: list[str] = []
+    unsupported: list[str] = []
+    for link in dict.fromkeys(candidates):
+        if _is_takeout_file_url(link):
+            allowed.append(link)
+        else:
+            unsupported.append(link)
+    return order_number, allowed, unsupported
+
+
+def _save_mail_material(
+    paths: WorkspacePaths,
+    directory: Path,
+    filename: str,
+    payload: bytes,
+    known_hashes: set[str],
+    summary: MailImportSummary,
+    metadata: dict[str, Any],
+) -> None:
+    digest = _sha256_bytes(payload)
+    if digest in known_hashes:
+        summary.duplicates += 1
+        return
+    saved_path = _unique_any_destination(directory, filename)
+    temporary = paths.staging / f"mail-material-{digest}.tmp"
+    try:
+        temporary.write_bytes(payload)
+        os.replace(temporary, saved_path)
+        append_history(paths.mail_history, {
+            "attachment_hash": digest,
+            "attachment_name": saved_path.name,
+            "imported_at": date.today().isoformat(),
+            "saved_to": str(saved_path),
+            **metadata,
+        })
+    finally:
+        temporary.unlink(missing_ok=True)
+    known_hashes.add(digest)
+    summary.downloaded += 1
+    summary.link_downloaded += 1
+    if saved_path.suffix.lower() != ".pdf":
+        summary.image_downloaded += 1
+
+
+def _import_mail_link_materials(
+    message: EmailMessage,
+    message_uid: str,
+    paths: WorkspacePaths,
+    directory: Path,
+    known_hashes: set[str],
+    summary: MailImportSummary,
+    downloader: UrlDownloader,
+    mail_origin: dict[str, Any] | None = None,
+) -> bool:
+    # Lazy import avoids the mail_search -> mail163 module dependency at load time.
+    from invoice_print_layout.mail_search import files_from
+    from invoice_print_layout.receipt_intake import validate_image
+
+    order_number, links, unsupported = _takeout_material_links(message)
+    metadata = {
+        "kind": "taobao_takeout_link",
+        "source_kind": "mail_link",
+        "message_uid": message_uid,
+        "subject": str(message.get("Subject", "")),
+        "order_number": order_number,
+    }
+    for link in unsupported:
+        summary.link_failures.append({**metadata, "source_url": link,
+                                      "reason": "此发票链接暂不支持自动下载，请在原邮件中领取"})
+    for index, link in enumerate(links, start=1):
+        try:
+            payload = downloader(link)
+            filename = f"淘宝闪购_{order_number or ('邮件' + message_uid)}_{index}"
+            materials = files_from(payload, filename)
+            # Apply the intake's exact image limits before saving any member.
+            # A ZIP with one unsupported image must not persist earlier members
+            # and then be acknowledged while receive() rejects its contents.
+            for name, body in materials:
+                if Path(name).suffix.lower() != ".pdf":
+                    validate_image(name, body)
+            for name, body in materials:
+                _save_mail_material(paths, directory, name, body, known_hashes, summary,
+                                    {**metadata, "source_url": link,
+                                     **({'mail_origin_v1': mail_origin} if mail_origin else {})})
+        except (MailImportError, OSError, ValueError, RuntimeError):
+            # Never expose a signed URL through an exception string, and never
+            # mark failed downloads successful in the hash history.
+            summary.link_failures.append({**metadata, "source_url": link,
+                                          "reason": "发票链接下载或文件校验失败，请重试或在原邮件中重新领取"})
+    return bool(links or unsupported)
+
+
 def _download_takeout_url(url: str) -> bytes:
+    if not _is_takeout_file_url(url):
+        raise MailImportError("此淘宝发票地址暂不支持自动下载，请在原邮件中领取")
     request = urllib.request.Request(url, headers={"User-Agent": "invoice-print-layout/0.2"})
     try:
         opener = urllib.request.build_opener(_NoRedirect())
         with opener.open(request, timeout=30) as response:
-            final = urllib.parse.urlparse(response.geturl())
-            if final.scheme != "https" or not (final.hostname or "").lower().endswith(
-                ".aliyuncs.com"
-            ):
+            if not _is_takeout_file_url(response.geturl()):
                 raise MailImportError("淘宝发票下载发生了不安全的跳转")
             declared = response.headers.get("Content-Length")
             if declared and int(declared) > _MAX_REMOTE_FILE_BYTES:
                 raise MailImportError("淘宝发票文件超过30MB")
             payload = cast(bytes, response.read(_MAX_REMOTE_FILE_BYTES + 1))
     except (OSError, ValueError) as exc:
-        raise MailImportError(f"淘宝发票链接下载失败：{exc}") from exc
+        raise MailImportError("淘宝发票链接下载失败或已过期，请在原邮件中重新领取") from exc
     if len(payload) > _MAX_REMOTE_FILE_BYTES:
         raise MailImportError("淘宝发票文件超过30MB")
     if not payload:
@@ -360,7 +553,15 @@ def import_pdf_attachments(
     courier_kind: str | None = None,
     destination: Path | None = None,
     all_invoice_types: bool = False,
+    include_link_materials: bool = False,
+    downloader: UrlDownloader | None = None,
 ) -> MailImportSummary:
+    """Collect PDF attachments, optionally including known invoice body links.
+
+    The opt-in is for the material desk: validated link images remain original
+    images for the intake QR/claim flow. Legacy PDF-only callers keep their
+    existing behavior, and a failed link is reported rather than acknowledged.
+    """
     if courier_kind not in {None, "顺丰", "同城"}:
         raise MailImportError("不支持的快递类型")
     if days < 1 or days > 365:
@@ -375,9 +576,14 @@ def import_pdf_attachments(
     target_directory = destination or paths.incoming
     target_directory.mkdir(parents=True, exist_ok=True)
     known_hashes.update(_sha256_bytes(p.read_bytes()) for p in target_directory.glob("*.pdf"))
+    if include_link_materials:
+        for directory in {paths.incoming, paths.archived, paths.review, target_directory}:
+            known_hashes.update(_sha256_bytes(p.read_bytes()) for p in directory.rglob("*")
+                                if p.is_file() and p.suffix.lower() in {".png", ".jpg", ".jpeg", ".webp"})
     since = (today or date.today()) - timedelta(days=days - 1)
     client = _connect(settings, auth_code, factory)
     try:
+        epoch = _selected_uidvalidity(client)
         status, search_data = client.uid("SEARCH", None, "SINCE", _imap_date(since))
         if status != "OK" or not search_data or not isinstance(search_data[0], bytes):
             raise MailImportError("163 邮箱邮件检索失败")
@@ -387,6 +593,7 @@ def import_pdf_attachments(
             if status != "OK":
                 raise MailImportError("163 邮箱邮件读取失败")
             message = BytesParser(policy=policy.default).parsebytes(_raw_message(fetch_data))
+            mail_origin = _manual_mail_origin(settings, epoch, message_uid, message)
             identity = str(message.get("Subject", "")) + " " + " ".join(
                 part.get_filename() or "" for part in message.walk()
             )
@@ -395,7 +602,14 @@ def import_pdf_attachments(
                 summary.ignored += 1
                 continue
             attachments = _pdf_attachments(message)
-            if not attachments:
+            has_links = False
+            if include_link_materials:
+                has_links = _import_mail_link_materials(
+                    message, message_uid.decode("ascii", errors="replace"), paths,
+                    target_directory, known_hashes, summary, downloader or _download_takeout_url,
+                    mail_origin,
+                )
+            if not attachments and not has_links:
                 summary.ignored += 1
                 continue
             for filename, payload in attachments:
@@ -417,7 +631,10 @@ def import_pdf_attachments(
                         "attachment_name": filename,
                         "imported_at": date.today().isoformat(),
                         "message_uid": message_uid.decode("ascii", errors="replace"),
+                        "subject": str(message.get("Subject", "")),
+                        "source_kind": "mail_attachment",
                         "saved_to": str(saved_path),
+                        **({'mail_origin_v1': mail_origin} if mail_origin else {}),
                     },
                 )
                 known_hashes.add(digest)

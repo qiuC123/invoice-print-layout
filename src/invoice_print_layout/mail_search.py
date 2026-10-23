@@ -147,7 +147,10 @@ def match_reasons(item: dict[str, Any], text: str) -> list[str]:
 
 
 def qr_value(payload: bytes) -> str:
+    """Decode one QR locally, retaining ambiguity and bounding resize attempts."""
     try:
+        if not payload or len(payload) > MAX_BYTES:
+            return ''
         cv = importlib.import_module('cv2')
         np = importlib.import_module('numpy')
         with Image.open(io.BytesIO(payload)) as im:
@@ -156,13 +159,27 @@ def qr_value(payload: bytes) -> str:
         pixels = cv.imdecode(np.frombuffer(payload, dtype=np.uint8), cv.IMREAD_GRAYSCALE)
         if pixels is None:
             return ''
-        for scale in (1, 3, 5):
-            enlarged = cv.resize(pixels, None, fx=scale, fy=scale, interpolation=cv.INTER_NEAREST)
-            enlarged = cv.copyMakeBorder(enlarged, 40, 40, 40, 40, cv.BORDER_CONSTANT, value=255)
-            value, _, _ = cv.QRCodeDetector().detectAndDecode(enlarged)
-            if value:
-                return str(value)
-        return ''
+        longest = max(pixels.shape)
+        # Downsampling suppresses photographed-screen moire. Tiny codes instead
+        # need enlargement, but neither case creates an image larger than 1600px.
+        scales = ([min(1.0, edge / longest) for edge in (1600, 1200, 960, 720)]
+                  if longest > 720 else [min(float(scale), 1600 / longest) for scale in (1, 3, 5)])
+        sizes = dict.fromkeys((max(1, round(pixels.shape[1] * scale)),
+                               max(1, round(pixels.shape[0] * scale))) for scale in scales)
+        detector = cv.QRCodeDetector()
+        values: set[str] = set()
+        for width, height in sizes:
+            interpolation = cv.INTER_AREA if max(width, height) < longest else cv.INTER_NEAREST
+            sample = cv.resize(pixels, (width, height), interpolation=interpolation)
+            sample = cv.copyMakeBorder(sample, 40, 40, 40, 40, cv.BORDER_CONSTANT, value=255)
+            _, decoded, points, _ = detector.detectAndDecodeMulti(sample)
+            # Even identical values in two codes are ambiguous for an intake image.
+            if (points is not None and len(points) > 1) or len(decoded) > 1:
+                return ''
+            values.update(str(value) for value in decoded if value)
+            if len(values) > 1:
+                return ''
+        return next(iter(values), '')
     except Exception:
         return ''
 

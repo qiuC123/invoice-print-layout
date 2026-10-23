@@ -17,6 +17,13 @@ def test_build_tracks_source_not_workspace_and_does_not_leak_path(tmp_path):
     before_asset = source_build_id(package)
     (package / 'app.js').write_text('new frontend')
     assert source_build_id(package) != before_asset
+    before_native = source_build_id(package)
+    native = package / 'report_excel_pdf.ps1'
+    native.write_text('native PDF export')
+    assert source_build_id(package) != before_native
+    before_native = source_build_id(package)
+    native.write_text('updated native PDF export')
+    assert source_build_id(package) != before_native
     data = identity(tmp_path, before)
     assert str(tmp_path) not in json.dumps(data)
     assert identity(tmp_path/'other', before)['workspace_id'] != data['workspace_id']

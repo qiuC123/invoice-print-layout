@@ -47,3 +47,14 @@ config.toml
 *.doc
 *.mp4
 *.mov
+
+# Local private history and source-derived regression fixtures (T0 privacy audit).
+/.workbuddy/
+/skills/cli-anything-invoice-assistant/SKILL.md
+/agent-harness/cli_anything/invoice_assistant/skills/SKILL.md
+/tests/phone_web_browser.cjs
+/tests/test_glm_intake.py
+/tests/test_local_proof_fields.py
+/tests/agent_details_browser.cjs
+/tests/test_glm_material_matching.py
+/tests/test_mail_link_materials.py

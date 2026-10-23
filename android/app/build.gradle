@@ -1,0 +1,32 @@
+plugins { id 'com.android.application' }
+android {
+    namespace 'cn.qiuc.invoice'
+    compileSdk 35
+    defaultConfig {
+        applicationId 'cn.qiuc.invoice'
+        minSdk 26
+        targetSdk 35
+        versionCode 3
+        versionName '0.2.1-dev'
+        testInstrumentationRunner 'androidx.test.runner.AndroidJUnitRunner'
+    }
+    compileOptions { sourceCompatibility JavaVersion.VERSION_17; targetCompatibility JavaVersion.VERSION_17; coreLibraryDesugaringEnabled true }
+    buildTypes { debug { applicationIdSuffix '.debug' } }
+    packaging { resources { excludes += ['META-INF/DEPENDENCIES', 'META-INF/LICENSE', 'META-INF/NOTICE']; pickFirsts += ['META-INF/LICENSE.md', 'META-INF/NOTICE.md'] } }
+}
+dependencies {
+    implementation platform('org.jetbrains.kotlin:kotlin-bom:1.8.22')
+    coreLibraryDesugaring 'com.android.tools:desugar_jdk_libs:2.1.5'
+    implementation 'com.google.mlkit:text-recognition-chinese:16.0.1'
+    implementation 'com.google.mlkit:barcode-scanning:17.3.0'
+    implementation 'com.sun.mail:android-mail:1.6.7'
+    implementation 'com.sun.mail:android-activation:1.6.7'
+    implementation 'com.tom-roush:pdfbox-android:2.0.27.0'
+    implementation 'androidx.core:core:1.15.0'
+    implementation 'androidx.exifinterface:exifinterface:1.4.2'
+    testImplementation 'junit:junit:4.13.2'
+    androidTestImplementation 'androidx.test:runner:1.6.2'
+    androidTestImplementation 'androidx.test.ext:junit:1.2.1'
+    androidTestImplementation 'com.google.zxing:core:3.5.3'
+}
+

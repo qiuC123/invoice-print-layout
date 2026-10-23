@@ -1,0 +1,138 @@
+/* Theme tokens are confined to invoice views; original documents keep their own palette. */
+html:is(.invoice-assistant,.embedded-workbench){
+ --wb-bg:#f5f6f8;--wb-panel:#fff;--wb-rail:#f9fafc;--wb-surface:#f7f8fa;
+ --wb-hover:#f0f4ff;--wb-selected:#edf3ff;--wb-text:#1f2329;--wb-muted:#5f6672;
+ --wb-line:#dee4ed;--wb-accent:#245ee5;--wb-primary:#245ee5;--wb-primary-hover:#1b4ec9;
+ --wb-on-primary:#fff;--wb-focus:#2a62e5;--wb-warning:#865600;--wb-warning-bg:#fff4d6;
+ --wb-success:#167043;--wb-success-bg:#e9f7ee;--wb-error:#b32626;--wb-error-bg:#fff0ee;
+ --wb-disabled:#818a99;--wb-scrollbar:#c5cdd9;--wb-shadow:0 12px 40px #1f3d6621;
+ --wb-select-arrow:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath d='m3 4.5 3 3 3-3' fill='none' stroke='%235f6672' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+ --wb-control-height:40px;--wb-control-compact:32px;--wb-control-radius:6px;--wb-control-gap:8px;--wb-form-gap:16px;--wb-dialog-padding:24px;
+ --wb-font-page:24px;--wb-font-dialog:20px;--wb-font-section:16px;--wb-font-body:14px;--wb-font-control:13px;--wb-font-hint:12px;
+ --wb-weight-normal:400;--wb-weight-strong:600;
+ --accent:var(--wb-accent);--muted:var(--wb-muted);--line:var(--wb-line);--panel:var(--wb-panel);
+ color-scheme:light;background:var(--wb-bg);color:var(--wb-text)
+}
+html[data-theme=dark]:is(.invoice-assistant,.embedded-workbench){
+ --wb-bg:#161616;--wb-panel:#202020;--wb-rail:#191919;--wb-surface:#292929;
+ --wb-hover:#303030;--wb-selected:#343434;--wb-text:#ededed;--wb-muted:#b8b8b8;
+ --wb-line:#404040;--wb-accent:#e0e0e0;--wb-primary:#ededed;--wb-primary-hover:#d6d6d6;
+ --wb-on-primary:#181818;--wb-focus:#d6d6d6;--wb-warning:#efcb84;--wb-warning-bg:#3a3020;
+ --wb-success:#a8ddb8;--wb-success-bg:#233b2d;--wb-error:#ffb9b0;--wb-error-bg:#422b2d;
+ --wb-disabled:#8c8c8c;--wb-scrollbar:#666;--wb-shadow:0 12px 40px #0005;
+ --wb-select-arrow:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath d='m3 4.5 3 3 3-3' fill='none' stroke='%23b8b8b8' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+ color-scheme:dark
+}
+html[data-theme]:is(.invoice-assistant,.embedded-workbench) body{background:var(--wb-bg);color:var(--wb-text)}
+html[data-theme]:is(.invoice-assistant,.embedded-workbench) :is(button,input,select,textarea){background:var(--wb-panel);color:var(--wb-text);border-color:var(--wb-line)}
+html[data-theme]:is(.invoice-assistant,.embedded-workbench) :is(button:hover,button:focus-visible){background:var(--wb-hover);border-color:var(--wb-accent)}
+html[data-theme]:is(.invoice-assistant,.embedded-workbench) :is(input,select,textarea)::placeholder{color:var(--wb-muted);opacity:1}
+html[data-theme]:is(.invoice-assistant,.embedded-workbench) :is(input,select,textarea):focus{outline-color:var(--wb-focus)}
+html[data-theme]:is(.invoice-assistant,.embedded-workbench) :is(button,a,summary):focus-visible{outline-color:var(--wb-focus)}
+html[data-theme]:is(.invoice-assistant,.embedded-workbench) :is(input[type=checkbox],progress){accent-color:var(--wb-primary)}
+html[data-theme]:is(.invoice-assistant,.embedded-workbench) button.primary{background:var(--wb-primary);color:var(--wb-on-primary);border-color:var(--wb-primary)}
+html[data-theme]:is(.invoice-assistant,.embedded-workbench) button.primary:hover{background:var(--wb-primary-hover);color:var(--wb-on-primary);border-color:var(--wb-primary-hover)}
+html[data-theme]:is(.invoice-assistant,.embedded-workbench) :is(button,input,select,textarea):disabled{opacity:1;background:var(--wb-surface);color:var(--wb-disabled);border-color:var(--wb-line);cursor:default}
+html[data-theme]:is(.invoice-assistant,.embedded-workbench) :is(a,.project-pin){color:var(--wb-accent)}
+html[data-theme]:is(.invoice-assistant,.embedded-workbench) .rail{background:var(--wb-rail);color:var(--wb-text);border-color:var(--wb-line)}
+html[data-theme]:is(.invoice-assistant,.embedded-workbench) :is(.nav,.tabs button,.project-status-tabs button){background:transparent;color:var(--wb-muted);border-color:var(--wb-line)}
+html[data-theme]:is(.invoice-assistant,.embedded-workbench) :is(.nav:hover,.nav.active,#projectLinks a:hover,#projectLinks a[aria-current=page]){background:var(--wb-selected);color:var(--wb-accent)}
+html[data-theme]:is(.invoice-assistant,.embedded-workbench) :is(.tabs button.active,.project-status-tabs button.active){color:var(--wb-accent);border-bottom-color:var(--wb-accent)}
+html[data-theme]:is(.invoice-assistant,.embedded-workbench) :is(.metric,.listpanel,.detail,dialog,.project-menu){background:var(--wb-panel);color:var(--wb-text);border-color:var(--wb-line)}
+html[data-theme]:is(.invoice-assistant,.embedded-workbench) .metric:is(.attention,.good){border-top-width:1px}
+html:is(.invoice-assistant,.embedded-workbench) .metrics{grid-template-columns:repeat(2,minmax(0,1fr))}
+html[data-theme]:is(.invoice-assistant,.embedded-workbench) :is(.brand span,.rail p,.railnote,.railnote small,.eyebrow,.metric small,.metric em,.sub,.listhead,.empty,.empty>span,.timeline,footer,label,.matching-header small){color:var(--wb-muted)}
+html[data-theme]:is(.invoice-assistant,.embedded-workbench) :is(.metric b,.empty h2){color:var(--wb-text)}
+html[data-theme]:is(.invoice-assistant,.embedded-workbench) :is(.row,.sectiontitle,.attachment,.tabs,.print-materials,.synthesis-tools,.synthesis-batch-group,.matching-toolbar,.matching-footer,.matching-group,.matching-archive>#matchingDeletedSection){border-color:var(--wb-line)}
+html[data-theme]:is(.invoice-assistant,.embedded-workbench) :is(.row:hover,.receipt-queue .selected,.mail-confirm,.project-menu button:hover,.project-menu button:focus-visible){background:var(--wb-hover)}
+html[data-theme]:is(.invoice-assistant,.embedded-workbench) .row.selected{background:var(--wb-selected);border-left-color:var(--wb-accent)}
+html[data-theme]:is(.invoice-assistant,.embedded-workbench) :is(.rule,.synthesis-totals,.matching-totals){background:var(--wb-surface);color:var(--wb-text)}
+html[data-theme]:is(.invoice-assistant,.embedded-workbench) :is(.badge,.rule.warn){background:var(--wb-warning-bg);color:var(--wb-warning)}
+html[data-theme]:is(.invoice-assistant,.embedded-workbench) .badge.good{background:var(--wb-success-bg);color:var(--wb-success)}
+html[data-theme]:is(.invoice-assistant,.embedded-workbench) .badge.neutral{background:var(--wb-surface);color:var(--wb-muted)}
+html[data-theme]:is(.invoice-assistant,.embedded-workbench) :is(.missing,.print-empty,.review-edit-missing,.synthesis-selection-status,.synthesis-batch-fields [role=alert],#synthesisBatchStatus.is-error,.matching-card .matching-card-issues,.matching-create-fields>[role=alert],.matching-classify [data-error],.reimbursement-bulk-invalid,.invoice-claim-dialog .claim-error){color:var(--wb-warning)}
+html[data-theme]:is(.invoice-assistant,.embedded-workbench) :is(#error,#receiptError){background:var(--wb-error-bg);color:var(--wb-error)}
+html[data-theme]:is(.invoice-assistant,.embedded-workbench) #notice{background:var(--wb-success-bg);color:var(--wb-success)}
+html[data-theme]:is(.invoice-assistant,.embedded-workbench) :is(#reportError,#reviewEditError,.matching-message.is-error,.review-batch-dialog [data-error],.reimbursement-people-dialog [data-error],.project-action-dialog [data-project-error],.project-menu [data-project-action=delete],.project-action-dialog .project-delete-confirm,.row-actions .row-delete,.matching-delete,#amountPairingError){color:var(--wb-error)}
+html[data-theme]:is(.invoice-assistant,.embedded-workbench) .project-action-dialog .project-delete-confirm{border-color:var(--wb-error)}
+html[data-theme]:is(.invoice-assistant,.embedded-workbench) .dialog-message{color:var(--wb-success)}
+html[data-theme]:is(.invoice-assistant,.embedded-workbench) .dialog-message.is-error{color:var(--wb-error)}
+html[data-theme]:is(.invoice-assistant,.embedded-workbench) :is(dialog,.project-menu,.reimbursement-name-combo [role=listbox]){box-shadow:var(--wb-shadow)}
+html[data-theme]:is(.invoice-assistant,.embedded-workbench) dialog::backdrop{background:#0a173559}
+html[data-theme=dark]:is(.invoice-assistant,.embedded-workbench) dialog::backdrop{background:#000000a6}
+html[data-theme]:is(.invoice-assistant,.embedded-workbench) :is(.matching-lane,.matching-other,.matching-groups,.matching-preview,.matching-card,.matching-other-card,.amount-pairing-groups section){background:var(--wb-panel);border-color:var(--wb-line)}
+html[data-theme]:is(.invoice-assistant,.embedded-workbench) :is(.matching-card:hover,.matching-other-card:hover){background:var(--wb-hover)}
+html[data-theme]:is(.invoice-assistant,.embedded-workbench) .matching-card.selected{background:var(--wb-selected);border-color:var(--wb-accent)}
+html[data-theme]:is(.invoice-assistant,.embedded-workbench) :is(.matching-lane-head>span,.matching-other summary span,.matching-groups summary span,.matching-card small,.matching-support-proofs figcaption,.matching-empty,.matching-preview-empty,.matching-payment-proofs figcaption,.matching-totals span,.matching-voucher-proofs figcaption,.matching-group p,.matching-group small,#matchingPrintPages figcaption){color:var(--wb-muted)}
+html[data-theme]:is(.invoice-assistant,.embedded-workbench) :is(.matching-balanced,#matchingExistingNotice,.matching-candidate small){color:var(--wb-success)}
+html[data-theme]:is(.invoice-assistant,.embedded-workbench) .matching-candidate{background:var(--wb-success-bg);border-color:var(--wb-success)}
+html[data-theme]:is(.invoice-assistant,.embedded-workbench) :is(.matching-pools,.matching-preview):focus-visible{outline-color:var(--wb-focus)}
+html[data-theme]:is(.invoice-assistant,.embedded-workbench) .synthesis-batch-actions{background:var(--wb-panel);border-color:var(--wb-line)}
+html[data-theme]:is(.invoice-assistant,.embedded-workbench) :is(.synthesis-row-preview,.synthesis-row-preview:hover,.project-menu button,.reimbursement-person-name input){background:transparent}
+html[data-theme]:is(.invoice-assistant,.embedded-workbench) :is(.reimbursement-name-combo:focus-within,.reimbursement-name-combo:hover,.reimbursement-name-combo [role=listbox],.reimbursement-person-name input:hover,.reimbursement-person-name input:focus){background:var(--wb-panel);border-color:var(--wb-line);color:var(--wb-text)}
+html[data-theme]:is(.invoice-assistant,.embedded-workbench) .reimbursement-name-combo [data-name-toggle]{background:transparent}
+html[data-theme]:is(.invoice-assistant,.embedded-workbench) :is(.reimbursement-name-combo [role=option]:hover,.reimbursement-name-combo [aria-selected=true]){background:var(--wb-selected);color:var(--wb-text)}
+html[data-theme]:is(.invoice-assistant,.embedded-workbench) :is(.reimbursement-summary thead,.review-batch-table thead){background:var(--wb-surface)}
+html[data-theme]:is(.invoice-assistant,.embedded-workbench) :is(.matching-proof,.matching-card-image){background:#fff;color:#46546c;color-scheme:light}
+html[data-theme]:is(.invoice-assistant,.embedded-workbench) .matching-pdf-placeholder{color:#46546c}
+html[data-theme=dark]:is(.invoice-assistant,.embedded-workbench) :is(.matching-proof,.matching-card-image,.matching-pdf-placeholder){color:#4b4b4b}
+html[data-theme]:is(.invoice-assistant,.embedded-workbench) :is(.print-pages img,.synthesis-proof img,.receipt-grid img,#matchingPrintPages img,#actualPdf img,dialog iframe){background:#fff;color-scheme:light}
+html[data-theme]:is(.invoice-assistant,.embedded-workbench) :is(.rail,#list,.detail,.matching-pools,.matching-preview,.reimbursement-summary-table,dialog){scrollbar-color:var(--wb-scrollbar) var(--wb-panel)}
+/* Keep native selection and outside dismissal, with the same centered arrow at every control height. */
+html[data-theme]:is(.invoice-assistant,.embedded-workbench) select:not([multiple]):is(:not([size]),[size="1"]){appearance:none;padding-inline-end:34px;background-image:var(--wb-select-arrow);background-position:right 11px center;background-size:12px 12px;background-repeat:no-repeat}
+/* Shared control geometry; selectable document cards retain their content-driven layout. */
+html[data-theme]:is(.invoice-assistant,.embedded-workbench) button:not(:where(.metric,.nav,.matching-card,.matching-other-card,.synthesis-row,.synthesis-row-preview,.dialog-close,[data-name-toggle],.tabs button,.project-status-tabs button,.project-menu button)){display:inline-flex;align-items:center;justify-content:center;gap:var(--wb-control-gap);min-height:var(--wb-control-height);padding:9px 12px;border-radius:var(--wb-control-radius);font-size:13px;line-height:20px}
+html[data-theme]:is(.invoice-assistant,.embedded-workbench) :is(input:not(:where([type=checkbox],[type=radio],[type=hidden],[type=file],[type=range],[type=color])),select:not([multiple]):is(:not([size]),[size="1"])){height:var(--wb-control-height);min-height:var(--wb-control-height);padding-block:9px;padding-inline-start:12px;border-radius:var(--wb-control-radius);font-size:13px;line-height:20px}
+html[data-theme]:is(.invoice-assistant,.embedded-workbench) input:not(:where([type=checkbox],[type=radio],[type=hidden],[type=file],[type=range],[type=color])){padding-inline-end:12px}
+html[data-theme]:is(.invoice-assistant,.embedded-workbench) textarea{min-height:96px;padding:10px 12px;border-radius:var(--wb-control-radius);font-size:13px;line-height:20px}
+html[data-theme]:is(.invoice-assistant,.embedded-workbench) input[type=file]{height:var(--wb-control-height);padding:3px;border-radius:var(--wb-control-radius);font-size:13px;line-height:20px}
+html[data-theme]:is(.invoice-assistant,.embedded-workbench) input[type=file]::file-selector-button{height:32px;padding:0 10px;border:1px solid var(--wb-line);border-radius:var(--wb-control-radius);background:var(--wb-panel);color:var(--wb-text);font:inherit}
+html[data-theme]:is(.invoice-assistant,.embedded-workbench) :is(.row-actions button,.matching-material-actions button,.matching-edit-card,.reimbursement-person-name>button,.reimbursement-name-menu button){min-height:var(--wb-control-compact);padding:5px 10px;font-size:12px;line-height:20px}
+html[data-theme]:is(.invoice-assistant,.embedded-workbench) .attachment select{height:var(--wb-control-compact);min-height:var(--wb-control-compact);padding-block:5px;font-size:12px}
+html[data-theme]:is(.invoice-assistant,.embedded-workbench) .reimbursement-name-combo{height:var(--wb-control-compact);border-radius:var(--wb-control-radius)}
+html[data-theme]:is(.invoice-assistant,.embedded-workbench) .reimbursement-name-combo input{height:100%;min-height:0;padding:0 8px}
+html[data-theme]:is(.invoice-assistant,.embedded-workbench) .reimbursement-name-combo [data-name-toggle]{height:100%;min-height:0;padding:0}
+html[data-theme]:is(.invoice-assistant,.embedded-workbench) .dialog-close{border-radius:var(--wb-control-radius)}
+html[data-theme]:is(.invoice-assistant,.embedded-workbench) .tabs button{display:inline-flex;align-items:center;justify-content:center;height:var(--wb-control-height);padding:0 10px;line-height:20px}
+html[data-theme]:is(.invoice-assistant,.embedded-workbench) .project-status-tabs button{height:var(--wb-control-height);padding:0 8px;line-height:20px}
+html[data-theme]:is(.invoice-assistant,.embedded-workbench) .project-menu button{display:flex;align-items:center;height:var(--wb-control-height);padding:0 12px;border-radius:var(--wb-control-radius);font-size:13px;line-height:20px}
+html[data-theme]:is(.invoice-assistant,.embedded-workbench) :is(.workbench-filters,.workbench-actions,.actions,.selection-tools,.synthesis-tools,.matching-toolbar,.matching-material-actions,.row-actions,.print-actions,.reimbursement-detail-person,.reimbursement-person-control,.reimbursement-person-name){gap:var(--wb-control-gap)}
+html[data-theme]:is(.invoice-assistant,.embedded-workbench) :is(.actions,.selection-tools,.synthesis-tools,.matching-toolbar,.reimbursement-person-control){align-items:center}
+html[data-theme]:is(.invoice-assistant,.embedded-workbench) .synthesis-tools{padding-bottom:12px}
+/* The dialog opens immediately; its read-only body reports loading or a retryable error. */
+html[data-theme]:is(.invoice-assistant,.embedded-workbench) :is(.dialog-loading,.dialog-load-error){display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px;min-height:180px;padding:24px;text-align:center;color:var(--wb-muted)}
+html[data-theme]:is(.invoice-assistant,.embedded-workbench) :is(.dialog-loading,.dialog-load-error)>p{margin:0;font-size:var(--wb-font-body);line-height:22px;overflow-wrap:anywhere}
+html[data-theme]:is(.invoice-assistant,.embedded-workbench) .dialog-loading>progress{width:128px;height:6px;max-width:100%}
+html[data-theme]:is(.invoice-assistant,.embedded-workbench) :is(#matchingLoadState,#previewLoadState){flex:1;min-height:0;border:1px solid var(--wb-line);border-radius:var(--wb-control-radius);margin-top:16px}
+html[data-theme]:is(.invoice-assistant,.embedded-workbench) :is(#matchingLoadState,#previewLoadState)>:is(.dialog-loading,.dialog-load-error){height:100%}
+html[data-theme]:is(.invoice-assistant,.embedded-workbench) .preview-tools{align-items:flex-end}
+html[data-theme]:is(.invoice-assistant,.embedded-workbench) .actions{margin-top:var(--wb-form-gap)}
+html[data-theme]:is(.invoice-assistant,.embedded-workbench) :is(.formgrid,.matching-create-fields,.review-edit-fields,.synthesis-batch-fields){gap:var(--wb-form-gap)}
+html[data-theme]:is(.invoice-assistant,.embedded-workbench) label:has(> :is(input:not(:where([type=checkbox],[type=radio],[type=hidden])),select,textarea)){display:grid;gap:var(--wb-control-gap)}
+html[data-theme]:is(.invoice-assistant,.embedded-workbench) label> :is(input:not(:where([type=checkbox],[type=radio],[type=hidden])),select,textarea){margin-top:0}
+html[data-theme]:is(.invoice-assistant,.embedded-workbench) dialog{padding:var(--wb-dialog-padding)}
+html[data-theme]:is(.invoice-assistant,.embedded-workbench) .synthesis-batch-actions{bottom:calc(-1 * var(--wb-dialog-padding))}
+@media(max-width:580px){html[data-theme]:is(.invoice-assistant,.embedded-workbench){--wb-dialog-padding:16px}}
+/* A shared reading hierarchy in both palettes; document images and iframe paper stay independent. */
+html[data-theme]:is(.invoice-assistant,.embedded-workbench) body{font-size:var(--wb-font-body);font-weight:var(--wb-weight-normal);line-height:22px}
+html[data-theme]:is(.invoice-assistant,.embedded-workbench) :is(b,strong){font-weight:var(--wb-weight-strong)}
+html[data-theme]:is(.invoice-assistant,.embedded-workbench) h1{font-size:var(--wb-font-page);font-weight:var(--wb-weight-strong);line-height:32px;letter-spacing:0}
+html[data-theme]:is(.invoice-assistant,.embedded-workbench) .brand{font-size:22px;font-weight:var(--wb-weight-strong);line-height:30px;letter-spacing:0}
+html[data-theme]:is(.invoice-assistant,.embedded-workbench) :is(h2,h3){font-size:var(--wb-font-section);font-weight:var(--wb-weight-strong);line-height:24px}
+html[data-theme]:is(.invoice-assistant,.embedded-workbench) dialog h2{font-size:var(--wb-font-dialog);line-height:28px}
+html[data-theme]:is(.invoice-assistant,.embedded-workbench) :is(h4,.sectiontitle,.row .title,.matching-card strong,.matching-other-card>strong,.matching-group strong){font-size:var(--wb-font-body);font-weight:var(--wb-weight-strong);line-height:22px}
+html[data-theme]:is(.invoice-assistant,.embedded-workbench) :is(.heading p,dialog p,dialog li){font-size:var(--wb-font-body);font-weight:var(--wb-weight-normal);line-height:22px}
+html[data-theme]:is(.invoice-assistant,.embedded-workbench) :is(label,button,input,select,textarea,.nav,.tabs button,.project-status-tabs button,.project-menu button,.matching-other summary,.matching-groups summary,.print-materials summary,.synthesis-batch-materials summary,.reimbursement-retired summary){font-size:var(--wb-font-control);font-weight:var(--wb-weight-normal);line-height:20px}
+html[data-theme]:is(.invoice-assistant,.embedded-workbench) :is(.tabs button.active,.project-status-tabs button.active,#projectLinks a[aria-current=page]){font-weight:var(--wb-weight-strong)}
+html[data-theme]:is(.invoice-assistant,.embedded-workbench) :is(small,.brand span,.eyebrow,.sub,.muted,.badge,.missing,.timeline,footer,.listhead,.rule,figcaption,.dialog-message,.reimbursement-person-label,.reimbursement-person-message,.reimbursement-name-empty,.reimbursement-person-name [data-name-hint],.matching-message,.matching-empty,.matching-lane-head>span,.matching-totals span,.matching-group p,.matching-group small,.matching-card small,.matching-other-card>p,.matching-progress span,.matching-footer>.muted,.matching-classify [data-error],.matching-create-fields>[role=alert],.review-edit-missing,.review-edit-suggestion,.synthesis-selection-status,.synthesis-batch-fields [role=alert],#reviewEditError,#synthesisBatchStatus,#matchingPrintStatus){font-size:var(--wb-font-hint);font-weight:var(--wb-weight-normal);line-height:20px}
+html[data-theme]:is(.invoice-assistant,.embedded-workbench) :is(.metric small,.metric em){font-size:var(--wb-font-hint);font-weight:var(--wb-weight-normal);line-height:20px}
+html[data-theme]:is(.invoice-assistant,.embedded-workbench) .metric b{font-size:var(--wb-font-page);font-weight:var(--wb-weight-strong);line-height:32px;font-variant-numeric:tabular-nums}
+html[data-theme]:is(.invoice-assistant,.embedded-workbench) :is(.row .money,.matching-card b,.print-heading>strong,.matching-preview-title>strong,.matching-totals strong,.synthesis-totals strong,.reimbursement-summary-total strong){font-size:var(--wb-font-section);font-weight:var(--wb-weight-strong);line-height:24px;font-variant-numeric:tabular-nums}
+html[data-theme]:is(.invoice-assistant,.embedded-workbench) :is(.reimbursement-summary,.review-batch-dialog) :is(table,td){font-size:var(--wb-font-control);font-weight:var(--wb-weight-normal);line-height:20px;font-variant-numeric:tabular-nums}
+html[data-theme]:is(.invoice-assistant,.embedded-workbench) :is(.reimbursement-summary,.review-batch-dialog) thead th{font-size:var(--wb-font-hint);font-weight:var(--wb-weight-strong);line-height:20px}
+html[data-theme]:is(.invoice-assistant,.embedded-workbench) .reimbursement-name-combo [role=option]{font-size:var(--wb-font-control);font-weight:var(--wb-weight-normal);line-height:20px}
+html[data-theme]:is(.invoice-assistant,.embedded-workbench) :is(.row-actions button,.matching-material-actions button,.matching-edit-card,.reimbursement-person-name>button,.reimbursement-name-menu button,.attachment select){font-size:var(--wb-font-hint)}
+html[data-theme]:is(.invoice-assistant,.embedded-workbench) :is(.matching-proof>span:last-child,.matching-other-card .matching-proof span){font-size:var(--wb-font-hint);line-height:20px}
+html[data-theme]:is(.invoice-assistant,.embedded-workbench) :is(.matching-preview-empty h3,.empty h2){color:var(--wb-text)}
+html[data-theme]:is(.invoice-assistant,.embedded-workbench) dialog button.dialog-close{font-size:0;line-height:1}
+@media(max-width:580px){html[data-theme]:is(.invoice-assistant,.embedded-workbench) h1{font-size:var(--wb-font-dialog);line-height:28px}}

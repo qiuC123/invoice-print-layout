@@ -1,0 +1,9 @@
+.review-batch-dialog{width:min(780px,calc(100vw - 36px));max-height:85vh;overflow:auto;box-sizing:border-box;overscroll-behavior:contain}
+.review-batch-dialog .dialoghead{display:flex;justify-content:space-between;align-items:center;gap:12px}
+.review-batch-dialog h2{margin:0}.review-batch-dialog p{line-height:1.6;overflow-wrap:anywhere}
+.review-batch-dialog form>label{display:block;margin:16px 0}.review-batch-dialog select{display:block;width:100%;margin-top:7px;box-sizing:border-box}
+.review-batch-table{max-height:250px;overflow:auto;margin:16px 0}.review-batch-table table{width:100%;border-collapse:collapse}
+.review-batch-table th,.review-batch-table td{text-align:left;padding:9px;border-bottom:1px solid var(--line);overflow-wrap:anywhere}
+.review-batch-table td:last-child{white-space:nowrap}.review-batch-dialog .actions{display:flex;gap:9px;flex-wrap:wrap}
+.review-batch-dialog [data-error]{color:#ffc76c}.review-batch-dialog [hidden]{display:none}
+@media(max-width:580px){.review-batch-dialog{padding:16px}.review-batch-dialog h2{font-size:20px}.review-batch-table th,.review-batch-table td{padding:7px;font-size:12px}.review-batch-dialog .actions>button{flex:1;white-space:normal}}

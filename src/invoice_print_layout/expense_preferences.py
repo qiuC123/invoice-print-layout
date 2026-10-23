@@ -40,7 +40,7 @@ class Preferences:
             raise ValueError('费用类别无效')
         if kind == 'report_section' and value not in REPORT_SECTIONS:
             raise ValueError('报表栏目无效')
-        if kind == 'material_basis' and value not in {'standard', 'payment_only'}:
+        if kind == 'material_basis' and value not in {'standard', 'invoice_payment', 'payment_only'}:
             raise ValueError('材料要求无效')
         if scope == 'item':
             self.store.get(match)

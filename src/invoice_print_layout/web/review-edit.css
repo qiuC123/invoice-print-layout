@@ -1,0 +1,10 @@
+.review-edit-dialog{width:580px;max-width:calc(100vw - 24px);max-height:calc(100vh - 24px);overflow:auto}
+.review-edit-dialog>h2{margin-top:0}
+.review-edit-fields{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:14px}
+.review-edit-name{grid-column:1/-1}
+.review-edit-name span{display:block}
+.review-edit-dialog input,.review-edit-dialog select{max-width:100%;min-width:0}
+.review-edit-missing,.review-edit-suggestion{padding:11px;border:1px solid var(--line);border-radius:6px;font-size:12px;line-height:1.8;overflow-wrap:anywhere}
+.review-edit-missing{color:#ddc393}.review-edit-suggestion{margin-top:14px;color:var(--muted)}
+#reviewEditError{color:#ffb4a4;font-size:12px;line-height:1.8;overflow-wrap:anywhere}
+@media(max-width:580px){.review-edit-dialog{padding:18px}.review-edit-fields{grid-template-columns:minmax(0,1fr)}}

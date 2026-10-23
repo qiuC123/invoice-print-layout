@@ -3,7 +3,7 @@
   const dialog = document.createElement('dialog');
   dialog.id = 'mailSearchDialog';
   dialog.className = 'mail-search-dialog';
-  dialog.innerHTML = `<div class="dialoghead"><h2>查找对应发票</h2><button type="button" id="mailSearchClose" aria-label="关闭发票查找">×</button></div>
+  dialog.innerHTML = `<div class="dialoghead"><h2>查找对应发票</h2><button type="button" id="mailSearchClose" aria-label="关闭发票查找" class="dialog-close">×</button></div>
     <p id="mailSearchMatter"></p><p class="muted">按邮件收件日期查找附件和领票链接。匹配提示仅作线索，预览核对后再关联。</p>
     <form id="mailSearchForm"><div class="actions"><label>开始日期 <input id="mailSearchStart" type="date" required></label><label>结束日期 <input id="mailSearchEnd" type="date" required></label><button class="primary" id="mailSearchRun">查找邮箱</button></div></form>
     <p id="mailSearchStatus" role="status"></p><div id="mailSearchResults"></div>`;

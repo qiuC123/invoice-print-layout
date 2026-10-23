@@ -1,11 +1,126 @@
 <!doctype html>
-<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>项目后勤 · 报销工作台</title><link rel="stylesheet" href="/style.css"><script src="/app.js" defer></script><script src="/receipt.js" defer></script><script src="/report.js" defer></script><script src="/mail-search.js" defer></script><script src="/expense-classifier.js" defer></script><script src="/intake.js" defer></script></head>
-<body><aside class="rail"><div class="brand">后勤<span>DESK</span></div><p>项目支出与报销材料</p><a id="logisticsNav" hidden href="/logistics" style="display:block;padding:14px;color:inherit;text-decoration:none">后勤任务</a><button class="nav active" data-view="all">▦　事项台账</button><button class="nav" data-view="inbox">▤　邮件收件箱 <span id="inboxCount"></span></button><div class="railnote">本机工作台<br>文件保存在这台电脑<br><small>飞书负责收件 · 工作台负责核对</small></div></aside>
-<main><header><div class="eyebrow">PROJECT OPERATIONS</div><div class="heading"><div><h1>报销材料工作台</h1><p>上传购买凭证，先记支出，再补发票。</p></div><div class="actions"><button class="primary" id="recognizeReceipt">＋ 批量上传凭证并识别</button><button id="newItem">手动登记</button></div></div></header>
+<html lang="zh-CN" class="invoice-assistant"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><script id="workbenchAssetBootstrap">
+'use strict';
+(() => {
+  const root = document.documentElement, key = 'invoice-workbench-theme';
+  const validTheme = value => value === 'light' || value === 'dark';
+  let theme = 'light';
+  try { const saved = localStorage.getItem(key); if (validTheme(saved)) theme = saved; }
+  catch (_) { /* Appearance still works when storage is unavailable. */ }
+  root.dataset.theme = theme;
+  root.style.colorScheme = theme;
+
+  // Keep appearance usable even when the external theme controller fails.
+  window.addEventListener('load', () => {
+    const select = document.getElementById('themeSelect');
+    if (select && select.dataset.workbenchThemeBound !== 'true') select.value = root.dataset.theme;
+  }, {once: true});
+  document.addEventListener('change', event => {
+    const select = event.target;
+    if (!select || select.id !== 'themeSelect' || select.dataset.workbenchThemeBound === 'true') return;
+    if (!validTheme(select.value)) { select.value = root.dataset.theme; return; }
+    root.dataset.theme = select.value;
+    root.style.colorScheme = select.value;
+    try { localStorage.setItem(key, select.value); } catch (_) { /* Page-local choice remains usable. */ }
+  });
+
+  const entries = new Map(), retryLimit = 2, timeoutMs = 5000;
+  let parsed = false;
+  const loaded = link => {
+    try { return Boolean(link.sheet && link.sheet.cssRules.length); }
+    catch (_) { return false; }
+  };
+  const clear = entry => {
+    clearTimeout(entry.deadline);
+    clearTimeout(entry.retryTimer);
+    entry.deadline = entry.retryTimer = null;
+  };
+  const render = () => {
+    const failed = [...entries.values()].some(entry => entry.failed);
+    const pending = [...entries.values()].some(entry => !entry.done && !entry.failed);
+    const retrying = [...entries.values()].some(entry => !entry.done && entry.tries > 0);
+    root.dataset.workbenchAssets = failed ? 'error' : retrying ? 'retrying' : parsed && !pending ? 'ready' : 'loading';
+    if (!document.body) return;
+    let status = document.getElementById('workbenchAssetStatus');
+    if (failed && !status) {
+      status = document.createElement('div');
+      status.id = 'workbenchAssetStatus';
+      status.setAttribute('role', 'status');
+      status.style.cssText = 'position:fixed;top:12px;left:50%;transform:translateX(-50%);z-index:10000;max-width:90vw;padding:12px 16px;border:1px solid #c9a66b;border-radius:8px;background:#fff8e8;color:#342b1e;font:14px/1.6 "Microsoft YaHei",sans-serif;box-shadow:0 3px 14px #0002';
+      const text = document.createElement('span');
+      text.textContent = '页面样式加载未完成，请检查连接后重试。';
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.textContent = '重新加载样式';
+      button.style.cssText = 'margin-left:12px;padding:5px 10px;border:1px solid #b59a6d;border-radius:5px;background:white;color:#342b1e;cursor:pointer';
+      button.addEventListener('click', () => {
+        entries.forEach(entry => {
+          if (!entry.failed) return;
+          entry.failed = false;
+          entry.tries = 0;
+          retry(entry);
+        });
+        render();
+      });
+      status.append(text, button);
+      document.body.append(status);
+    }
+    if (status) status.hidden = !failed;
+  };
+  const succeed = entry => { clear(entry); entry.done = true; entry.failed = false; render(); };
+  const arm = entry => { entry.deadline = setTimeout(() => retry(entry), timeoutMs); };
+  const retry = entry => {
+    if (entry.done || entry.failed || entry.retryTimer !== null) return;
+    if (loaded(entry.link)) { succeed(entry); return; }
+    clear(entry);
+    if (entry.tries >= retryLimit) { entry.failed = true; render(); return; }
+    entry.tries += 1;
+    entry.retryTimer = setTimeout(() => {
+      entry.retryTimer = null;
+      if (loaded(entry.link)) { succeed(entry); return; }
+      const url = new URL(entry.original);
+      url.searchParams.set('wb_style_retry', String(entry.tries));
+      // Update the same node: stylesheet cascade order must not change.
+      entry.link.href = url.href;
+      arm(entry);
+    }, entry.tries * 150);
+    render();
+  };
+  const watch = link => {
+    if (!link || link.tagName !== 'LINK' || link.rel !== 'stylesheet') return null;
+    let url;
+    try { url = new URL(link.href, location.href); } catch (_) { return null; }
+    if (url.origin !== location.origin || !url.pathname.endsWith('.css')) return null;
+    let entry = entries.get(link);
+    if (!entry) {
+      entry = {link, original: url.href, tries: 0, done: false, failed: false, deadline: null, retryTimer: null};
+      entries.set(link, entry);
+      if (loaded(link)) succeed(entry); else arm(entry);
+    }
+    return entry;
+  };
+  document.addEventListener('load', event => { const entry = watch(event.target); if (entry && loaded(entry.link)) succeed(entry); }, true);
+  document.addEventListener('error', event => { const entry = watch(event.target); if (entry) retry(entry); }, true);
+  const observer = new MutationObserver(records => records.forEach(record => record.addedNodes.forEach(node => {
+    watch(node);
+    if (node.querySelectorAll) node.querySelectorAll('link[rel="stylesheet"]').forEach(watch);
+  })));
+  observer.observe(root, {childList: true, subtree: true});
+  document.addEventListener('DOMContentLoaded', () => {
+    observer.disconnect();
+    document.querySelectorAll('link[rel="stylesheet"]').forEach(watch);
+    parsed = true;
+    entries.forEach(entry => { if (loaded(entry.link)) succeed(entry); });
+    render();
+  }, {once: true});
+})();
+</script><script src="/workbench-theme.js"></script><title>发票助手</title><link rel="stylesheet" href="/style.css"><link rel="stylesheet" href="/project-menu.css"><link rel="stylesheet" href="/review-edit.css"><link rel="stylesheet" href="/review-batch.css"><link rel="stylesheet" href="/matching-desk.css"><link rel="stylesheet" href="/amount-pairing.css"><link rel="stylesheet" href="/reimbursement-people.css"><link rel="stylesheet" href="/workbench-theme.css"><link rel="stylesheet" href="/multi-filter.css"><link rel="stylesheet" href="/report-preview.css"><script src="/multi-filter.js" defer></script><script src="/app.js" defer></script><script src="/review-edit.js" defer></script><script src="/review-batch.js" defer></script><script src="/project-menu.js" defer></script><script src="/receipt.js" defer></script><script src="/report.js" defer></script><script src="/mail-search.js" defer></script><script src="/expense-classifier.js" defer></script><script src="/intake.js" defer></script><script src="/amount-pairing.js" defer></script><script src="/reimbursement-people.js" defer></script><script src="/matching-desk.js" defer></script><script src="/synthesis.js" defer></script><script src="/phone-link.js" defer></script><link rel="stylesheet" href="/phone-link.css"><link rel="stylesheet" href="/manual-agent.css"><script src="/manual-agent.js" defer></script><script src="/manual-agent-bridge.js" defer></script></head>
+<body><aside class="rail"><div class="brand">发票助手<span>INVOICE DESK</span></div><button id="createProject" type="button" class="nav project-create-button">＋ 新建项目</button><a id="logisticsNav" hidden href="/logistics" style="display:block;padding:14px;color:inherit;text-decoration:none">后勤任务</a><button class="nav" data-view="inbox">▤　邮件收件箱 <span id="inboxCount"></span></button></aside>
+<main><header><div class="eyebrow">INVOICE ASSISTANT</div><div class="heading"><div><h1>发票助手</h1><p>收集发票和付款凭证，核对账单，制作报销表与打印包。</p></div><div class="actions" id="headingActions"></div></div><p id="manualMailStatus" class="muted" role="status" hidden></p></header>
 <div id="error" role="alert" hidden></div><div id="notice" role="status" hidden></div>
 <section class="metrics" id="metrics"></section>
-<section class="toolbar"><div><select id="projectFilter" aria-label="项目筛选"><option value="">所有项目</option></select><select id="categoryFilter" aria-label="类别筛选"><option value="">所有类别</option></select><input id="search" placeholder="搜索事项、商家、订单号…" aria-label="搜索事项"></div><div><button id="importHistory">同步历史打印记录</button><button id="checkMail">补收邮件</button></div></section>
-<section class="workspace"><div class="listpanel"><div class="tabs" id="tabs"><button data-view="all" class="active">全部事项</button><button data-view="missing">待补材料</button><button data-view="review">待核对</button><button data-view="ready">可提交</button><button data-view="submitted">已提交</button><button data-view="reimbursed">已报销</button></div><div class="listhead"><div><div id="selectionTools" class="selection-tools"><label><input type="checkbox" id="selectVisible">全选当前列表</label><button id="clearSelected" type="button" disabled>清空勾选</button><button id="verifySelected" type="button" disabled>批量核对完成</button></div><span id="listSummary" role="status"></span></div><button id="exportSelected">导出勾选 PDF＋MD</button></div><div id="list"></div></div><aside id="detail" class="detail"><div class="empty"><span>▤</span><h2>每笔支出，一个材料夹</h2><p>选择左侧事项，查看缺失材料、上传凭证或更新报销状态。</p><p>酒店、高铁：发票<br>材料采购：购买凭证＋发票或扣费记录</p></div></aside></section>
-<footer>材料齐全 ≠ 已报销。核对金额与内容后再提交；打印最终 PDF 请选择 A4、1×1。</footer></main>
-<dialog id="createDialog"><div class="dialoghead"><h2>登记一笔事项</h2><button id="closeDialog" aria-label="关闭">×</button></div><p class="muted">暂时没有发票也可以登记，材料随时补充。</p><form id="createForm"></form></dialog>
+<section id="manualAgent" aria-label="智能整理助手"></section>
+<section class="toolbar" aria-label="事项筛选和工作台操作"><div class="workbench-filters"><select id="categoryFilter" aria-label="类别筛选"><option value="">所有类别</option></select><select id="personFilter" aria-label="人员筛选"><option value="">所有人员</option><option value="__unassigned__">未指定</option></select><select id="issueFilter" aria-label="问题筛选" title="筛选费用的材料和金额问题"><option value="">所有问题</option><option value="missing">缺材料</option><option value="amount">金额有差额</option><option value="complete">材料已齐</option></select><input id="search" placeholder="搜索事项、商家、订单号…" aria-label="搜索事项"></div><div id="workbenchActions" class="workbench-actions"><button id="importHistory">同步历史打印记录</button><button id="reimbursementPeople" type="button" hidden>人员金额</button><button id="materialMatching" type="button" disabled>材料合成台</button><select id="themeSelect" aria-label="外观模式"><option value="light">浅色</option><option value="dark">深色</option></select></div></section>
+<section class="workspace"><div class="listpanel"><div class="tabs" id="tabs"><button data-view="review" class="active">待核对</button><button data-view="submitted">可提交</button><button data-view="deleted">已删除</button></div><div class="listhead"><div><div id="selectionTools" class="selection-tools"><label><input type="checkbox" id="selectVisible">全选当前列表</label><button id="verifySelected" class="primary" type="button" disabled>核对完成</button><button id="returnSelected" type="button" hidden disabled>退回待核对</button><button id="bulkAssignExpenses" type="button" disabled>修改归属</button><button id="batchProjectType" type="button" disabled>修改项目类型</button></div><span id="listSummary" role="status"></span></div><button id="exportSelected" class="primary" hidden disabled>制作报销包</button></div><div id="list" role="region" aria-label="事项列表" tabindex="0"></div></div><aside id="detail" class="detail" aria-label="材料和打印预览" tabindex="0"><div class="empty"><span>▤</span><h2>查看最终打印页</h2><p>选择左侧费用，直接查看实际 A4 打印排版。</p><p>核对完成后进入“可提交”，查看最终打印页并制作报销包。</p></div></aside></section>
+<footer>确认合成后核对金额与内容；可提交内查看最终打印页。打印最终 PDF 请选择 A4、1×1。</footer></main>
 </body></html>

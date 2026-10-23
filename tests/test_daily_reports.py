@@ -147,7 +147,7 @@ def test_dates_hours_and_explicit_fixed_content_confirmation(setup):
 
 def test_http_endpoints_csrf_project_scope_and_validated_download(setup, monkeypatch):
     reports, photos, pid, body = setup
-    monkeypatch.setattr('invoice_print_layout.workbench_web.DailyReports', lambda *_: reports)
+    monkeypatch.setattr('invoice_print_layout.daily_reports.DailyReports', lambda *_: reports)
     server = make_server(photos.workspace, 0)
     thread = threading.Thread(target=server.serve_forever, daemon=True); thread.start()
     base = f'http://127.0.0.1:{server.server_port}'

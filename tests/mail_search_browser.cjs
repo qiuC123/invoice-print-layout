@@ -23,12 +23,13 @@ const {chromium}=require('playwright');
   }
   if(url.pathname==='/api/mail/associate'){requests.push(route.request().postDataJSON());return json({ok:true,duplicate:false});}
   const name=url.pathname==='/'?'index.html':url.pathname.slice(1);
-  if(!['index.html','app.js','receipt.js','report.js','mail-search.js','style.css'].includes(name))return route.fulfill({status:404,body:''});
+  if(!['index.html','workbench-theme.js','workbench-theme.css','multi-filter.js','multi-filter.css','report-preview.css','app.js','receipt.js','report.js','mail-search.js','style.css'].includes(name))return route.fulfill({status:404,body:''});
   return route.fulfill({contentType:name.endsWith('.js')?'text/javascript':name.endsWith('.css')?'text/css':'text/html',body:await fs.readFile(path.resolve(__dirname,'../src/invoice_print_layout/web',name))});
  });
  try{
   await page.goto('http://127.0.0.1:18766/');
   await page.locator('[data-item="a"]').click();
+  await page.locator('#detail .print-materials summary').click();
   await page.locator('#findInvoice').click();
   assert.match(await page.locator('#mailSearchMatter').innerText(),/项目甲.*24.60/);
   await page.locator('#mailSearchStart').fill('2026-09-01');

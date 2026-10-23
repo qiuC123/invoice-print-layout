@@ -9,7 +9,6 @@ import re
 import tempfile
 import threading
 import uuid
-from datetime import date
 from pathlib import Path
 from typing import Any
 
@@ -17,7 +16,9 @@ from PIL import Image, UnidentifiedImageError
 from rapidocr_onnxruntime import RapidOCR
 
 from invoice_print_layout.takeout import OcrLine, _ocr_lines, TakeoutError
-from invoice_print_layout.workbench import ExpenseStore, MAX_BYTES, ROLES, amount_cents, now
+from invoice_print_layout.workbench import ExpenseStore, MAX_BYTES, ROLES, amount_cents, now, expense_identifier_keys
+from invoice_print_layout.transaction_evidence import extract_transaction_evidence, record_identifier_keys
+from invoice_print_layout.local_payment_fields import is_payment_payee_metadata, payment_title_payee
 
 _engine: Any = None
 _ocr_lock = threading.Lock()
@@ -65,11 +66,95 @@ def rows_of(lines: list[OcrLine]) -> list[str]:
     return [' '.join(x.text for x in sorted(row, key=lambda x: x.left)) for row in rows]
 
 
+def labelled_goods(rows: list[str]) -> tuple[str, str]:
+    """Read an explicit product/description value, retaining its visible quote."""
+    labels = re.compile(r'^(?:商品说明|商品描述|商品名称|商品|交易说明|付款备注)[:：]?\s*(.*)$')
+    stops = re.compile(r'^(?:商户全称|商家名称|商户名称|收款方|收款人|收款商户|当前状态|支付状态|'
+        r'支付时间|付款时间|交易时间|支付方式|付款方式|交易单号|商户单号|订单号|订单编号|收单机构|'
+        r'账单服务|商家/小程序|对订单有疑惑|发起群收款|付款金额|支付金额|实付款|合计)[:：]?')
+    values: dict[str, str] = {}
+    for index, row in enumerate(rows):
+        match = labels.fullmatch(row.strip())
+        if not match:
+            continue
+        value = match[1].strip()
+        quote = row.strip()
+        if not value and index + 1 < len(rows):
+            following = rows[index + 1].strip()
+            if following and not stops.match(following) and not labels.fullmatch(following):
+                value, quote = following, quote + '\n' + following
+        if value and value not in {'明细', '说明', '描述', '名称'} and not stops.match(value) and len(value) <= 500:
+            values[re.sub(r'\s+', '', value)] = quote
+    if len(values) != 1:
+        return '', ''
+    value, quote = next(iter(values.items()))
+    return value, quote
+
+
+def labelled_counterparty(rows: list[str]) -> tuple[str, str, bool]:
+    """Prefer explicit merchant identity over nicknames; equal-priority conflict stays blank."""
+    labels = {'收款方全称': 3, '收款商户全称': 3, '收款方名称': 3,
+              '商户全称': 3, '商户名称': 3, '商家全称': 3, '商家名称': 3, '收款商户': 3,
+              '收款方': 2, '收款人': 2, '转账给': 2, '付款给': 2}
+    stops = re.compile(r'^(?:商品|当前状态|支付状态|付款状态|支付时间|付款时间|交易时间|支付方式|'
+        r'付款方式|交易单号|商户单号|订单号|订单编号|收单机构|付款金额|支付金额|实付款|合计|'
+        r'商户全称|商户名称|商家名称|收款方|收款人|收款商户)[:：]?')
+    candidates: dict[int, dict[str, str]] = {}
+    def form_label(value: str) -> bool:
+        compact = re.sub(r'[\s:：_—-]', '', value)
+        return bool(re.fullmatch(r'(?:[（(]?(?:盖章|签章|签字|签名)[）)]?|开票人|收款人|经办人)+', compact))
+    for index, row in enumerate(rows):
+        compact = re.sub(r'\s+', '', row)
+        if is_payment_payee_metadata(row):
+            continue
+        title_value = payment_title_payee(row)
+        if title_value:
+            candidates.setdefault(2, {})[title_value] = row
+        for label in sorted(labels, key=len, reverse=True):
+            priority = labels[label]
+            match = re.fullmatch(re.escape(label) + r'[:：]?([^:：].{0,159})?', compact)
+            if match is None:
+                continue
+            value, quote = str(match[1] or '').strip(), row
+            if not value and index + 1 < len(rows):
+                value = re.sub(r'\s+', '', rows[index + 1])
+                quote += '\n' + rows[index + 1]
+            if (value and value not in {'二维码收款', '服务', '名片', '备注'} and
+                    not is_payment_payee_metadata(value) and not form_label(value) and len(value) <= 160 and
+                    re.search(r'[A-Za-z\u4e00-\u9fff]', value) and not stops.match(value)):
+                candidates.setdefault(priority, {})[value] = quote
+            break
+    if not candidates:
+        return '', '', False
+    best = candidates[max(candidates)]
+    if len(best) != 1:
+        return '', '', True
+    value, quote = next(iter(best.items()))
+    return value, quote, False
+
+
+def labelled_consumption_date(rows: list[str]) -> tuple[str, str]:
+    """Accept one explicit consumption/payment date, including legal OCR datetime."""
+    from invoice_print_layout.glm_invoice_ai import _evidence_dates
+    candidates: dict[str, str] = {}
+    for index, row in enumerate(rows):
+        if not re.search(r'下单时间|下单日期|支付时间|付款时间|消费日期|乘车日期|入住日期|离店日期', row):
+            continue
+        quote = row
+        if not re.search(r'\d{4}', row) and index + 1 < len(rows):
+            quote += '\n' + rows[index + 1]
+        for day in _evidence_dates(quote):
+            candidates[day.isoformat()] = quote
+    if len(candidates) != 1:
+        return '', ''
+    return next(iter(candidates.items()))
+
+
 def parse_receipt(lines: list[OcrLine]) -> dict[str, Any]:
     rows = rows_of(lines)
     compact = [re.sub(r'\s+', '', row).replace('￥', '¥') for row in rows]
     text = '\n'.join(compact)
-    fields = {'title': '待核对购买凭证', 'merchant': '', 'category': '其他',
+    fields: dict[str, Any] = {'title': '待核对购买凭证', 'merchant': '', 'category': '其他',
               'amount': '', 'expense_date': '', 'order_number': '', 'note': ''}
     warnings: list[str] = []
     evidence: dict[str, str] = {}
@@ -79,6 +164,12 @@ def parse_receipt(lines: list[OcrLine]) -> dict[str, Any]:
     # Keep payment/invoice screenshots out of the purchase-details role.
     if '发票号码' in text and ('电子发票' in text or '增值税' in text):
         role = 'invoice'
+        sellers = [(match[1].strip(), row) for row in rows if (match := re.fullmatch(
+            r'\s*(?:销售方名称|销方名称|销售方|SELLER)\s*[:：]\s*(.{1,200})', row, re.I))]
+        if len({seller for seller, _ in sellers}) == 1:
+            fields['merchant'], evidence['merchant'] = sellers[0]
+        elif sellers:
+            warnings.append('销售方名称待核对')
         warnings.append('这是发票图片，建议关联已有事项；开票日期不是消费日期。')
     elif any(word in text for word in ('交易单号', '微信支付', '支付宝', '支付成功')) and not any(word in text for word in ('价格明细', '订单已送达', '商品明细')):
         role = 'payment'
@@ -145,17 +236,26 @@ def parse_receipt(lines: list[OcrLine]) -> dict[str, Any]:
             evidence['amount'] = next(x[2] for x in amounts if x[0] == best)
         else:
             warnings.append('多个金额无法确定总实付，已留空，请核对。')
-    dates: set[str] = set()
-    for row in rows:
-        match = re.search(r'(?:下单时间|下单日期|支付时间|消费日期)[:：]?\s*(\d{4})[年/.-](\d{1,2})[月/.-](\d{1,2})(?!\d)', row)
-        if match:
-            try:
-                dates.add(date(*(int(x) for x in match.groups())).isoformat())
-                evidence['expense_date'] = row
-            except ValueError:
-                pass
-    if len(dates) == 1:
-        fields['expense_date'] = dates.pop()
+    expense_date, date_quote = labelled_consumption_date(rows)
+    if expense_date:
+        fields['expense_date'], evidence['expense_date'] = expense_date, date_quote
+    goods, goods_quote = labelled_goods(rows)
+    if goods:
+        fields['goods'], evidence['goods'] = goods, goods_quote
+    if ('收据' in text or '收款凭证' in text) and role not in {'invoice', 'payment'}:
+        role = 'receipt'
+        merchant, merchant_quote, merchant_conflict = labelled_counterparty(rows)
+        if merchant:
+            fields['merchant'], evidence['merchant'] = merchant, merchant_quote
+        if merchant_conflict:
+            fields['merchant'] = ''
+            warnings.append('收款身份待核对')
+    transaction = extract_transaction_evidence('\n'.join(rows), role, fields)
+    fields.update(transaction['fields'])
+    if fields.get('shop_name') and not fields['merchant']:
+        fields['merchant'] = fields['shop_name']
+    fields['transaction_identifiers'] = transaction['identifiers']
+    fields['transaction_evidence'] = transaction['evidence']
     for key, label in [('amount', '总实付金额'), ('expense_date', '消费日期'), ('order_number', '订单号'), ('merchant', '商家')]:
         if not fields[key]:
             warnings.append(label + '未能确定，已留空，可手动补充。')
@@ -166,20 +266,27 @@ def parse_receipt(lines: list[OcrLine]) -> dict[str, Any]:
             'text': '\n'.join(rows)[:12000]}
 
 
-def find_duplicates(store: ExpenseStore, digest: str, order_number: str = '') -> list[dict[str, Any]]:
+def find_duplicates(store: ExpenseStore, digest: str, order_number: str = '', *,
+                    transaction_identifiers: list[dict[str, Any]] | None = None) -> list[dict[str, Any]]:
     with store.connect() as db:
-        return _duplicates(db, digest, order_number)
+        return _duplicates(db, digest, order_number, transaction_identifiers=transaction_identifiers)
 
 
-def _duplicates(db: Any, digest: str, order_number: str) -> list[dict[str, Any]]:
+def _duplicates(db: Any, digest: str, order_number: str = '', *,
+                transaction_identifiers: list[dict[str, Any]] | None = None) -> list[dict[str, Any]]:
+    # The old display field has no identifier system. Equal bare numbers from
+    # different platforms/channels must not be treated as one transaction.
+    keys = record_identifier_keys({'transaction_identifiers': transaction_identifiers or []})
     file_ids = {r['item_id'] for r in db.execute('SELECT item_id FROM attachments WHERE digest=?', (digest,))}
     results = []
-    for row in db.execute('SELECT id,data FROM expenses'):
+    for row in db.execute('SELECT id,source,data FROM expenses'):
         data = json.loads(row['data'])
-        same_order = bool(order_number and data.get('order_number') == order_number)
+        if data.get('undone_material_group') or data.get('merged_into'):
+            continue
+        same_order = bool(keys & expense_identifier_keys(db, row['id'], data, source=str(row['source'] or '')))
         if row['id'] in file_ids or same_order:
             results.append({'id': row['id'], 'title': data['title'], 'stage': data['stage'],
-                            'reason': '相同文件' if row['id'] in file_ids else '相同订单号'})
+                            'reason': '相同文件' if row['id'] in file_ids else '相同体系的交易编号'})
     return results
 
 
@@ -194,7 +301,8 @@ def recognize(store: ExpenseStore, name: str, payload: bytes) -> dict[str, Any]:
     except TakeoutError:
         result = parse_receipt([])
         result['warnings'].insert(0, '本地OCR未读出文字，可以对照原图手动填写后保存。')
-    result['duplicates'] = find_duplicates(store, digest, result['fields']['order_number'])
+    result['duplicates'] = find_duplicates(store, digest,
+        transaction_identifiers=result['fields']['transaction_identifiers'])
     return result
 
 
@@ -210,7 +318,9 @@ def save_receipt(store: ExpenseStore, name: str, payload: bytes, values: dict[st
     target = store.files / (digest + suffix)
     with store.connect() as db:
         db.execute('BEGIN IMMEDIATE')
-        duplicates = _duplicates(db, digest, data['order_number'])
+        from invoice_print_layout.intake_archive import reject_inactive_digest
+        reject_inactive_digest(db, digest)
+        duplicates = _duplicates(db, digest, transaction_identifiers=data['transaction_identifiers'])
         if duplicates:
             return {'duplicates': duplicates}
         # Store bytes before committing any record: failures cannot leave an empty matter.

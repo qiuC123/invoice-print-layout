@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="referrer" content="no-referrer">
+  <title>发票助手 · 手机联通</title>
+  <link rel="stylesheet" href="/mobile.css">
+  <script src="/mobile.js" defer></script>
+</head>
+<body>
+  <header>
+    <div class="heading"><div><p class="eyebrow">电脑与手机 · 同一份账本</p><h1>发票助手</h1></div><button id="theme" type="button" aria-label="切换明暗主题">明暗</button></div>
+    <p id="connection" class="muted" role="status">正在连接电脑…</p>
+    <div class="project-tools"><label for="project">当前项目<select id="project" disabled><option value="">正在读取项目…</option></select></label><button id="refresh" type="button" disabled>刷新</button></div>
+  </header>
+  <div id="notice" class="notice" role="status" aria-live="polite" hidden></div>
+  <div id="error" class="notice error" role="alert" hidden></div>
+  <main id="content" aria-busy="true"><p class="empty">请保持电脑上的发票助手运行。</p></main>
+  <nav aria-label="费用处理流程"><button type="button" data-tab="materials" class="active" aria-current="page">材料 <span id="materialCount">0</span></button><button type="button" data-tab="review">待核对 <span id="reviewCount">0</span></button><button type="button" data-tab="ready">可提交 <span id="readyCount">0</span></button></nav>
+  <input id="photos" type="file" multiple accept="image/*" hidden>
+  <input id="files" type="file" multiple accept="*/*" hidden>
+  <noscript>请在浏览器中启用 JavaScript 后重新扫码连接。</noscript>
+</body>
+</html>

@@ -143,6 +143,43 @@ def test_manual_known_category_and_cancelled_items_are_not_overwritten(setup):
     assert not calls
 
 
+@pytest.mark.parametrize('retry', [False, True])
+def test_manual_other_survives_new_evidence_and_explicit_retry(setup, monkeypatch, retry):
+    store, auto, calls, create = setup
+    item = create()
+    assert auto.run(item['id'])['saved']
+    before = store.get(item['id'])
+    after = store.update(item['id'], {**before, 'category': '其他'})
+    auto.feedback(before, after)
+    current = store.update(item['id'], {**after, 'note': 'new evidence after manual correction'})
+    record = auto.record(item['id'])
+    with store.connect() as db:
+        events = [tuple(row) for row in db.execute('SELECT * FROM events ORDER BY id')]
+    def unexpected_collect(*args):
+        raise AssertionError('manual classification must skip recognition')
+    monkeypatch.setattr(classifier, 'collect', unexpected_collect)
+    assert not auto.statuses([current])[item['id']]['pending']
+    assert auto.run(item['id'], retry=retry)['status'] == 'skipped'
+    assert not auto.save_category(current, '材料采购', auto.input_key(current))
+    assert store.get(item['id']) == current
+    assert auto.record(item['id']) == record
+    assert len(calls) == 1
+    with store.connect() as db:
+        assert [tuple(row) for row in db.execute('SELECT * FROM events ORDER BY id')] == events
+
+
+def test_save_rechecks_manual_feedback_even_when_expense_version_is_unchanged(setup):
+    store, auto, calls, create = setup
+    item = create()
+    key = auto.input_key(item)
+    auto.feedback(item, item, verified=True)
+    assert store.get(item['id']) == item
+    assert not auto.save_category(item, '材料采购', key)
+    assert store.get(item['id']) == item
+    assert auto.run(item['id'], retry=True)['status'] == 'skipped'
+    assert not calls
+
+
 def test_http_auto_requires_token_and_persists_category_and_feedback(setup, tmp_path):
     from urllib.request import Request, urlopen
     from urllib.error import HTTPError

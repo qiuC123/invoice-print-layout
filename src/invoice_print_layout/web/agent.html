@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="zh-CN" class="invoice-assistant"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<script src="/workbench-theme.js"></script><title>发票助手 · 项目工作台</title>
+<link rel="stylesheet" href="/workbench-theme.css"><link rel="stylesheet" href="/agent.css">
+<link rel="stylesheet" href="/agent-projects.css"><link rel="stylesheet" href="/agent-details.css">
+<script src="/agent-projects.js" defer></script><script src="/agent-details.js" defer></script><script src="/agent.js" defer></script></head>
+<body><div class="workspace-shell">
+<aside id="project-navigation" aria-label="项目导航"></aside>
+<main class="workspace-main">
+<header><div><p class="eyebrow">发票助手 · 项目工作台</p><h1 id="workspace-title">项目工作台</h1><p class="muted" id="workspace-description">上传材料，查看整理结果，只处理尚未确定的问题。</p></div><a id="manual" href="/">人工工作台</a></header>
+<div id="error" role="alert" hidden></div>
+<nav class="workflow-nav" aria-label="工作区导航"><a href="#tasks-section">整理与确认 <span id="pending-count">0</span></a><a href="#workspace-materials">材料查看</a><a href="#workspace-expenses">费用详情</a><a href="#mail">邮箱收件 <span id="mail-pending-count">0</span></a></nav>
+<section class="upload-panel" aria-label="上传材料">
+<div class="project-shortcut"><label for="project">当前项目</label><select id="project"></select></div>
+<div id="empty-project" class="empty-project" hidden><h2>从一个项目开始</h2><p>新建项目后即可上传材料，整理结果、原件和费用会保存在同一份账本中。</p><button id="first-project" type="button">创建第一个项目</button></div>
+<div class="actions"><button id="upload" type="button">＋ 上传材料并整理</button><button id="organize" type="button">整理项目待处理材料</button>
+<input id="files" type="file" accept=".pdf,.png,.jpg,.jpeg,.webp" multiple hidden></div>
+<p id="connection" role="status"></p>
+<details class="organize-options"><summary>整理选项</summary><label class="model"><input id="model" type="checkbox"> 使用已配置模型调查复杂问题</label><p class="muted">原件保留，整理结果进入未核对草稿。</p></details></section>
+<section id="tasks-section" aria-labelledby="tasks-title"><div class="section-heading"><div><p class="eyebrow">后台整理 · 缺少事实时在此确认</p><h2 id="tasks-title">整理进度与待确认</h2></div></div><div id="jobs" aria-live="polite"><p>正在读取任务…</p></div></section>
+<section id="workspace-materials" aria-label="项目材料"></section>
+<section id="workspace-expenses" aria-label="项目费用"></section>
+<section id="result" hidden><h2>报销预览</h2><p id="summary"></p><div id="downloads" class="actions"></div><div id="pages"></div></section>
+<section id="mail" aria-labelledby="mail-heading">
+<div class="mail-heading"><div><h2 id="mail-heading">邮箱自动收件</h2><p id="mail-address" class="muted">正在读取邮箱配置…</p></div><div class="actions"><button id="mail-collect" type="button" disabled>立即收件</button><button id="mail-toggle" type="button" disabled>开启自动收件</button></div></div>
+<p id="mail-status" role="status"></p><p id="mail-error" role="alert" hidden></p>
+<details id="mail-settings"><summary>收件设置</summary><form id="mail-configure">
+<div class="mail-fields"><div><label for="mail-since">首次收件日期</label><input id="mail-since" type="date" required></div><div><label for="mail-interval">检查间隔（秒）</label><input id="mail-interval" type="number" min="60" max="3600" step="1" required></div></div>
+<label for="mail-project">邮件默认项目</label><select id="mail-project"><option value="">自动识别；无法确定时询问我</option></select>
+<p class="muted">选择固定项目后，后续邮件按此规则归属；“当前项目”的切换不改变收件规则。</p>
+<label class="model"><input id="mail-model" type="checkbox"> 使用已配置模型调查复杂问题</label>
+<p class="muted">沿用本机保存的授权码。材料整理后进入未核对报销预览，缺少依据时会在整理任务中询问。</p>
+<button id="mail-save" type="submit" disabled>保存收件设置</button></form></details>
+<div id="mail-messages" aria-live="polite"></div></section>
+</main>
+<aside id="workspace-details" aria-label="原件与费用详情"></aside>
+</div></body></html>

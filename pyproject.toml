@@ -12,6 +12,7 @@ dependencies = [
   "keyring>=25,<26",
   "lark-oapi>=1.7.3,<2",
   "Pillow>=10,<12",
+  "qrcode>=8,<9",
   "PyMuPDF>=1.24,<2",
   "rapidocr-onnxruntime>=1.4,<2",
   "typer>=0.12,<1",
@@ -43,7 +44,7 @@ module = ["pymupdf", "pymupdf.*"]
 ignore_missing_imports = true
 
 [[tool.mypy.overrides]]
-module = ["rapidocr_onnxruntime", "rapidocr_onnxruntime.*"]
+module = ["rapidocr_onnxruntime", "rapidocr_onnxruntime.*", "qrcode", "qrcode.*"]
 ignore_missing_imports = true
 
 [[tool.mypy.overrides]]

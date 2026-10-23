@@ -1,0 +1,25 @@
+/* Preview controls share the workbench tokens; printed pages keep their source colours. */
+html[data-theme]:is(.invoice-assistant,.embedded-workbench) #reportPreviewDialog{
+ width:1440px;max-width:calc(100vw - 32px);height:94dvh;max-height:94dvh;padding:var(--wb-dialog-padding);overflow:hidden;gap:0
+}
+#reportPreviewDialog .dialoghead{flex-shrink:0;gap:16px}
+html[data-theme]:is(.invoice-assistant,.embedded-workbench) #reportPreviewDialog .preview-tools{
+ display:flex;align-items:flex-end;gap:var(--wb-control-gap);margin:20px 0 0;padding-bottom:16px;border-bottom:1px solid var(--wb-line);flex-shrink:0
+}
+#reportPreviewDialog .preview-tools>.preview-filter{display:flex;flex-direction:column;gap:8px;min-width:140px;max-width:240px;flex:1}
+#reportPreviewDialog .preview-filter-label{font-size:var(--wb-font-control);line-height:20px;color:var(--wb-muted)}
+#reportPreviewDialog .preview-filter>.multi-filter{min-width:0;max-width:none;width:100%}
+#reportPreviewDialog .preview-tools .preview-tool-actions{display:flex;flex-wrap:wrap;gap:var(--wb-control-gap);margin-left:auto;align-items:center}
+html[data-theme]:is(.invoice-assistant,.embedded-workbench) #previewScope{margin:12px 0;line-height:20px;font-size:var(--wb-font-hint);color:var(--wb-muted)}
+html[data-theme]:is(.invoice-assistant,.embedded-workbench) #previewLoadState{margin-top:0;background:var(--wb-surface)}
+html[data-theme]:is(.invoice-assistant,.embedded-workbench) #previewFrame{
+ display:block;width:100%;flex:1;min-height:0;border:1px solid var(--wb-line);border-radius:var(--wb-control-radius);background:var(--wb-surface);color-scheme:normal
+}
+#reportPreviewDialog [hidden]{display:none!important}
+@media(max-width:680px){
+ html[data-theme]:is(.invoice-assistant,.embedded-workbench) #reportPreviewDialog{max-width:calc(100vw - 16px);height:96dvh;max-height:96dvh}
+ #reportPreviewDialog .preview-tools{flex-wrap:wrap}
+ #reportPreviewDialog .preview-tools>.preview-filter{min-width:0;max-width:none;flex:1}
+ #reportPreviewDialog .preview-tools .preview-tool-actions{width:100%;margin-left:0}
+ #reportPreviewDialog .preview-tool-actions button{flex:1}
+}

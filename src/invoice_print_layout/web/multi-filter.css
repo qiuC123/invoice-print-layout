@@ -1,0 +1,12 @@
+.multi-filter{position:relative;min-width:100px;max-width:176px;flex:none}
+.multi-filter[data-filter=personFilter]{min-width:138px}
+.multi-filter>select{display:none!important}
+html[data-theme]:is(.invoice-assistant,.embedded-workbench) .multi-filter>button{position:relative;width:100%;height:var(--wb-control-height);padding-inline:12px 34px;justify-content:flex-start;background-image:var(--wb-select-arrow);background-position:right 11px center;background-size:12px 12px;background-repeat:no-repeat}
+.multi-filter>button>span{overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
+.multi-filter-menu{position:absolute;top:calc(100% + 6px);left:0;z-index:100;min-width:220px;max-width:min(320px,calc(100vw - 40px));max-height:320px;overflow:auto;padding:6px;background:var(--wb-panel,#fff);color:var(--wb-text,#1f2329);border:1px solid var(--wb-line,#dee4ed);border-radius:var(--wb-control-radius,6px);box-shadow:0 8px 28px #0002;scrollbar-gutter:stable}
+.multi-filter-menu[hidden]{display:none}
+html[data-theme]:is(.invoice-assistant,.embedded-workbench) .multi-filter-menu>label{display:flex;align-items:center;gap:8px;min-height:var(--wb-control-height,40px);margin:0;padding:6px 8px;border-radius:4px;cursor:pointer;font-size:var(--wb-font-control,13px);line-height:20px;user-select:none}
+.multi-filter-menu>label:hover,.multi-filter-menu>label:focus-within{background:var(--wb-hover,#f0f4ff)}
+.multi-filter-menu input[type=checkbox]{width:16px;height:16px;min-width:16px;flex:0 0 16px;margin:0;padding:0;accent-color:var(--wb-accent,#245ee5)}
+.multi-filter-menu label:has(input:checked){background:var(--wb-selected,#edf3ff)}
+.multi-filter-menu>label>span{min-width:0;flex:1;overflow-wrap:anywhere}

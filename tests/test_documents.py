@@ -1,13 +1,16 @@
 from __future__ import annotations
 
 from decimal import Decimal
+import hashlib
 from pathlib import Path
 
+import pymupdf
 import pytest
 
 from invoice_print_layout.documents import (
     PdfInspectionError,
     classify_text,
+    compact_text,
     detect_provider,
     inspect_pdf,
     pair_documents,
@@ -43,6 +46,77 @@ def test_unrecognized_text_fails_closed() -> None:
         classify_text("普通文档，没有票据信息")
 
 
+def test_compatibility_characters_normalize_for_the_same_explicit_invoice_fields() -> None:
+    text = ("电⼦发票（普通发票） 价税合计（⼩写）￥１６．７９ "
+            "开票⽇期：２０２６年１０⽉０６⽇ 发票号码：１２３４５６７８９０１２３４５６７８９０")
+    assert compact_text("电 ⼦ 发票 ￥１６．７９") == "电子发票¥16.79"
+    assert classify_text(text) is DocumentKind.INVOICE
+    assert parse_amount(text, DocumentKind.INVOICE) == Decimal("16.79")
+    assert parse_invoice_date(text).isoformat() == "2026-10-06"
+    assert parse_invoice_number(text) == "12345678901234567890"
+
+
+def test_compatibility_invoice_number_on_a_separate_line_returns_ascii() -> None:
+    text = "电⼦发票 发票号码：开票⽇期：\n１２３４５６７８９０１２３４５６７８９０\n２０２６年１０⽉０６⽇"
+    assert parse_invoice_number(text) == "12345678901234567890"
+    assert parse_invoice_date(text).isoformat() == "2026-10-06"
+
+
+def test_native_compatibility_pdf_inspection_keeps_original_bytes(tmp_path: Path) -> None:
+    path = tmp_path / "synthetic-compatibility-invoice.pdf"
+    with pymupdf.open() as document:
+        page = document.new_page(width=595, height=410)
+        for y, line in ((45, "电⼦发票（普通发票）"),
+                        (90, "发票号码：１２３４５６７８９０１２３４５６７８９０"),
+                        (120, "开票⽇期：２０２６年１０⽉０６⽇"),
+                        (180, "价税合计（⼩写）￥１６．７９")):
+            page.insert_text((35, y), line, fontname="china-s", fontsize=12)
+        document.save(path)
+    before = path.read_bytes()
+    parsed = inspect_pdf(path)
+    assert parsed.kind is DocumentKind.INVOICE and parsed.provider is RideProvider.UNKNOWN
+    assert parsed.amount == Decimal("16.79") and parsed.invoice_number == "12345678901234567890"
+    assert parsed.invoice_date is not None and parsed.invoice_date.isoformat() == "2026-10-06"
+    assert parsed.sha256 == hashlib.sha256(before).hexdigest()
+    assert path.read_bytes() == before
+
+
+def test_compatibility_normalization_does_not_invent_invoice_evidence(tmp_path: Path) -> None:
+    with pytest.raises(PdfInspectionError, match="无法识别"):
+        classify_text("电⼦资料（⼩写）￥１６．７９ ２０２６年１０⽉０６⽇")
+    path = tmp_path / "unknown-scan.pdf"
+    with pymupdf.open() as document:
+        page = document.new_page()
+        # An image-only page still has no native invoice fields after NFKC.
+        pixel = pymupdf.Pixmap(pymupdf.csRGB, pymupdf.IRect(0, 0, 2, 2), False)
+        pixel.clear_with(255)
+        page.insert_image(page.rect, pixmap=pixel)
+        document.save(path)
+    before = path.read_bytes()
+    with pytest.raises(PdfInspectionError, match="无可提取文字"):
+        inspect_pdf(path)
+    assert path.read_bytes() == before
+
+
+@pytest.mark.parametrize("summary", [
+    "共1次行程；合计11.85元", "共计1单行程，合计11.85元",
+    "共2个行程，合计11.85元", "共1笔行程，合计11.85元",
+])
+def test_platform_summary_variants_have_the_same_native_structure(summary: str) -> None:
+    text = "腾讯出行服务—打车——行程单 上车时间 起点 终点 金额 " + summary
+    assert classify_text(text) is DocumentKind.TRIP
+    assert parse_amount(text, DocumentKind.TRIP) == Decimal("11.85")
+
+
+def test_image_heading_trip_requires_all_native_business_fields() -> None:
+    body = ("用车人手机号 行程总计：共1笔行程，总计可开票金额6.30元 "
+            "序号 订单类型 上车时间 所在城市 起点/终点 可开票金额")
+    assert classify_text(body) is DocumentKind.TRIP
+    assert parse_amount(body, DocumentKind.TRIP) == Decimal("6.30")
+    with pytest.raises(PdfInspectionError):
+        classify_text(body.replace("用车人手机号", ""))
+
+
 def test_structural_trip_recognition_requires_complete_evidence() -> None:
     unknown_trip = (
         "新平台行程单 共1笔行程，合计44.60元 "
@@ -68,9 +142,51 @@ def test_parse_caocao_text_and_extraction_order() -> None:
     assert detect_provider(trip_text) is RideProvider.CAOCAO
     assert detect_provider(invoice_text) is RideProvider.CAOCAO
     assert parse_amount(trip_text, DocumentKind.TRIP) == Decimal("52.14")
-    assert parse_amount(invoice_text, DocumentKind.INVOICE) == Decimal("52.14")
+    # Currency-last cannot determine which value is the printed small total.
+    with pytest.raises(PdfInspectionError, match="未找到发票价税合计"):
+        parse_amount(invoice_text, DocumentKind.INVOICE)
     assert parse_invoice_date(invoice_text).isoformat() == "2026-09-03"
     assert parse_invoice_number(invoice_text) == "12345678901234567890"
+
+
+def test_invoice_text_never_joins_a_bare_currency_to_invoice_number_and_year() -> None:
+    text = ("电子发票\n价税合计（大写）\n（小写）\n¥\n"
+            "12345678901234567890\n2026年10月06日\n17.72")
+    with pytest.raises(PdfInspectionError, match="未找到发票价税合计"):
+        parse_amount(text, DocumentKind.INVOICE)
+    with pytest.raises(PdfInspectionError, match="存在歧义"):
+        parse_amount("电子发票\n（小写）¥17.72\n（小写）¥19.44", DocumentKind.INVOICE)
+
+
+@pytest.mark.parametrize('amount,total_x', [('17.72', 430), ('61.03', 465), ('9.18', 485)])
+def test_labels_first_native_invoice_uses_positioned_small_total(
+        tmp_path: Path, amount: str, total_x: int) -> None:
+    path = tmp_path / 'synthetic-labels-first-invoice.pdf'
+    with pymupdf.open() as document:
+        page = document.new_page(width=800, height=500)
+        labels = [(35, 40, '电子发票'), (400, 80, '发票号码：'), (400, 110, '开票日期：'),
+                  (35, 300, '价税合计（大写）'), (360, 300, '（小写）'), (35, 160, '金额'),
+                  (650, 180, '税额')]
+        for x, y, line in labels:
+            page.insert_text((x, y), line, fontname='china-s', fontsize=11)
+        # Values follow all labels in the PDF stream, independently of their
+        # visual locations. A naked final currency precedes ticket ID/date.
+        for x, y, line in [(70, 190, '15.33'), (700, 210, '2.39'),
+                           (total_x, 300, amount), (total_x - 15, 300, '¥')]:
+            page.insert_text((x, y), line, fontsize=11)
+        page.insert_text((520, 80), '12345678901234567890', fontsize=11)
+        page.insert_text((520, 110), '2026年10月06日', fontname='china-s', fontsize=11)
+        document.save(path)
+    before = path.read_bytes()
+    with pymupdf.open(path) as document:
+        text = document[0].get_text()
+    with pytest.raises(PdfInspectionError, match='未找到发票价税合计'):
+        parse_amount(text, DocumentKind.INVOICE)
+    parsed = inspect_pdf(path)
+    assert parsed.amount == Decimal(amount)
+    assert parsed.invoice_number == '12345678901234567890'
+    assert parsed.invoice_date is not None and parsed.invoice_date.isoformat() == '2026-10-06'
+    assert parsed.sha256 == hashlib.sha256(before).hexdigest() and path.read_bytes() == before
 
 
 def test_inspect_xiangdao_with_positioned_invoice_amount(tmp_path: Path) -> None:

@@ -15,6 +15,7 @@ import pytest
 from PIL import Image
 
 import invoice_print_layout.reimbursement as report
+import invoice_print_layout.report_print_preview as print_preview
 from invoice_print_layout.workbench import ExpenseStore
 from invoice_print_layout.report_excel import TEMPLATE_NAME, create_excel, install_template
 from invoice_print_layout.workbench_web import make_server
@@ -29,10 +30,18 @@ def store(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> ExpenseStore:
     (store.root / TEMPLATE_NAME).write_bytes(b'synthetic template')
     monkeypatch.setattr(report, 'validate_template', lambda _: None)
     monkeypatch.setattr(report, 'spreadsheet_runtime', lambda: (Path('node'), Path('modules')))
-    def excel(template: Path, items: list[dict[str, Any]], options: dict[str, str], output: Path) -> None:
+    def excel(template: Path, items: list[dict[str, Any]], options: dict[str, str], output: Path, *,
+              summary_pdf: Path | None = None) -> None:
         assert all(x['pages'] for x in items)
         output.write_bytes(b'synthetic excel')
+        if summary_pdf is not None:
+            with pymupdf.open() as document:
+                page = document.new_page(width=842, height=595)
+                page.insert_text((30, 30), 'SYNTHETIC COMPANY TABLE')
+                page.insert_text((30, 60), f"Total {sum(x['amount_cents'] for x in items) / 100:.2f}")
+                document.save(summary_pdf)
     monkeypatch.setattr(report, 'create_excel', excel)
+    monkeypatch.setattr(print_preview, 'create_excel', excel)
     return store
 
 
@@ -207,7 +216,10 @@ def test_trial_http_renders_pages_without_submitting(store: ExpenseStore, tmp_pa
         with urlopen(Request(url + '/api/report-preview', data=body,
                              headers={'Content-Type': 'application/json', 'X-Workbench-Token': state['token']})) as response:
             result = json.load(response)
-        assert len(result['preview_pages']) == 1
+        assert result['table_page_count'] == 1
+        assert len(result['preview_pages']) == result['page_count'] == 2
+        assert result['combined_preview_pages'] == result['preview_pages']
+        assert result['combined_pdf'] == result['pdf']
         with urlopen(url + '/export/' + quote(result['preview_pages'][0])) as response:
             assert response.headers['Content-Type'] == 'image/png'
             assert response.read().startswith(b'\x89PNG\r\n\x1a\n')

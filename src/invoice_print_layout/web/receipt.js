@@ -3,7 +3,7 @@
 const receiptDialog = document.createElement('dialog');
 receiptDialog.id = 'receiptDialog';
 receiptDialog.className = 'receipt-dialog';
-receiptDialog.innerHTML = `<div class="dialoghead"><h2>批量上传凭证并识别</h2><button id="closeReceipt" aria-label="关闭凭证识别">×</button></div>
+receiptDialog.innerHTML = `<div class="dialoghead"><h2>批量上传凭证并识别</h2><button id="closeReceipt" aria-label="关闭凭证识别" class="dialog-close" type="button">×</button></div>
 <p class="muted">本地 OCR · 可多选 PNG/JPG/WebP，每张最多20MB，每批最多50张、合计200MB。逐张识别，核对后再保存；关闭页面不会保存尚未入账的图片。</p>
 <label>选择购买凭证截图（可多选、可追加）<input id="receiptFile" type="file" accept=".png,.jpg,.jpeg,.webp" multiple></label>
 <p id="receiptProgress" role="status"></p><div id="receiptError" role="alert" hidden></div>
@@ -43,7 +43,7 @@ function closeReceipt() {
   if(receiptUnsaved()&&!confirm('尚有未保存的凭证，关闭后需要重新选择。确定关闭吗？'))return;
   receiptDialog.close();
 }
-$('recognizeReceipt').onclick=async()=>{
+if($('recognizeReceipt'))$('recognizeReceipt').onclick=async()=>{
   try { if(!state.token) await load(); clearReceipt(); receiptDialog.showModal(); }
   catch(e) { notify(e.message,true); }
 };
@@ -58,7 +58,7 @@ function captureReceipt() {
   const form=$('receiptForm'), x=receiptQueue[receiptIndex];
   if(!form||!x||receiptBusy)return;
   const {role,...fields}=Object.fromEntries(new FormData(form));
-  x.role=role; x.fields=fields;
+  x.role=role; x.fields={...x.fields,...fields};
 }
 function showReceipt(index) {
   receiptIndex=index; const x=receiptQueue[index]; if(!x)return;
@@ -111,7 +111,7 @@ async function recognizeReceipts(indices) {
         x.result=await api('recognize',await readReceiptFile(x.file));
         x.duplicates=x.result.duplicates;
         x.status=x.duplicates.length?'duplicate':'ready';
-        x.fields={...x.result.fields,project:$('projectFilter').value||''}; x.role=x.result.role;
+        x.fields={...x.result.fields,project:projectContext()?.name||''}; x.role=x.result.role;
       } catch(error){x.status='error';x.error=error.message;}
       receiptSummary();
     }
@@ -150,7 +150,7 @@ async function saveReceipts(indices) {
       } catch(error){x.status='save-error';x.error=error.message;}
       receiptSummary();
     }
-    if(savedCount){view='all';$('projectFilter').value='';$('categoryFilter').value='';$('search').value='';
+    if(savedCount){view='all';setExpenseFilterValues('categoryFilter',[]);$('search').value='';
       try{await load();}catch(error){refreshError='凭证已保存，但列表刷新失败，请稍后刷新工作台。';}}
   } finally {
     receiptButtons(false);

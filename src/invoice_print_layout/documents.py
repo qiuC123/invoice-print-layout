@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import re
+import unicodedata
 from collections import defaultdict
 from datetime import date
 from decimal import Decimal, InvalidOperation
@@ -22,14 +23,19 @@ class PdfInspectionError(ValueError):
     """Raised when a PDF cannot be handled without guessing."""
 
 
+class InvoiceAmountAmbiguity(PdfInspectionError):
+    """Explicit invoice total fields disagree."""
+
+
 _NUMBER = r"([0-9]+(?:\.[0-9]{1,2})?)"
 _TRIP_AMOUNT_PATTERNS = (
-    re.compile(rf"共\d+笔行程[，,]?合计[¥￥]?{_NUMBER}元?"),
+    re.compile(rf"共(?:计)?\d+(?:笔|次|个|单)行程[，,;；。]?(?:合计|总计可开票金额)[¥￥]?{_NUMBER}元?"),
     re.compile(rf"TRIPTOTAL[:：]?[¥￥]?{_NUMBER}", re.IGNORECASE),
 )
 _INVOICE_AMOUNT_PATTERNS = (
-    re.compile(rf"(?:（小写）|\(小写\))[¥￥]?{_NUMBER}"),
-    re.compile(rf"TOTALWITHTAX[:：]?[¥￥]?{_NUMBER}", re.IGNORECASE),
+    re.compile(rf"(?:（小写）|\(小写\))[¥￥]?{_NUMBER}(?![0-9.])"),
+    re.compile(rf"TOTALWITHTAX[:：]?[¥￥]?{_NUMBER}(?![0-9.])", re.IGNORECASE),
+    re.compile(rf"价税合计[:：]?[¥￥]?{_NUMBER}(?![0-9.])"),
 )
 _INVOICE_DATE_PATTERNS = (
     re.compile(r"开票日期[:：]?(\d{4})年(\d{1,2})月(\d{1,2})日"),
@@ -45,7 +51,9 @@ _ENGLISH_TRIP_COLUMNS = ("PICKUP", "DESTINATION", "AMOUNT")
 
 
 def compact_text(text: str) -> str:
-    return re.sub(r"\s+", "", text)
+    # Some native PDF character maps emit compatibility radicals (电⼦) or
+    # full-width digits. Normalize comparison text, never the source PDF.
+    return re.sub(r"\s+", "", unicodedata.normalize("NFKC", text))
 
 
 def _has_structural_trip_evidence(compact: str) -> bool:
@@ -56,7 +64,11 @@ def _has_structural_trip_evidence(compact: str) -> bool:
     english_title = "TRIPTABLE" in upper
     english_summary = "TRIPTOTAL" in upper
     english_columns = all(marker in upper for marker in _ENGLISH_TRIP_COLUMNS)
-    return (chinese_title and chinese_summary and chinese_columns) or (
+    image_heading_structure = all(marker in compact for marker in (
+        "用车人手机号", "行程总计", "订单类型", "所在城市", "起点/终点", "可开票金额",
+    ))
+    return (chinese_summary and chinese_columns and
+            (chinese_title or image_heading_structure)) or (
         english_title and english_summary and english_columns
     )
 
@@ -166,23 +178,32 @@ def _parse_positioned_invoice_amount(page: pymupdf.Page) -> Decimal:
 
 
 def parse_amount(text: str, kind: DocumentKind) -> Decimal:
+    if kind is DocumentKind.INVOICE:
+        # Native PDF stream order can put labels first, then a bare currency
+        # glyph followed by an invoice number/date. A monetary label and its
+        # value must share a text row; ambiguous layouts require page geometry.
+        amounts: set[Decimal] = set()
+        for row in text.splitlines():
+            for pattern in _INVOICE_AMOUNT_PATTERNS:
+                for invoice_match in pattern.finditer(compact_text(row)):
+                    try:
+                        amounts.add(Decimal(invoice_match.group(1)).quantize(Decimal("0.01")))
+                    except InvalidOperation as exc:
+                        raise PdfInspectionError("金额格式无效") from exc
+        if len(amounts) == 1:
+            return amounts.pop()
+        if amounts:
+            raise InvoiceAmountAmbiguity("发票价税合计存在歧义，请按小写金额位置核对")
+        raise PdfInspectionError("未找到发票价税合计")
     compact = compact_text(text)
-    patterns = _TRIP_AMOUNT_PATTERNS if kind is DocumentKind.TRIP else _INVOICE_AMOUNT_PATTERNS
-    for pattern in patterns:
+    for pattern in _TRIP_AMOUNT_PATTERNS:
         match = pattern.search(compact)
         if match:
             try:
                 return Decimal(match.group(1)).quantize(Decimal("0.01"))
             except InvalidOperation as exc:
                 raise PdfInspectionError("金额格式无效") from exc
-    if kind is DocumentKind.INVOICE and "价税合计" in compact:
-        currency_amounts = re.findall(rf"[¥￥]{_NUMBER}", compact)
-        if currency_amounts:
-            try:
-                return Decimal(currency_amounts[-1]).quantize(Decimal("0.01"))
-            except InvalidOperation as exc:
-                raise PdfInspectionError("金额格式无效") from exc
-    raise PdfInspectionError("未找到行程合计" if kind is DocumentKind.TRIP else "未找到发票价税合计")
+    raise PdfInspectionError("未找到行程合计")
 
 
 def parse_invoice_date(text: str) -> date:
@@ -213,9 +234,9 @@ def parse_invoice_number(text: str) -> str:
             return match.group(1)
     if "发票号码" in compact or "INVOICENUMBER" in compact.upper():
         candidates = {
-            line.strip()
+            unicodedata.normalize("NFKC", line).strip()
             for line in text.splitlines()
-            if re.fullmatch(r"\d{8,24}", line.strip())
+            if re.fullmatch(r"\d{8,24}", unicodedata.normalize("NFKC", line).strip())
         }
         if len(candidates) == 1:
             return candidates.pop()
@@ -230,6 +251,49 @@ def sha256_file(path: Path) -> str:
     return digest.hexdigest()
 
 
+def _multi_page_invoice_fields(
+    document: pymupdf.Document, page_texts: list[str],
+) -> tuple[Decimal, date, str]:
+    """Accept complete, ordered pages of one invoice, never concatenated bills."""
+    identities: set[tuple[str, date]] = set()
+    amounts: set[Decimal] = set()
+    for index, text in enumerate(page_texts):
+        compact = compact_text(text)
+        if classify_text(text) is not DocumentKind.INVOICE:
+            raise PdfInspectionError("多页发票中含有无法确认身份的页面")
+        numbering = re.findall(r"共([0-9]+)页第([0-9]+)页", compact)
+        if numbering != [(str(document.page_count), str(index + 1))]:
+            raise PdfInspectionError("多页发票页码不完整或顺序不一致，请核对原件")
+        number = parse_invoice_number(text)
+        invoice_date = parse_invoice_date(text)
+        numbers = {match.group(1) for pattern in _INVOICE_NUMBER_PATTERNS
+                   for match in pattern.finditer(compact)}
+        try:
+            dates = {date(*(int(value) for value in match.groups()))
+                     for pattern in _INVOICE_DATE_PATTERNS for match in pattern.finditer(compact)}
+        except ValueError as exc:
+            raise PdfInspectionError("开票日期无效") from exc
+        if (numbers and numbers != {number}) or (dates and dates != {invoice_date}):
+            raise PdfInspectionError("多页发票的票号或开票日期存在歧义")
+        identities.add((number, invoice_date))
+        if any(marker in compact.upper() for marker in ("价税合计", "小写", "TOTALWITHTAX", "(SMALL)")):
+            try:
+                amount = parse_amount(text, DocumentKind.INVOICE)
+            except InvoiceAmountAmbiguity:
+                raise
+            except PdfInspectionError:
+                amount = _parse_positioned_invoice_amount(document.load_page(index))
+            amounts.add(amount)
+    if len(identities) != 1:
+        raise PdfInspectionError("多页发票的票号或开票日期不一致，请勿合并不同发票")
+    if not amounts:
+        raise PdfInspectionError("未找到发票价税合计")
+    if len(amounts) != 1:
+        raise PdfInspectionError("多页发票价税合计存在歧义，请检查")
+    number, invoice_date = identities.pop()
+    return amounts.pop(), invoice_date, number
+
+
 def inspect_pdf(path: Path) -> PdfDocument:
     try:
         document = pymupdf.open(path)
@@ -241,29 +305,37 @@ def inspect_pdf(path: Path) -> PdfDocument:
             raise PdfInspectionError("PDF 已加密")
         if document.page_count < 1:
             raise PdfInspectionError("PDF 没有页面")
-        text = "\n".join(
+        page_texts = [
             document.load_page(index).get_text("text")
             for index in range(document.page_count)
-        )
+        ]
+        text = "\n".join(page_texts)
         if not compact_text(text):
             raise PdfInspectionError("PDF 无可提取文字，可能是扫描件")
         kind = classify_text(text)
+        if kind is DocumentKind.INVOICE and document.page_count == 1:
+            numbering = re.findall(r"共([0-9]+)页第([0-9]+)页", compact_text(text))
+            if numbering and numbering != [("1", "1")]:
+                raise PdfInspectionError("发票页码不完整，请补齐同一张发票的全部页面")
         freight_evidence = _freight_evidence(text)
         if freight_evidence is not None:
             raise PdfInspectionError(
                 f"检测到货运相关标识“{freight_evidence}”，不能按打车自动配对；请核对业务类别和所需材料"
             )
         provider = detect_provider(text)
-        try:
-            amount = parse_amount(text, kind)
-        except PdfInspectionError:
-            if kind is not DocumentKind.INVOICE or document.page_count != 1:
-                raise
-            amount = _parse_positioned_invoice_amount(document.load_page(0))
-        invoice_date = parse_invoice_date(text) if kind is DocumentKind.INVOICE else None
-        invoice_number = parse_invoice_number(text) if kind is DocumentKind.INVOICE else None
-        if kind is DocumentKind.INVOICE and document.page_count != 1:
-            raise PdfInspectionError("第一版只支持单页电子发票")
+        invoice_date: date | None
+        invoice_number: str | None
+        if kind is DocumentKind.INVOICE and document.page_count > 1:
+            amount, invoice_date, invoice_number = _multi_page_invoice_fields(document, page_texts)
+        else:
+            try:
+                amount = parse_amount(text, kind)
+            except PdfInspectionError:
+                if kind is not DocumentKind.INVOICE:
+                    raise
+                amount = _parse_positioned_invoice_amount(document.load_page(0))
+            invoice_date = parse_invoice_date(text) if kind is DocumentKind.INVOICE else None
+            invoice_number = parse_invoice_number(text) if kind is DocumentKind.INVOICE else None
         return PdfDocument(
             path=path,
             kind=kind,

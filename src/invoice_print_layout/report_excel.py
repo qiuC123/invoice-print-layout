@@ -6,9 +6,12 @@ import os
 from pathlib import Path
 import shutil
 import subprocess
+import re
 from typing import Any
 from xml.etree import ElementTree as ET
 import zipfile
+
+from invoice_print_layout.report_types import REPORT_LABELS, report_types
 
 TEMPLATE_NAME = '报销模板.xlsx'
 PAYMENTS = {'personal': ('H', '现场现金支付（需报销）')}
@@ -37,6 +40,12 @@ def validate_template(path: Path) -> None:
             for key, part in [('D6', '实际消费'), ('H6', '需报销'), ('A24', '材料')]:
                 if part not in cells.get(key, ''):
                     raise ValueError('模板布局不同，不能自动填写')
+            for row, label in REPORT_LABELS.items():
+                if re.sub(r'\s+', '', cells.get(f'B{row}', '')) != label:
+                    raise ValueError('模板二级分类不同，不能自动填写')
+            for section in report_types():
+                if re.sub(r'\s+', '', cells.get(f"A{section['rows'][0]}", '')) != section['label']:
+                    raise ValueError('模板一级分类不同，不能自动填写')
     except (zipfile.BadZipFile, KeyError, ET.ParseError, IndexError) as exc:
         raise ValueError('报销模板不是有效的 XLSX 文件') from exc
 
@@ -51,20 +60,23 @@ def spreadsheet_runtime() -> tuple[Path, Path]:
 
 
 def create_excel(template: Path, items: list[dict[str, Any]], options: dict[str, str], output: Path,
-                 *, preview: Path | None = None) -> None:
+                 *, preview: Path | None = None, summary_pdf: Path | None = None) -> None:
     validate_template(template)
     node, modules = spreadsheet_runtime()
     if options['payment'] not in PAYMENTS:
         raise ValueError('当前报销表仅填写现场现金支付（需报销）列，请刷新工作台后重试')
     column, label = PAYMENTS[options['payment']]
-    projects = list(dict.fromkeys(x['project'] for x in items))
     from invoice_print_layout.report_snapshot import snapshot
-    payload = {'template': str(template), 'output': str(output), 'items': items, 'snapshot': snapshot(items),
+    report = snapshot(items)
+    items = report['items']
+    projects = list(dict.fromkeys(x['project'] for x in items))
+    payload = {'template': str(template), 'output': str(output), 'items': items, 'snapshot': report,
                'project': projects[0] if len(projects) == 1 else '多个项目（详见明细）',
                'person': options['person'], 'period': options['period'],
                'payment_column': column, 'payment_label': label,
-               'total_cents': sum(x['amount_cents'] for x in items),
-               'preview': str(preview) if preview else None}
+               'total_cents': report['total_cents'],
+               'preview': str(preview) if preview else None,
+               'summary_pdf': str(summary_pdf) if summary_pdf else None}
     source = output.with_suffix('.input.json')
     source.write_text(json.dumps(payload, ensure_ascii=False), encoding='utf-8')
     try:
@@ -77,10 +89,50 @@ def create_excel(template: Path, items: list[dict[str, Any]], options: dict[str,
         if not output.is_file():
             raise ValueError('Excel未生成')
         _set_print_layout(output, len(items))
+        if summary_pdf is not None:
+            _export_summary_pdf(source)
+            _fit_summary_pdf(summary_pdf, report['total_cents'])
     except subprocess.TimeoutExpired as exc:
         raise ValueError('Excel制作超时，请减少本次事项数量后重试') from exc
     finally:
         source.unlink(missing_ok=True)
+
+
+def _export_summary_pdf(payload: Path) -> None:
+    """Render the existing template with the machine's offline native Excel."""
+    script = Path(__file__).with_name('report_excel_pdf.ps1')
+    try:
+        result = subprocess.run(['powershell.exe', '-NoProfile', '-NonInteractive', '-File', str(script),
+                                 '-PayloadPath', str(payload.resolve())], capture_output=True, text=True,
+                                encoding='utf-8', errors='replace', timeout=120,
+                                creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise ValueError('本机Excel主表PDF导出未完成，请检查Excel是否可用后重试') from exc
+    if result.returncode:
+        raise ValueError('本机Excel主表PDF导出失败：' + result.stderr[-1200:])
+
+
+def _fit_summary_pdf(path: Path, total_cents: int) -> None:
+    """Retain the complete vector form using its existing fit-to-one-A4 rule."""
+    import pymupdf
+    from invoice_print_layout.layout import A4_HEIGHT, A4_WIDTH
+    replacement = path.with_suffix('.a4.pdf')
+    try:
+        with pymupdf.open(path) as source:  # type: ignore[no-untyped-call]
+            text = ''.join(source[0].get_text().split()) if len(source) else ''
+            if (len(source) != 1 or '活动运营费用统计表' not in text or '费用合计' not in text or
+                    f'{total_cents / 100:,.2f}'.replace(',', '') not in text.replace(',', '')):
+                raise ValueError('报销主表PDF文字或金额不完整，未生成打印包')
+            if (abs(source[0].rect.width - A4_WIDTH) < 1 and
+                    abs(source[0].rect.height - A4_HEIGHT) < 1):
+                return
+            with pymupdf.open() as output:  # type: ignore[no-untyped-call]
+                page = output.new_page(width=A4_WIDTH, height=A4_HEIGHT)
+                page.show_pdf_page(pymupdf.Rect(12, 12, A4_WIDTH - 12, A4_HEIGHT - 12), source, 0)  # type: ignore[no-untyped-call]
+                output.save(replacement, garbage=4, deflate=True)
+        replacement.replace(path)
+    finally:
+        replacement.unlink(missing_ok=True)
 
 
 def _set_print_layout(output: Path, count: int) -> None:
@@ -97,7 +149,7 @@ def _set_print_layout(output: Path, count: int) -> None:
             names = ET.SubElement(workbook, tag('definedNames'))
             for index, sheet in enumerate(sheets[:2]):
                 name = "'" + (sheet.get('name') or '').replace("'", "''") + "'"
-                area = '$A$1:$M$36' if index == 0 else f'$A$1:$L${count+2}'
+                area = '$A$1:$M$36' if index == 0 else f'$A$1:$M${count+2}'
                 ET.SubElement(names, tag('definedName'), {'name': '_xlnm.Print_Area', 'localSheetId': str(index)}).text = name + '!' + area
                 if index == 1:
                     ET.SubElement(names, tag('definedName'), {'name': '_xlnm.Print_Titles', 'localSheetId': '1'}).text = name + '!$1:$1'

@@ -46,6 +46,36 @@ def test_dining_persists_without_becoming_delivery_or_verified(tmp_path: Path) -
     assert not evaluate('外卖', {'invoice', 'purchase'})['complete']
 
 
+@pytest.mark.parametrize('category', ['餐饮', '材料采购'])
+@pytest.mark.parametrize('voucher', ['invoice', 'receipt'])
+def test_voucher_payment_requires_both_materials(category: str, voucher: str) -> None:
+    result = evaluate(category, {voucher}, material_basis='invoice_payment')
+    assert result['missing'] == ['付款截图'] and not result['complete']
+    assert evaluate(category, {voucher, 'payment'}, material_basis='invoice_payment')['complete']
+    assert evaluate(category, {'purchase', 'payment'}, material_basis='invoice_payment')['missing'] == ['发票或收据']
+    assert evaluate(category, {'order', 'payment'}, material_basis='invoice_payment')['missing'] == ['发票或收据']
+    assert evaluate(category, {'invoice', 'order'}, material_basis='invoice_payment')['missing'] == ['付款截图']
+
+
+def test_voucher_payment_changes_require_review_and_real_files(tmp_path: Path) -> None:
+    store = ExpenseStore(tmp_path)
+    item = store.create({'title': 'Receipt and payment', 'category': '餐饮', 'amount': '15.00',
+                         'material_basis': 'invoice_payment', 'invoice_state': 'requested'})
+    receipt = store.add_attachment(item['id'], 'receipt.pdf', make_invoice_pdf(tmp_path/'receipt.pdf').read_bytes(), 'receipt')
+    assert receipt['missing'] == ['付款截图']
+    item = store.add_attachment(item['id'], 'payment.pdf', make_trip_pdf(tmp_path/'payment.pdf').read_bytes(), 'payment')
+    assert item['complete'] and not item['verified'] and not item['ready']
+    reopened = ExpenseStore(tmp_path).get(item['id'])
+    assert reopened['material_basis'] == 'invoice_payment' and reopened['complete']
+    store.transition(item['id'], 'verify')
+    updated = store.update(item['id'], {**store.get(item['id']), 'note': 'Payment checked again'})
+    assert updated['complete'] and not updated['verified']
+    with store.connect() as db:
+        payment_path = Path(db.execute("SELECT path FROM attachments WHERE item_id=? AND role='payment'", (item['id'],)).fetchone()['path'])
+    payment_path.unlink()
+    assert store.get(item['id'])['missing'] == ['付款截图']
+
+
 @pytest.mark.parametrize('amount', ['NaN','Infinity','-1','1.001','bad'])
 def test_invalid_amount(amount: str) -> None:
     with pytest.raises(ValueError):
@@ -161,7 +191,7 @@ def test_http_requires_loopback_host_token_and_origin(tmp_path: Path) -> None:
             item=json.load(response)
         assert item['missing']==['12306发票']
         with urlopen(url+'/') as response:
-            assert '报销材料工作台' in response.read().decode()
+            assert '发票助手' in response.read().decode()
         exported=tmp_path/'工作台'/'导出'
         exported.mkdir(exist_ok=True)
         (exported/'中文.md').write_text('测试清单',encoding='utf-8')

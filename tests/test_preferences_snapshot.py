@@ -33,6 +33,35 @@ def test_receipt_default_is_explicit_business_preference(tmp_path: Path) -> None
     assert prefs.apply(item, receipt=False)['changes'] == {}
 
 
+@pytest.mark.parametrize('basis', ['standard', 'invoice_payment', 'payment_only'])
+def test_material_basis_preferences_are_persistent_and_per_item(tmp_path: Path, basis: str) -> None:
+    store = ExpenseStore(tmp_path)
+    item = store.create({'title': '本笔餐饮', 'category': '餐饮', 'amount': '14'})
+    other = store.create({'title': '另一笔餐饮', 'category': '餐饮', 'amount': '14'})
+    prefs = Preferences(store)
+    rule = prefs.save({'kind': 'material_basis', 'scope': 'item', 'match': item['id'], 'value': basis})
+
+    reopened = Preferences(ExpenseStore(tmp_path))
+    assert reopened.apply(item)['changes'] == {'material_basis': basis}
+    assert reopened.apply(other)['changes'] == {}
+    assert store.get(item['id'])['material_basis'] == 'standard'
+    assert not store.get(item['id'])['verified']
+
+    changed = store.update(item['id'], {**item, **reopened.apply(item)['changes']})
+    assert changed['material_basis'] == basis and not changed['verified']
+    assert store.get(other['id'])['material_basis'] == 'standard'
+    reopened.save({**rule, 'enabled': False})
+    assert reopened.apply(changed)['changes'] == {}
+
+
+@pytest.mark.parametrize('scope', ['exact_content', 'receipt_default'])
+def test_invoice_payment_preference_cannot_apply_to_other_expenses(tmp_path: Path, scope: str) -> None:
+    prefs = Preferences(ExpenseStore(tmp_path))
+    with pytest.raises(ValueError, match='仅限本笔'):
+        prefs.save({'kind': 'material_basis', 'scope': scope, 'match': '餐饮',
+                    'purpose': '现场餐饮', 'value': 'invoice_payment'})
+
+
 def test_raincoat_display_group_does_not_merge_ledger(tmp_path: Path) -> None:
     store = ExpenseStore(tmp_path)
     a = store.create({'title': '商家 · 雨衣（规格一）', 'category': '材料采购', 'project': '甲', 'amount': '88.70'})

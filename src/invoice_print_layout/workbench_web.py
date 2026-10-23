@@ -1,4 +1,4 @@
-"""Loopback-only workbench. No third-party web assets or exposed credentials."""
+"""Local workbench with explicitly paired, optional LAN phone access."""
 from __future__ import annotations
 
 import argparse
@@ -13,30 +13,46 @@ import time
 from datetime import date
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from typing import Any, cast
+from typing import Any, TYPE_CHECKING, cast
 from urllib.parse import parse_qs, quote, unquote, urlparse
 
 from invoice_print_layout.workbench import ExpenseStore, CATEGORIES, ROLES, STAGES
 from invoice_print_layout.storage import ensure_workspace
 from invoice_print_layout.reliability import read_json, save_json
-from invoice_print_layout.logistics import LogisticsStore
-from invoice_print_layout.project_todos import ProjectTodos
-from invoice_print_layout.photo_schedule import PhotoSchedules
-from invoice_print_layout.photo_briefs import PhotoBriefs
-from invoice_print_layout.wechat_inbox import WeChatInbox
-from invoice_print_layout.workbench_runtime import runtime_info, source_build_id
+from invoice_print_layout.workbench_runtime import APP_MODES, runtime_info, source_build_id
+from invoice_print_layout.phone_link import PhoneLink, drain_rejected_body
 from invoice_print_layout.automatic_category import AutomaticCategory
 from invoice_print_layout.automatic_rides import organize_rides
 from invoice_print_layout.expense_projects import ExpenseProjects
 from invoice_print_layout.intake_queue import IntakeQueue
+from invoice_print_layout.intake_usage import rail_payment_not_required, RAIL_PAYMENT_UNUSED_REASON
+from invoice_print_layout.glm_invoice_ai import GlmInvoiceAI
+from invoice_print_layout.material_matching import MaterialMatching
 from invoice_print_layout.expense_review import ExpenseReview
+from invoice_print_layout.reimbursement_people import ReimbursementPeople
 from invoice_print_layout.expense_preferences import Preferences
 from invoice_print_layout.report_snapshot import snapshot, REPORT_SECTIONS
-from invoice_print_layout.site_photos import SitePhotos
-from invoice_print_layout.daily_reports import DailyReports
+
+if TYPE_CHECKING:
+    from invoice_print_layout.logistics import LogisticsStore
+    from invoice_print_layout.project_todos import ProjectTodos
+    from invoice_print_layout.photo_schedule import PhotoSchedules
+    from invoice_print_layout.photo_briefs import PhotoBriefs
+    from invoice_print_layout.wechat_inbox import WeChatInbox
+    from invoice_print_layout.site_photos import SitePhotos
+    from invoice_print_layout.daily_reports import DailyReports
 
 # Freeze at module/process load; editing files cannot upgrade this value.
 STARTUP_BUILD_ID = source_build_id()
+
+WORKBENCH_PATHS = {'/logistics', '/photos', '/logistics.js', '/logistics.css',
+                   '/photos.js', '/photos.css', '/daily-reports.js'}
+WORKBENCH_PREFIXES = ('/api/logistics', '/api/photos', '/api/daily-reports',
+                      '/daily-report/', '/photo-file/', '/photo-review/', '/site-photos/')
+
+
+def workbench_only(path: str) -> bool:
+    return path in WORKBENCH_PATHS or path.startswith(WORKBENCH_PREFIXES)
 
 
 def inbox_files(store: ExpenseStore) -> dict[str, Path]:
@@ -44,47 +60,136 @@ def inbox_files(store: ExpenseStore) -> dict[str, Path]:
     folder.mkdir(exist_ok=True)
     with store.connect() as db:
         used = {r['digest'] for r in db.execute('SELECT digest FROM attachments UNION SELECT digest FROM automatic_ride_files')}
+        if db.execute("SELECT 1 FROM sqlite_master WHERE name='expense_project_deleted_materials'").fetchone():
+            used.update(row['digest'] for row in db.execute('SELECT digest FROM expense_project_deleted_materials'))
     return {hashlib.sha256(str(p).encode()).hexdigest(): p for p in folder.glob('*.pdf')
             if hashlib.sha256(p.read_bytes()).hexdigest() not in used}
 
 
-def sync_mail(store: ExpenseStore) -> dict[str, Any]:
+def sync_mail(store: ExpenseStore, *, organize: bool = True) -> dict[str, Any]:
     from invoice_print_layout.mail163 import read_mail_settings, read_auth_code, import_pdf_attachments
     paths = ensure_workspace(store.workspace)
     cursor_path = store.root / 'mail-sync.json'
-    previous = read_json(cursor_path).get('date')
+    cursor = read_json(cursor_path)
+    previous = cursor.get('date')
     days = max(1, (date.today() - date.fromisoformat(previous)).days + 1) if previous else 1
     if days > 365:
         raise ValueError('超过365天未同步，请先人工确定补收范围')
     settings = read_mail_settings(paths.mail_config)
     folder = store.root / '邮件收件'
     result = import_pdf_attachments(paths, settings, read_auth_code(settings.address), days=days,
-                                    destination=folder, all_invoice_types=True)
-    save_json(cursor_path, {'date': date.today().isoformat()})
+                                    destination=folder, all_invoice_types=True, include_link_materials=not organize)
+    outstanding_links = cursor.get('incomplete') or read_json(store.root / 'mail-link-failures.json').get('failures')
+    if not result.link_failures and (not organize or not outstanding_links):
+        save_json(cursor_path, {'date': date.today().isoformat()})
+    elif not previous:
+        # Remember the initial retry window even when the first ever collection
+        # partly fails; tomorrow must still include these messages.
+        save_json(cursor_path, {'date': date.today().isoformat(), 'incomplete': True})
+    if not organize:
+        # Signed download URLs remain private; feedback exposes only mail identity
+        # and stable reasons. A failed day must stay in the next retry window.
+        save_json(store.root / 'mail-link-failures.json', {'failures': result.link_failures})
+        failures = [{key: failure[key] for key in ('message_uid', 'subject', 'order_number', 'reason')
+                     if key in failure} for failure in result.link_failures]
+        retry = f' {len(failures)}个领票链接未收取，未推进补收日期；可再次补收重试。' if failures else ''
+        return {'message': f'补收完成：新增{result.downloaded}份材料（正文链接{result.link_downloaded}份、图片{result.image_downloaded}张），重复{result.duplicates}份；原件已保存，材料留在合成台，确认创建后进入待核对。{retry}',
+                'downloaded': result.downloaded, 'duplicates': result.duplicates,
+                'link_downloaded': result.link_downloaded, 'image_downloaded': result.image_downloaded,
+                'link_failures': failures}
     rides = organize_rides(store)
     return {'message': f'补收完成：新增{result.downloaded}份PDF。打车自动整理{rides["created"]}笔，补充{rides["supplemented"]}笔；重复材料{result.duplicates + rides["duplicates"]}份，无效{result.invalid_pdf}份。费用已进入事项台账，未确定的材料留在收件箱。', 'rides': rides}
 
 
-def make_server(workspace: Path, port: int = 8765) -> ThreadingHTTPServer:
+def classify_intake(intake: IntakeQueue, values: dict[str, Any]) -> dict[str, Any]:
+    """Correct a material card without creating or verifying an expense."""
+    from invoice_print_layout.workbench import amount_cents
+    role = values.get('role')
+    fields = values.get('fields', {})
+    if role not in {'invoice', 'receipt', 'payment', 'other'} or not isinstance(fields, dict):
+        raise ValueError('请选择发票、收据、付款截图或待分类材料')
+    allowed = {'title', 'merchant', 'amount', 'category', 'expense_date', 'order_number', 'note',
+               'payment_time', 'payment_status', 'invoice_number', 'project_id',
+               'shopping_platform', 'shop_name', 'payment_channel'}
+    if any(key not in allowed or not isinstance(value, str) for key, value in fields.items()):
+        raise ValueError('材料信息无效')
+    if fields.get('amount') and amount_cents(fields['amount']) <= 0:
+        raise ValueError('请输入大于零的实际金额')
+    with intake.store.connect() as db:
+        db.execute('BEGIN IMMEDIATE')
+        entry = intake.get(values['id'])
+        if entry['status'] not in {'received', 'review'} or entry['item_id']:
+            raise ValueError('材料已经关联，请刷新合成台')
+        if entry['revision'] != values.get('revision'):
+            raise ValueError('材料已变化，请刷新合成台')
+        if entry.get('qr_status') == 'manual' and role != 'other':
+            raise ValueError('请先领取二维码对应的正式发票')
+        project_id = fields.get('project_id', '')
+        if project_id:
+            if not any(p['id'] == project_id for p in ExpenseProjects(intake.store).list()):
+                raise ValueError('项目不存在')
+            if entry.get('project_id') not in {'', project_id}:
+                raise ValueError('材料属于另一项目，请切换项目后处理')
+            entry['project_id'] = project_id
+        entry.setdefault('transaction_source_role', entry['role'])
+        entry.update(role=role, fields={**entry.get('fields', {}),
+                                      **{k: v for k, v in fields.items() if k != 'project_id'}},
+                     manual_fields=sorted(set(entry.get('manual_fields', [])) | (set(fields) - {'project_id'})),
+                     manual_role=True,
+                     status='review', revision=entry['revision'] + 1,
+                     result='人工补充材料信息，尚未关联费用')
+        if rail_payment_not_required(entry):
+            entry.update(status='unused', unused_reason=RAIL_PAYMENT_UNUSED_REASON,
+                         result=RAIL_PAYMENT_UNUSED_REASON)
+        db.execute('UPDATE intake_queue SET data=? WHERE id=?',
+                   (json.dumps(entry, ensure_ascii=False), entry['id']))
+    return {k: v for k, v in entry.items() if k != 'path'}
+
+
+def make_server(workspace: Path, port: int = 8765, *, mode: str = 'workbench') -> ThreadingHTTPServer:
+    if mode not in APP_MODES:
+        raise ValueError('Unsupported application mode')
     store = ExpenseStore(workspace)
-    organize_rides(store)
-    logistics = LogisticsStore(workspace / '后勤' / 'tasks.sqlite3')
-    todos = ProjectTodos(logistics)
     projects = ExpenseProjects(store)
-    projects.migrate()
-    intake = IntakeQueue(store)
+    invoice_ai = GlmInvoiceAI(store.root)
+    intake = IntakeQueue(store, ai=invoice_ai)
+    matching = MaterialMatching(store, intake, ai=invoice_ai)
+    from invoice_print_layout.synthesis_expenses import SynthesisExpenses
+    synthesis_expenses = SynthesisExpenses(store)
     review = ExpenseReview(store)
+    reimbursement_people = ReimbursementPeople(store)
     preferences = Preferences(store)
-    wechat_inbox = WeChatInbox(logistics)
-    site_photos = SitePhotos(workspace, logistics)
-    daily_reports = DailyReports(workspace, site_photos)
-    schedules = PhotoSchedules(todos, site_photos)
-    briefs = PhotoBriefs(workspace, todos, site_photos)
+    if mode == 'workbench':
+        from invoice_print_layout.logistics import LogisticsStore
+        from invoice_print_layout.project_todos import ProjectTodos
+        from invoice_print_layout.photo_schedule import PhotoSchedules
+        from invoice_print_layout.photo_briefs import PhotoBriefs
+        from invoice_print_layout.wechat_inbox import WeChatInbox
+        from invoice_print_layout.site_photos import SitePhotos
+        from invoice_print_layout.daily_reports import DailyReports
+        organize_rides(store)
+        projects.migrate()
+        logistics = LogisticsStore(workspace / '后勤' / 'tasks.sqlite3')
+        todos = ProjectTodos(logistics)
+        wechat_inbox = WeChatInbox(logistics)
+        site_photos = SitePhotos(workspace, logistics)
+        daily_reports = DailyReports(workspace, site_photos)
+        schedules = PhotoSchedules(todos, site_photos)
+        briefs = PhotoBriefs(workspace, todos, site_photos)
     token = secrets.token_urlsafe(32)
     write_lock = threading.Lock()
+    intake_run_lock = threading.Lock()
+    matching_run_lock = threading.Lock()
     automatic_category = AutomaticCategory(store, write_lock)
+    from invoice_print_layout.agent_jobs import AgentService
+    invoice_agent = AgentService(store)
+    from invoice_print_layout.mail_agent import MailAgentService
+    mail_agent = MailAgentService(store, invoice_agent)
+    with store.connect() as db:
+        from invoice_print_layout.expense_projects import install_project_guards
+        install_project_guards(db)
     assets = Path(__file__).parent / 'web'
-    runtime = runtime_info(workspace, STARTUP_BUILD_ID)
+    runtime = runtime_info(workspace, STARTUP_BUILD_ID, mode)
 
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, format: str, *args: Any) -> None:
@@ -117,9 +222,27 @@ def make_server(workspace: Path, port: int = 8765) -> ThreadingHTTPServer:
                 self.respond({'error': '仅允许本机访问'}, 403)
                 return
             path = unquote(urlparse(self.path).path)
+            if mode == 'invoice' and workbench_only(path):
+                self.respond({'error': '页面不存在'}, 404)
+                return
             try:
                 if path == '/':
                     self.send((assets / 'index.html').read_bytes(), 'text/html; charset=utf-8')
+                elif path == '/agent':
+                    self.send((assets / 'agent.html').read_bytes(), 'text/html; charset=utf-8')
+                elif path in {'/agent.js', '/agent.css', '/agent-projects.js', '/agent-projects.css',
+                              '/agent-details.js', '/agent-details.css', '/manual-agent.js',
+                              '/manual-agent.css', '/manual-agent-bridge.js'}:
+                    self.send((assets / path[1:]).read_bytes(), 'text/javascript' if path.endswith('.js') else 'text/css')
+                elif path == '/api/agent/mail':
+                    self.respond(mail_agent.status())
+                elif path == '/api/agent/jobs':
+                    pid = parse_qs(urlparse(self.path).query).get('project', [''])[0]
+                    self.respond({'jobs': invoice_agent.jobs.list(pid), 'token': token,
+                                  'model': invoice_ai.public_status()})
+                elif path == '/api/agent/job':
+                    key = parse_qs(urlparse(self.path).query).get('id', [''])[0]
+                    self.respond({'job': invoice_agent.jobs.get(key)})
                 elif path == '/logistics':
                     self.send((assets / 'logistics.html').read_bytes(), 'text/html; charset=utf-8')
                 elif path == '/photos':
@@ -166,7 +289,7 @@ def make_server(workspace: Path, port: int = 8765) -> ThreadingHTTPServer:
                     if not file.is_relative_to(folder) or file.suffix.lower() not in {'.html', '.jpg', '.jpeg', '.png', '.webp'}:
                         raise ValueError('无效照片文件')
                     self.send(file.read_bytes(), 'text/html; charset=utf-8' if name == 'index.html' else mimetypes.guess_type(file.name)[0] or 'application/octet-stream')
-                elif path in {'/app.js', '/intake.js', '/receipt.js', '/report.js', '/mail-search.js', '/expense-classifier.js', '/logistics.js', '/style.css', '/logistics.css', '/photos.js', '/photos.css'}:
+                elif path in {'/phone-link.js', '/phone-link.css', '/app.js', '/workbench-theme.js', '/workbench-theme.css', '/project-menu.js', '/project-menu.css', '/review-edit.js', '/review-edit.css', '/review-batch.js', '/review-batch.css', '/amount-pairing.js', '/amount-pairing.css', '/reimbursement-people.js', '/reimbursement-people.css', '/intake.js', '/matching-desk.js', '/matching-desk.css', '/synthesis.js', '/receipt.js', '/report.js', '/report-preview.css', '/multi-filter.js', '/multi-filter.css', '/mail-search.js', '/expense-classifier.js', '/logistics.js', '/style.css', '/logistics.css', '/photos.js', '/photos.css'}:
                     self.send((assets / path[1:]).read_bytes(), 'text/javascript' if path.endswith('.js') else 'text/css')
                 elif path == '/api/logistics':
                     self.respond({**logistics.snapshot(), 'token': token})
@@ -177,10 +300,23 @@ def make_server(workspace: Path, port: int = 8765) -> ThreadingHTTPServer:
                 elif path == '/api/logistics/todos':
                     project_id = parse_qs(urlparse(self.path).query).get('project_id', [''])[0]
                     self.respond({'items': todos.list(project_id), 'photo_groups': site_photos.settings(project_id)['groups']})
+                elif path == '/api/phone-link':
+                    self.respond(phone_link.status(include_addresses=True))
                 elif path == '/api/runtime':
                     self.respond(runtime)
                 elif path == '/api/intake':
                     self.respond({'queue': [{k: v for k, v in row.items() if k != 'path'} for row in intake.list()]})
+                elif path == '/api/reimbursement-people':
+                    person_project = parse_qs(urlparse(self.path).query).get('project', [''])[0]
+                    self.respond(reimbursement_people.snapshot(person_project))
+                elif path == '/api/invoice-ai':
+                    self.respond(invoice_ai.public_status())
+                elif path == '/api/material-matching':
+                    pid = parse_qs(urlparse(self.path).query).get('project', [''])[0]
+                    self.respond({**matching.board(pid), 'ai': invoice_ai.public_status()})
+                elif path == '/api/material-matching/suggestions':
+                    pid = parse_qs(urlparse(self.path).query).get('project', [''])[0]
+                    self.respond(matching.suggest(pid))
                 elif path == '/api/preferences':
                     with store.connect() as db:
                         learned = [dict(r) for r in db.execute('SELECT e.*, d.evidence_key IS NULL AS enabled FROM category_experience e LEFT JOIN category_experience_disabled d ON d.evidence_key=e.evidence_key')]
@@ -189,7 +325,10 @@ def make_server(workspace: Path, port: int = 8765) -> ThreadingHTTPServer:
                     ids = parse_qs(urlparse(self.path).query).get('id', [])
                     if not ids or len(ids) > 200 or len(ids) != len(set(ids)):
                         raise ValueError('请选择不重复的事项')
-                    self.respond(snapshot([store.get(key) for key in ids]))
+                    items = store.get_many(ids)
+                    if any(item['deleted'] for item in items):
+                        raise ValueError('已删除事项不能参与报销汇总，请先恢复')
+                    self.respond(snapshot(items))
                 elif path.startswith('/intake-preview/') or path.startswith('/intake-page/'):
                     import pymupdf
                     from html import escape
@@ -209,14 +348,32 @@ def make_server(workspace: Path, port: int = 8765) -> ThreadingHTTPServer:
                     entry = intake.get(path.removeprefix('/intake-file/'))
                     file = Path(entry['path'])
                     self.send(file.read_bytes(), mimetypes.guess_type(file.name)[0] or 'application/octet-stream', filename=entry['name'])
+                elif path.startswith('/attachment-preview/'):
+                    import pymupdf
+                    from html import escape
+                    key = path.removeprefix('/attachment-preview/')
+                    file, name = store.attachment_path(key)
+                    with pymupdf.open(file) as document:  # type: ignore[no-untyped-call]
+                        pages = ''.join(f'<img alt="原件第{i + 1}页" src="/attachment-page/{quote(key)}?page={i}" style="width:100%;height:auto" loading="lazy">' for i in range(len(document)))
+                    self.send(f'<!doctype html><html lang="zh-CN"><meta charset="utf-8"><title>{escape(name)}</title><body style="margin:0">{pages}</body></html>'.encode(), 'text/html; charset=utf-8')
+                elif path.startswith('/attachment-page/'):
+                    import pymupdf
+                    file, _ = store.attachment_path(path.removeprefix('/attachment-page/'))
+                    number = int(parse_qs(urlparse(self.path).query).get('page', ['0'])[0])
+                    with pymupdf.open(file) as document:  # type: ignore[no-untyped-call]
+                        if not 0 <= number < len(document):
+                            raise ValueError('无效页码')
+                        self.send(document[number].get_pixmap(dpi=120, alpha=False).tobytes('png'), 'image/png')
                 elif path == '/api/state':
                     from invoice_print_layout.report_excel import TEMPLATE_NAME
+                    from invoice_print_layout.report_types import report_types
                     from invoice_print_layout.storage import read_person_name
-                    items = store.list_items()
-                    self.respond({'items': items, 'category_auto_ready': True,
+                    items = store.list_items(include_deleted=True)
+                    self.respond({'items': items, 'app_mode': mode,
+                                  'logistics_available': mode == 'workbench', 'category_auto_ready': True,
                                   'projects': projects.list(),
-                                  'classification': automatic_category.statuses(items),
-                                  'categories': CATEGORIES, 'roles': ROLES,
+                                  'classification': automatic_category.statuses([item for item in items if not item['deleted']]),
+                                  'categories': CATEGORIES, 'roles': ROLES, 'report_types': report_types(),
                                   'stages': STAGES, 'token': token, 'mail_search_ready': True, 'category_suggestion_ready': True,
                                   'report_template_ready': (store.root / TEMPLATE_NAME).is_file(),
                                   'report_person': read_person_name(ensure_workspace(store.workspace).config) or '',
@@ -246,8 +403,10 @@ def make_server(workspace: Path, port: int = 8765) -> ThreadingHTTPServer:
 
         def do_POST(self) -> None:
             if not self.allowed() or not secrets.compare_digest(self.headers.get('X-Workbench-Token', ''), token):
+                drain_rejected_body(self)
                 self.respond({'error': '请求来源无效，请刷新工作台'}, 403)
                 return
+            path = unquote(urlparse(self.path).path)
             try:
                 length = int(self.headers.get('Content-Length', '0'))
                 if not 0 < length <= 29 * 1024 * 1024:
@@ -255,7 +414,20 @@ def make_server(workspace: Path, port: int = 8765) -> ThreadingHTTPServer:
                 body = json.loads(self.rfile.read(length))
                 if not isinstance(body, dict):
                     raise ValueError('请求格式无效')
-                path = urlparse(self.path).path
+                if mode == 'invoice' and workbench_only(path):
+                    self.respond({'error': '操作不存在'}, 404)
+                    return
+                if path in {'/api/phone-link/start', '/api/phone-link/stop', '/api/phone-link/rotate', '/api/phone-link/connect'}:
+                    if path.endswith('/start'):
+                        self.respond(phone_link.start_remote() if body.get('mode') == 'remote' else
+                                     phone_link.start(str(body.get('address', ''))))
+                    elif path.endswith('/connect'):
+                        self.respond(phone_link.connect_remote())
+                    elif path.endswith('/rotate'):
+                        self.respond(phone_link.rotate())
+                    else:
+                        self.respond(phone_link.stop())
+                    return
                 if path == '/api/shutdown':
                     runtime['ready'] = False
                     self.respond({'ok': True})
@@ -294,9 +466,168 @@ def make_server(workspace: Path, port: int = 8765) -> ThreadingHTTPServer:
                     # OCR and Jev run outside the lock; only capture/recheck versions under it.
                     self.respond(suggest(store, body['id'], lock=write_lock))
                     return
+                if path == '/api/mail' and (invoice_ai.enabled or body.get('material_only') is True):
+                    if not intake_run_lock.acquire(blocking=False):
+                        raise ValueError('材料正在识别，请稍后补收；本次没有重复执行')
+                    try:
+                        mail_result = sync_mail(store, organize=False)
+                        imported = intake.import_mail(body.get('project_id', ''))
+                        received_ids = [entry['id'] for entry in intake.list()
+                                        if entry['status'] == 'received' and entry['source'] == 'mail'
+                                        and (not body.get('project_id') or entry.get('project_id') == body['project_id'])]
+                        converted = claim_pending = 0
+                        preparation_failures: list[dict[str, str]] = []
+                        for key in received_ids:
+                            try:
+                                intake.prepare_batch_entry(key)
+                                updated = intake.get(key)
+                                converted += updated.get('qr_status') == 'converted'
+                                claim_pending += updated.get('qr_status') == 'manual'
+                            except (ValueError, OSError, RuntimeError):
+                                preparation_failures.append({'id': key, 'reason': '材料整理未完成，原件保留；可在材料区重试。'})
+                        entries = intake.list()
+                        import_failures = imported.get('failures', []) if isinstance(imported, dict) else []
+                        mail_result['intake'] = {'pending': sum(entry['status'] in {'received', 'review'}
+                                                               for entry in entries),
+                                                'received': imported.get('received', 0) if isinstance(imported, dict) else 0,
+                                                'duplicates': imported.get('duplicate', 0) if isinstance(imported, dict) else 0,
+                                                'prepared': len(received_ids) - len(preparation_failures),
+                                                'converted_to_pdf': converted, 'claim_pending': claim_pending,
+                                                'import_failures': import_failures,
+                                                'preparation_failures': preparation_failures}
+                        mail_result['message'] += f' 已领取{converted}份正式PDF，{claim_pending}份需手工领票。'
+                        if preparation_failures:
+                            mail_result['message'] += f' {len(preparation_failures)}份材料整理未完成，原件保留，可在材料区重试。'
+                        if import_failures:
+                            mail_result['message'] += f' {len(import_failures)}份已下载材料未能入队，原件保留在邮件收件，请检查或更换文件；其余材料已继续处理。'
+                        if body.get('project_id') and matching_run_lock.acquire(blocking=False):
+                            try:
+                                paired = matching.suggest(body['project_id'])
+                                mail_result['matching'] = paired
+                                mail_result['message'] += f' 找到{paired["suggested"]}组待合成候选；确认创建后进入待核对。'
+                            finally:
+                                matching_run_lock.release()
+                        self.respond(mail_result)
+                    finally:
+                        intake_run_lock.release()
+                    return
+                if path in {'/api/agent/mail/configure', '/api/agent/mail/collect', '/api/agent/mail/assign'}:
+                    if path.endswith('/configure'):
+                        mail_agent_result = mail_agent.configure(body)
+                    elif path.endswith('/assign'):
+                        mail_agent_result = mail_agent.assign(body.get('id', ''), body.get('project_id', ''))
+                    else:
+                        mail_agent_result = mail_agent.collect_now()
+                    self.respond(mail_agent_result)
+                    return
+                if path == '/api/agent/facts/restore':
+                    from invoice_print_layout.agent_confirmed_facts import restore
+                    with write_lock:
+                        fact = restore(invoice_agent.jobs, body)
+                    self.respond({'fact': fact})
+                    return
+                if path in {'/api/agent/start', '/api/agent/cancel', '/api/agent/answer', '/api/agent/retry',
+                            '/api/agent/refresh-question'}:
+                    with write_lock:
+                        if path.endswith('/start'):
+                            if body.get('use_model') and not invoice_ai.public_status()['available']:
+                                raise ValueError('模型尚未配置，可关闭模型辅助后使用本地整理')
+                            job = invoice_agent.jobs.create(
+                                body.get('project_id', ''), body.get('material_ids'), body.get('idempotency_key'),
+                                use_model=body.get('use_model', False), options=body.get('options'))
+                        elif path.endswith('/retry'):
+                            job = invoice_agent.jobs.retry(body.get('id', ''))
+                        elif path.endswith('/cancel'):
+                            job = invoice_agent.jobs.get(body.get('id', ''))
+                            if job['state'] not in {'queued', 'running'}:
+                                raise ValueError('任务已经结束')
+                            job = invoice_agent.jobs.stop(job['id'], 'cancelled', '任务已取消，已有结果保留')
+                        elif path.endswith('/refresh-question'):
+                            from invoice_print_layout.agent_tools import InvoiceTools
+                            job = invoice_agent.jobs.refresh_question(body.get('id', ''), body.get('expected_updated_at'),
+                                                                     InvoiceTools(invoice_agent.jobs).refresh_question)
+                        else:
+                            job = invoice_agent.jobs.answer(body.get('id', ''), body.get('choice', ''),
+                                                            body.get('question_id'))
+                    if not path.endswith('/refresh-question'):
+                        invoice_agent.kick()
+                    self.respond({'job': job})
+                    return
+                if path in {'/api/intake/analyze', '/api/intake/prepare'} and type(body.get('force_ai', False)) is not bool:
+                    raise ValueError('AI辅助识别选项必须是布尔值')
+                if invoice_ai.enabled and path in {'/api/intake/analyze', '/api/intake/prepare', '/api/material-matching/auto'}:
+                    # Extraction may call the model; matching uses local rules.
+                    # Neither holds the lock used for ordinary edits.
+                    # Candidate scans only read. Manual creation rechecks
+                    # revisions and the candidate pool before writing.
+                    run_lock = matching_run_lock if path.endswith('/auto') else intake_run_lock
+                    if not run_lock.acquire(blocking=False):
+                        raise ValueError('材料正在识别或配对，请稍后刷新；本次没有重复执行')
+                    try:
+                        if path.endswith('/auto'):
+                            cloud_result = matching.suggest(body['project_id'])
+                        else:
+                            entry = (intake.prepare_batch_entry(body['id'], force_ai=True)
+                                     if body.get('force_ai') else intake.prepare_batch_entry(body['id']))
+                            cloud_result = ({'entry': {k: v for k, v in entry.items() if k != 'path'},
+                                             'converted_to_pdf': bool(entry.get('source_entry_id')),
+                                             'message': entry.get('result', '')}
+                                            if path.endswith('/prepare') else entry)
+                        self.respond(cloud_result)
+                    finally:
+                        run_lock.release()
+                    return
                 with write_lock:
                     result: Any = {}
-                    if path == '/api/logistics/projects':
+                    if path == '/api/reimbursement-people/create':
+                        result = reimbursement_people.create(
+                            body.get('project_id', ''), body.get('label', body.get('name', '')),
+                            external_sender_id=body.get('external_sender_id', ''), remark=body.get('remark', ''))
+                    elif path == '/api/reimbursement-people/rename':
+                        result = reimbursement_people.rename(body.get('project_id'), body.get('person_id'),
+                                                             body.get('expected_version'), body.get('label'))
+                    elif path == '/api/reimbursement-people/merge':
+                        result = reimbursement_people.merge(body.get('project_id'), body.get('person_id'),
+                                                            body.get('expected_version'), body.get('target_person_id'),
+                                                            body.get('target_expected_version'))
+                    elif path in {'/api/reimbursement-people/retire', '/api/reimbursement-people/restore'}:
+                        result = reimbursement_people.retire(body.get('project_id'), body.get('person_id'),
+                                                             body.get('expected_version'), restore=path.endswith('/restore'))
+                    elif path == '/api/reimbursement-people/assign-materials':
+                        result = reimbursement_people.assign_materials(
+                            body.get('project_id', ''), body.get('ids', []), body.get('revisions', {}),
+                            body.get('person_id', ''), body.get('target_version'))
+                    elif path == '/api/reimbursement-people/assign-expense':
+                        result = reimbursement_people.assign_expense(
+                            body.get('id', ''), body.get('expected_version', ''), body.get('person_id', ''), body.get('target_version'))
+                    elif path == '/api/reimbursement-people/assign-expenses':
+                        result = reimbursement_people.assign_expenses(
+                            body.get('project_id'), body.get('ids'), body.get('versions'),
+                            body.get('person_id', ''), body.get('target_version'))
+                    elif path == '/api/material-matching/amount-preview':
+                        result = matching.amount_preview(body.get('project_id'))
+                    elif path == '/api/material-matching/amount-confirm':
+                        result = matching.amount_confirm(body.get('project_id'), body.get('snapshot_token'),
+                                                         body.get('idempotency_key'), body.get('amount_only_confirmed'))
+                    elif path == '/api/synthesis-expense/edit-fields':
+                        result = synthesis_expenses.edit_fields(body.get('id'), body.get('expected_version'),
+                                                               body.get('project_id'), body.get('amount'), body.get('title'))
+                    elif path in {'/api/synthesis-expense/archive', '/api/synthesis-expense/restore',
+                                  '/api/synthesis-expense/delete', '/api/synthesis-expense/restore-deleted'}:
+                        result = synthesis_expenses.transition(body.get('id'), body.get('expected_version'),
+                                                              body.get('project_id'), path.removeprefix('/api/synthesis-expense/'))
+                    elif path == '/api/projects':
+                        result = projects.create(body['name'], body.get('site_name', ''))
+                    elif path == '/api/projects/rename':
+                        result = projects.rename(body.get('id', ''), body.get('name'), body.get('expected_revision'))
+                    elif path == '/api/projects/pin':
+                        result = projects.pin(body.get('id', ''), body.get('pinned'), body.get('expected_revision'))
+                    elif path == '/api/projects/delete-permanently':
+                        result = projects.delete_permanently(body.get('id', ''), body.get('expected_revision'),
+                            confirmed=body.get('confirmed'), confirmation_name=body.get('confirmation_name'))
+                    elif path == '/api/projects/reimbursement':
+                        result = projects.set_reimbursement_status(body['id'], body['status'], body['expected_revision'])
+                    elif path == '/api/logistics/projects':
                         result = logistics.create_project(body['name'], body.get('site_name', ''))
                     elif path == '/api/logistics/todos':
                         schedules.validate(body['project_id'], body)
@@ -305,11 +636,57 @@ def make_server(workspace: Path, port: int = 8765) -> ThreadingHTTPServer:
                         result = todos.remove(body['project_id'], body['id'], body['revision'], restore=path.endswith('/restore'))
                     elif path == '/api/projects/move':
                         result = projects.move(body['ids'], body['project_id'], body['versions'])
+                    elif path in {'/api/expenses/delete', '/api/expenses/restore'}:
+                        result = store.remove(body['id'], body['expected_version'], restore=path.endswith('/restore'))
                     elif path == '/api/intake/receive':
                         result = intake.receive(body['name'], base64.b64decode(body['data'], validate=True),
                                                 project_id=body.get('project_id', ''), batch=body.get('batch', ''))
                     elif path == '/api/intake/analyze':
-                        result = intake.analyze(body['id'])
+                        result = (intake.prepare_batch_entry(body['id'], force_ai=True)
+                                  if body.get('force_ai') else intake.analyze(body['id']))
+                    elif path == '/api/intake/prepare':
+                        entry = (intake.prepare_batch_entry(body['id'], force_ai=True)
+                                 if body.get('force_ai') else intake.prepare_batch_entry(body['id']))
+                        result = {'entry': {k: v for k, v in entry.items() if k != 'path'},
+                                  'converted_to_pdf': bool(entry.get('source_entry_id')),
+                                  'message': entry.get('result', '')}
+                    elif path == '/api/intake/classify':
+                        result = classify_intake(intake, body)
+                    elif path in {'/api/intake/archive', '/api/intake/restore', '/api/intake/delete', '/api/intake/restore-deleted'}:
+                        result = intake.archive_action(body.get('id', ''), body.get('revision'),
+                                                       body.get('project_id'), path.removeprefix('/api/intake/'))
+                    elif path == '/api/intake/rail-payments-unused':
+                        marked = intake.mark_rail_payments_unused(body.get('ids', []), body.get('revisions', {}))
+                        result = {**marked, 'entries': [{key: value for key, value in entry.items() if key != 'path'}
+                                                       for entry in marked['entries']]}
+                    elif path == '/api/material-matching/create-batch':
+                        result = matching.create_batch(body.get('project_id', ''), body.get('groups'),
+                                                       body.get('idempotency_key'))
+                    elif path == '/api/material-matching/create':
+                        result = matching.create_expense(
+                            body.get('voucher_keys', []), body.get('payment_ids', []), body['project_id'],
+                            support_ids=body.get('support_ids', []), revisions=body.get('revisions', {}),
+                            expected_versions=body.get('expected_versions', {}), fields=body.get('fields', {}),
+                            suggestion_id=body.get('suggestion_id', ''), suggestion_token=body.get('suggestion_token', ''))
+                    elif path == '/api/material-matching/match':
+                        selected_vouchers = body.get('voucher_keys', body.get('voucher_key', ''))
+                        if not isinstance(selected_vouchers, (str, list)):
+                            raise ValueError('请选择发票／收据')
+                        result = matching.match(selected_vouchers,
+                                                body['payment_ids'], body['project_id'],
+                                                expected_version=body.get('expected_version', ''),
+                                                expected_versions=body.get('expected_versions', {}),
+                                                support_ids=body.get('support_ids', []),
+                                                revisions=body.get('revisions', {}), fields=body.get('fields', {}),
+                                                provisional=True, reason=body.get('reason', '人工选择匹配，待核对'))
+                    elif path == '/api/material-matching/supplement':
+                        result = matching.supplement(body['group_id'], body['support_ids'],
+                                                     expected_version=body['expected_version'],
+                                                     revisions=body.get('revisions', {}))
+                    elif path == '/api/material-matching/undo':
+                        result = matching.undo(body['group_id'], body['expected_version'])
+                    elif path == '/api/material-matching/auto':
+                        result = matching.suggest(body['project_id'])
                     elif path == '/api/intake/resolve':
                         result = intake.resolve(body['id'], body['revision'], body['fields'], body['role'],
                                                 body.get('item_id', ''), body.get('expected_version', ''))
@@ -320,8 +697,20 @@ def make_server(workspace: Path, port: int = 8765) -> ThreadingHTTPServer:
                         url = str(body.get('url', ''))
                         if body.get('id'):
                             from invoice_print_layout.mail_search import qr_value
-                            url = qr_value(Path(intake.get(body['id'])['path']).read_bytes())
+                            source_entry = intake.get(body['id'])
+                            if source_entry['status'] in {'archived', 'deleted', 'unused'}:
+                                raise ValueError('材料已归档、删除或无需使用，请在归档区处理')
+                            url = qr_value(Path(source_entry['path']).read_bytes())
                         result = claim(intake, url, body.get('project_id', ''))
+                    elif path == '/api/review/edit-fields':
+                        result = store.edit_review_fields(body.get('id'), body.get('expected_version'),
+                                                          body.get('project_type'), body.get('project_name'), body.get('amount'))
+                    elif path == '/api/review/batch-project-type':
+                        result = review.batch_project_type(body.get('project_id'), body.get('ids'), body.get('versions'),
+                                                           body.get('project_type'), body.get('project_name'))
+                    elif path == '/api/review/return':
+                        from invoice_print_layout.review_return import return_to_review
+                        result = return_to_review(store, body.get('ids'), body.get('versions'), body.get('project_id'))
                     elif path == '/api/review/confirm':
                         result = review.confirm(body['id'], body['version'], body)
                     elif path == '/api/review/merge-preview':
@@ -349,18 +738,14 @@ def make_server(workspace: Path, port: int = 8765) -> ThreadingHTTPServer:
                         if applied['conflicts']:
                             raise ValueError('经验冲突，请停用冲突规则后重试')
                         result = store.update(current['id'], {**current, **applied['changes'], 'expected_version': current['version']})
+                    elif path == '/api/expense-print-preview':
+                        from invoice_print_layout.expense_print_preview import create_expense_print_preview
+                        result = create_expense_print_preview(store, body.get('id'), body.get('expected_version'),
+                                                              build_id=STARTUP_BUILD_ID)
                     elif path == '/api/report-preview':
-                        from invoice_print_layout.reimbursement import create_report
-                        import pymupdf
-                        result = create_report(store, body['ids'], body.get('options'), submit=False)
-                        folder = store.root / '导出'
-                        pages = []
-                        with pymupdf.open(folder / result['pdf']) as document:  # type: ignore[no-untyped-call]
-                            for number, page in enumerate(document):
-                                name = f"{Path(result['pdf']).stem}-preview-{number + 1}.png"
-                                page.get_pixmap(dpi=120, alpha=False).save(folder / name)
-                                pages.append(name)
-                        result['preview_pages'] = pages
+                        from invoice_print_layout.report_print_preview import create_report_print_preview
+                        result = create_report_print_preview(store, body['ids'], body.get('options'),
+                                                             build_id=STARTUP_BUILD_ID)
                     elif path == '/api/logistics/groups':
                         result = wechat_inbox.save_group(body)
                     elif path == '/api/logistics/groups/category':
@@ -375,9 +760,13 @@ def make_server(workspace: Path, port: int = 8765) -> ThreadingHTTPServer:
                         before = store.get(body['id'])
                         result = store.update(body['id'], body)
                         automatic_category.feedback(before, result)
+                    elif path == '/api/review/request':
+                        result = store.request_review(body['ids'], body['versions'])
                     elif path == '/api/transition':
                         before = store.get(body['id'])
-                        result = store.transition(body['id'], body['action'], expected_version=body.get('expected_version'))
+                        result = store.transition(body['id'], body['action'], expected_version=body.get('expected_version'),
+                                                  acknowledge_missing=body.get('acknowledge_missing', False),
+                                                  expected_missing=body.get('expected_missing'))
                         automatic_category.feedback(before, result, verified=body['action'] == 'verify')
                     elif path == '/api/upload':
                         result = store.add_attachment(body['id'], body['name'], base64.b64decode(body['data'], validate=True), body['role'])
@@ -415,7 +804,7 @@ def make_server(workspace: Path, port: int = 8765) -> ThreadingHTTPServer:
                         result = export_items(store, body['ids'])
                     elif path == '/api/report':
                         from invoice_print_layout.reimbursement import create_report
-                        result = create_report(store, body['ids'], body.get('options'))
+                        result = create_report(store, body['ids'], body.get('options'), include_table=True)
                     elif path == '/api/report-template':
                         from invoice_print_layout.report_excel import install_template
                         install_template(store.root, base64.b64decode(body['data'], validate=True))
@@ -431,8 +820,17 @@ def make_server(workspace: Path, port: int = 8765) -> ThreadingHTTPServer:
     class WorkbenchServer(ThreadingHTTPServer):
         next_schedule_check = 0.0
 
+        def server_close(self) -> None:
+            mail_agent.close()
+            invoice_agent.close()
+            phone_link.stop()
+            super().server_close()
+
         def service_actions(self) -> None:
-            if not runtime['ready']:
+            invoice_agent.kick()
+            if runtime['ready']:
+                mail_agent.kick()
+            if mode == 'invoice' or not runtime['ready']:
                 return
             if time.monotonic() >= self.next_schedule_check:
                 self.next_schedule_check = time.monotonic() + 10
@@ -444,6 +842,11 @@ def make_server(workspace: Path, port: int = 8765) -> ThreadingHTTPServer:
                     # A transient store error leaves durable occurrences for the next tick.
                     pass
 
+    def analyze_phone_material(key: str) -> dict[str, Any]:
+        with write_lock:
+            return intake.analyze_local(key)
+
+    phone_link = PhoneLink(Handler, token, analyze_phone_material, workspace)
     server = WorkbenchServer(('127.0.0.1', port), Handler)
     server.daemon_threads = False  # server_close waits for in-flight writes/exports.
     return server
@@ -453,6 +856,7 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument('--workspace', type=Path, default=Path('workspace'))
     parser.add_argument('--port', type=int, default=8765)
+    parser.add_argument('--mode', choices=APP_MODES, default='workbench')
     args = parser.parse_args()
     # Windows process-owned byte lock: closing/crashing releases it automatically.
     # It also prevents launching the same workspace on a second port.
@@ -468,8 +872,9 @@ def main() -> None:
     except OSError as exc:
         instance.close()
         raise SystemExit('此工作区已有工作台实例，请使用已有入口。') from exc
-    ExpenseStore(args.workspace).import_history()
-    server = make_server(args.workspace, args.port)
+    if args.mode == 'workbench':
+        ExpenseStore(args.workspace).import_history()
+    server = make_server(args.workspace, args.port, mode=args.mode)
     try:
         server.serve_forever()
     finally:

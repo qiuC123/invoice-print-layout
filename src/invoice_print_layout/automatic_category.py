@@ -29,6 +29,8 @@ class AutomaticCategory:
                     conflict INTEGER NOT NULL DEFAULT 0);
                 CREATE TABLE IF NOT EXISTS category_experience_disabled (evidence_key TEXT PRIMARY KEY);
             ''')
+            from invoice_print_layout.expense_projects import install_project_guards
+            install_project_guards(db)
 
     def input_key(self, item: dict[str, Any]) -> str:
         return digest([item.get('note', ''), classifier.attachment_version(self.store, item['id']),
@@ -40,9 +42,11 @@ class AutomaticCategory:
         return dict(row) if row else None
 
     def eligible(self, item: dict[str, Any], record: dict[str, Any] | None) -> bool:
-        if item['stage'] != 'draft' or item['verified']:
+        if item.get('deleted') or item.get('returned_to_synthesis') or item['stage'] != 'draft' or item['verified']:
             return False
         previous = json.loads(record['result']) if record else {}
+        if item.get('manual_report_choice') or previous.get('status') == 'manual':
+            return False
         return bool(item['category'] == '其他' or
                     (previous.get('status') == 'saved' and previous.get('category') == item['category']) or
                     previous.get('managed_category') == item['category'])
@@ -52,6 +56,9 @@ class AutomaticCategory:
         for item in items:
             record = self.record(item['id'])
             previous = json.loads(record['result']) if record else {}
+            if item.get('manual_report_choice'):
+                previous = {'status': 'manual', 'category': item['category'], 'source': 'human',
+                            'reason': '已保留你确认的报销分类。', 'saved': True}
             pending = self.eligible(item, record) and (not record or record['input_key'] != self.input_key(item))
             result[item['id']] = {**previous, 'pending': pending}
         return result
@@ -95,11 +102,13 @@ class AutomaticCategory:
         with self.store.connect() as db:
             db.execute('BEGIN IMMEDIATE')
             current = self.store.get(expected['id'])
-            if current != expected or self.input_key(current) != input_key:
+            if (not self.eligible(current, self.record(current['id'])) or current != expected or
+                    self.input_key(current) != input_key):
                 return False
             row = db.execute('SELECT data FROM expenses WHERE id=?', (current['id'],)).fetchone()
             data = json.loads(row['data'])
             data.update(category=category, verified=False, legacy=False, updated_at=now())
+            data.pop('review_requested', None)
             db.execute('UPDATE expenses SET data=? WHERE id=?', (json.dumps(data, ensure_ascii=False), current['id']))
             db.execute('INSERT INTO events(item_id,at,message) VALUES (?,?,?)',
                        (current['id'], now(), '自动分类已保存：'+category+'；材料和金额仍需核对'))

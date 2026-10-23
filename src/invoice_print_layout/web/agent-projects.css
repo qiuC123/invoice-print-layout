@@ -1,0 +1,32 @@
+.agent-projects{min-width:0;color:var(--wb-text,#1f2329)}
+.agent-projects-heading{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:16px}
+.agent-projects-heading h2{margin:0;font-size:18px}
+.agent-projects-heading .agent-projects-create{white-space:nowrap}
+.agent-projects-search{display:block;font-size:13px;color:var(--wb-muted,#5f6672)}
+.agent-projects-search input{display:block;width:100%;min-width:0;max-width:100%;margin:6px 0 12px;border:1px solid var(--wb-line,#dee4ed);background:var(--wb-panel,#fff);color:inherit}
+.agent-projects-list{display:grid;gap:6px;max-height:calc(100dvh - 240px);overflow-y:auto;overscroll-behavior:contain}
+.agent-projects-list .agent-projects-item{display:flex!important;flex-direction:column;align-items:flex-start!important;justify-content:center;width:100%;min-width:0;text-align:left;gap:2px!important;padding:10px 12px;white-space:normal;border:1px solid transparent;background:transparent}
+.agent-projects-item span,.agent-projects-item small{max-width:100%;overflow-wrap:anywhere}
+.agent-projects-item small{font-weight:400;color:var(--wb-muted,#5f6672)}
+.agent-projects-item:hover{background:var(--wb-hover,#f0f4ff)}
+.agent-projects-item[aria-current=page]{border-color:var(--wb-line,#dee4ed);background:var(--wb-selected,#edf3ff);color:var(--wb-accent,#245ee5);font-weight:600}
+.agent-projects-empty,.agent-projects-status{font-size:13px;color:var(--wb-muted,#5f6672);overflow-wrap:anywhere}
+#project-navigation .agent-projects-mobile{display:none}
+.agent-projects-dialog{width:min(440px,calc(100vw - 32px));max-height:calc(100dvh - 32px);overflow:auto;padding:24px;border:1px solid var(--wb-line,#dee4ed);border-radius:16px;background:var(--wb-panel,#fff);color:var(--wb-text,#1f2329);box-shadow:var(--wb-shadow,0 12px 40px #1f3d6621)}
+.agent-projects-dialog::backdrop{background:#0007}
+.agent-projects-dialog h2{margin:0 0 20px;font-size:22px}
+.agent-projects-dialog label{display:block;margin-bottom:16px}
+.agent-projects-dialog input{display:block;width:100%;min-width:0;max-width:100%;margin-top:6px;border:1px solid var(--wb-line,#dee4ed);border-radius:6px;padding:10px 12px}
+.agent-projects-dialog p{overflow-wrap:anywhere}
+.agent-projects-dialog-actions{display:flex;justify-content:flex-end;gap:10px;margin-top:24px}
+.agent-projects-dialog-actions button{min-width:100px}
+.agent-projects-dialog .agent-projects-error{background:var(--wb-error-bg,#fff0ee);color:var(--wb-error,#b32626);padding:12px;border-radius:8px}
+@media(max-width:760px){
+ .agent-projects-heading{margin-bottom:10px}
+ #project-navigation .agent-projects-search,#project-navigation .agent-projects-list{display:none}
+ #project-navigation .agent-projects-mobile{display:block;color:var(--wb-muted,#5f6672);font-size:13px}
+ .agent-projects-mobile select{display:block;width:100%;max-width:100%;min-width:0;margin:6px 0 0;overflow:hidden;text-overflow:ellipsis}
+ .agent-projects-empty{margin-bottom:0}
+ .agent-projects-dialog{padding:20px}
+ .agent-projects-dialog-actions button{flex:1;min-width:0}
+}

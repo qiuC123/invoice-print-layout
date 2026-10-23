@@ -1,0 +1,11 @@
+.metrics{grid-template-columns:repeat(3,minmax(0,1fr))}
+.project-menu{position:fixed;z-index:1000;min-width:190px;max-width:calc(100vw - 16px);max-height:calc(100vh - 16px);overflow:auto;background:#282828;border:1px solid var(--line);border-radius:8px;padding:5px;box-shadow:0 10px 28px #0006}
+.project-menu button{display:block;width:100%;text-align:left;border:0;background:transparent;padding:10px 13px;border-radius:5px;font-size:13px}
+.project-menu button:hover,.project-menu button:focus-visible{background:#363636}
+.project-menu [data-project-action=delete]{color:#ffb4a4}
+.project-pin{display:inline-block;margin-right:6px;color:#c6d8f0}
+.project-action-dialog{max-width:calc(100vw - 24px);width:480px;max-height:calc(100vh - 24px);overflow:auto}
+.project-action-dialog p{font-size:13px;line-height:1.8;overflow-wrap:anywhere}
+.project-action-dialog [data-project-error]{color:#ffb4a4}
+.project-action-dialog .project-delete-confirm{color:#ffb4a4;border-color:#8a554c}
+@media(max-width:580px){.metrics{grid-template-columns:repeat(2,minmax(0,1fr))}.metric b{font-size:18px}.metric em{overflow-wrap:anywhere}.project-menu{min-width:180px}}

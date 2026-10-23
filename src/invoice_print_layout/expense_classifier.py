@@ -7,7 +7,7 @@ import math
 import os
 from pathlib import Path
 import re
-from typing import Any, ContextManager
+from typing import Any, Callable, ContextManager
 import urllib.request
 
 import pymupdf
@@ -152,7 +152,8 @@ def ask_jev(evidence: dict[str, str]) -> dict[str, Any]:
         raise ValueError('Jev暂时不可用或返回结果无效；未改动记录，可重试或手动分类。') from None
 
 
-def decide(evidence: dict[str, str]) -> dict[str, Any]:
+def decide(evidence: dict[str, str], *,
+           ask_model: Callable[[dict[str, str]], dict[str, Any]] | None = None) -> dict[str, Any]:
     text = '\n'.join(evidence.values())
     base: dict[str, Any] = {'category': None, 'source': 'local', 'confidence': None,
                             'reason': '内容不足，请补充购买的物品、服务和实际用途。', 'evidence': evidence}
@@ -182,7 +183,7 @@ def decide(evidence: dict[str, str]) -> dict[str, Any]:
     generic = re.sub(r'\s', '', generic_goods) in {'', '日用百货'}
     if generic and not meaningful:
         return base
-    answer = ask_jev(evidence)
+    answer = (ask_model or ask_jev)(evidence)
     key = answer['choice']
     if key == 'unknown' or answer['confidence'] < .8:
         return {**base, 'source': 'jev', 'confidence': answer['confidence'], 'model': answer['model'],

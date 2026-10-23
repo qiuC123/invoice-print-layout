@@ -118,10 +118,13 @@ def test_cross_batch_exact_order_supplements_and_conflict_stops(tmp_path: Path, 
     from invoice_print_layout import intake_queue
     from invoice_print_layout.takeout import OcrLine
     store = ExpenseStore(tmp_path)
-    item = store.create({'title': '打印', 'amount': '14', 'order_number': '1000000000000000001'})
+    item = store.create({'title': '打印', 'amount': '14', 'order_number': '1000000000000000001',
+        'transaction_identifiers': [{'kind': 'payment_order', 'namespace': '支付宝',
+                                    'value': '1000000000000000001'}]})
     queue = IntakeQueue(store)
     row = queue.receive('pay.png', image_bytes(), batch='later')
-    monkeypatch.setattr(intake_queue, 'read_receipt', lambda *a: [OcrLine('支付', 0, 0, 50, 20)])
+    monkeypatch.setattr(intake_queue, 'read_receipt', lambda *a: [
+        OcrLine('支付宝', 0, 0, 200, 20), OcrLine('订单号：1000000000000000001', 0, 40, 400, 60)])
     monkeypatch.setattr(intake_queue, 'parse_receipt', lambda *a: {'fields': {'title': '打印', 'amount': '14', 'order_number': item['order_number'], 'category': '材料采购'}, 'role': 'payment'})
     assert queue.analyze(row['id'])['item_id'] == item['id']
     assert len(store.list_items()) == 1

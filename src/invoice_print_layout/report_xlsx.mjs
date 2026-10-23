@@ -16,25 +16,27 @@ sheet.getRange('D2').values=[['项目名称：'+data.project]];
 sheet.getRange('A4').values=[['此表格报销区间日期：'+data.period+'；报销人：'+(data.person||'待填写')]];
 const detail=book.worksheets.add('报销明细');
 detail.showGridLines=false;
-const headers=['序号','事项编号','项目','消费日期','类别','事项／用途','商家','金额（元）','凭证方式','付款来源','PDF页码','订单号'];
-detail.getRange('A1:L1').values=[headers];
+const headers=['序号','事项编号','项目','消费日期','类别','事项／用途','商家','金额（元）','凭证方式','付款来源','PDF页码','订单号','费用归属人'];
+detail.getRange('A1:M1').values=[headers];
 const literal=v=>typeof v==='string'&&v.startsWith('=')?"'"+v:v;
 // Identifiers are text, never floating-point numbers (orders exceed Excel's 15 digits).
-for(const col of ['B','K','L'])detail.getRange(`${col}2:${col}${data.items.length+1}`).setNumberFormat('@');
-const rows=data.items.map((x,i)=>[i+1,x.id,x.project,x.expense_date?new Date(x.expense_date+'T00:00:00Z'):null,x.category,x.title,x.merchant,x.amount_cents/100,x.material_basis==='payment_only'?'仅支付凭证（已确认）':x.alternative?'扣费记录替代发票':'发票',data.payment_label,x.pages,x.order_number].map(literal));
-detail.getRange(`A2:L${rows.length+1}`).values=rows;
-for(const col of ['B','K','L'])detail.getRange(`${col}2:${col}${data.items.length+1}`).setNumberFormat('@');
+for(const col of ['B','K','L','M'])detail.getRange(`${col}2:${col}${data.items.length+1}`).setNumberFormat('@');
+const proofLabel=x=>x.missing_acknowledged?`${x.pages==='无材料'?'无材料；':''}人工核对完成；已确认仍缺：${x.missing.join('、')}`:x.material_basis==='invoice_payment'?'发票／收据＋付款截图':x.material_basis==='payment_only'?'仅支付凭证（已确认）':x.alternative?'扣费记录替代发票':'发票';
+const rows=data.items.map((x,i)=>[i+1,x.id,x.project,x.expense_date?new Date(x.expense_date+'T00:00:00Z'):null,x.category,x.title,x.merchant,x.amount_cents/100,proofLabel(x),data.payment_label,x.pages,x.order_number,x.reimbursement_person_id?(x.reimbursement_person_label||'未指定'):'未指定'].map(literal));
+detail.getRange(`A2:M${rows.length+1}`).values=rows;
+for(const col of ['B','K','L','M'])detail.getRange(`${col}2:${col}${data.items.length+1}`).setNumberFormat('@');
 for(let i=0;i<data.items.length;i++){
   if(String(detail.getRange(`L${i+2}`).values[0][0]??'')!==String(data.items[i].order_number??''))throw Error('Excel订单号未完整保留');
 }
-detail.getRange(`A1:L${rows.length+2}`).format.font={name:'Microsoft YaHei',size:10};
-detail.getRange('A1:L1').format={fill:'#E9EDF2',font:{bold:true},rowHeight:28};
-detail.getRange(`A2:L${rows.length+1}`).format.rowHeight=44;
-detail.getRange(`A2:L${rows.length+1}`).format.verticalAlignment='center';
-for(const [col,width] of Object.entries({A:6,B:15,C:20,D:13,E:12,F:35,G:27,H:14,I:20,J:24,K:16,L:35}))detail.getRange(`${col}1:${col}${rows.length+2}`).format.columnWidth=width;
+detail.getRange(`A1:M${rows.length+2}`).format.font={name:'Microsoft YaHei',size:10};
+detail.getRange('A1:M1').format={fill:'#E9EDF2',font:{bold:true},rowHeight:28};
+detail.getRange(`A2:M${rows.length+1}`).format.rowHeight=44;
+for(let i=0;i<data.items.length;i++)if(data.items[i].missing_acknowledged)detail.getRange(`A${i+2}:M${i+2}`).format.rowHeight=88;
+detail.getRange(`A2:M${rows.length+1}`).format.verticalAlignment='center';
+for(const [col,width] of Object.entries({A:6,B:15,C:20,D:13,E:12,F:35,G:27,H:14,I:20,J:24,K:16,L:35,M:22}))detail.getRange(`${col}1:${col}${rows.length+2}`).format.columnWidth=width;
 detail.getRange(`C2:C${rows.length+1}`).format.wrapText=true;
 detail.getRange(`F2:G${rows.length+1}`).format.wrapText=true;
-detail.getRange(`I2:L${rows.length+1}`).format.wrapText=true;
+detail.getRange(`I2:M${rows.length+1}`).format.wrapText=true;
 detail.getRange(`D2:D${rows.length+1}`).setNumberFormat('yyyy-mm-dd');
 detail.getRange(`H2:H${rows.length+2}`).setNumberFormat('0.00');
 detail.getRange(`G${rows.length+2}`).values=[['合计']];
@@ -55,7 +57,7 @@ const scan=await book.inspect({kind:'match',searchTerm:'#REF!|#DIV/0!|#VALUE!|#N
 if(/"kind":"match"/.test(scan.ndjson))throw Error('Excel存在公式错误');
 await (await SpreadsheetFile.exportXlsx(book)).save(data.output);
 if(data.preview){
-  for(const [name,range,suffix] of [[mainName,'A1:M36','summary'],['报销明细',`A1:L${Math.min(rows.length+2,12)}`,'detail']]){
+  for(const [name,range,suffix] of [[mainName,'A1:M36','summary'],['报销明细',`A1:M${Math.min(rows.length+2,12)}`,'detail']]){
     const blob=await book.render({sheetName:name,range,scale:1,format:'png'});
     await fs.writeFile(data.preview+'-'+suffix+'.png',new Uint8Array(await blob.arrayBuffer()));
   }

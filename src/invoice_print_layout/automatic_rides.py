@@ -70,6 +70,14 @@ def organize_rides(store: ExpenseStore, *, folder: Path | None = None) -> dict[s
         # Serialize source lookup, expense creation, attachment links and receipts.
         db.execute('BEGIN IMMEDIATE')
         used = {r[0] for r in db.execute('SELECT digest FROM attachments UNION SELECT digest FROM automatic_ride_files')}
+        if db.execute("SELECT 1 FROM sqlite_master WHERE name='expense_project_deleted_materials'").fetchone():
+            used.update(row['digest'] for row in db.execute('SELECT digest FROM expense_project_deleted_materials'))
+        # Keep archived originals on disk while excluding them from this legacy
+        # directory organizer, including scans triggered by another material.
+        if db.execute("SELECT 1 FROM sqlite_master WHERE name='intake_queue'").fetchone():
+            from invoice_print_layout.intake_archive import INACTIVE_STATUSES
+            used.update(row['digest'] for row in db.execute('SELECT digest,data FROM intake_queue')
+                        if json.loads(row['data']).get('status') in INACTIVE_STATUSES)
         owners: dict[str, set[str]] = {}
         materials: dict[str, Material] = {}
         variants: dict[str, list[Material]] = {}
@@ -113,6 +121,12 @@ def organize_rides(store: ExpenseStore, *, folder: Path | None = None) -> dict[s
         def attach(item_id: str, keys: list[str]) -> bool:
             row = db.execute('SELECT data FROM expenses WHERE id=?', (item_id,)).fetchone()
             data = json.loads(row['data'])
+            if data.get('deleted'):
+                for key in keys:
+                    for material in variants.get(key, []):
+                        issue(material.document.path, '对应费用已删除，请先恢复后补充材料；未重新记账')
+                handled.update(keys)
+                return False
             changed = False
             for key in keys:
                 for material in variants.get(key, []):
@@ -141,6 +155,7 @@ def organize_rides(store: ExpenseStore, *, folder: Path | None = None) -> dict[s
                 handled.add(key)
             if changed:
                 data.update(verified=False, updated_at=now())
+                data.pop('review_requested', None)
                 db.execute('UPDATE expenses SET data=? WHERE id=?', (json.dumps(data, ensure_ascii=False), item_id))
                 db.execute('INSERT INTO events(item_id,at,message) VALUES (?,?,?)',
                            (item_id, now(), '邮件打车材料自动配对归档；金额只计算一次，项目及用途待核对'))

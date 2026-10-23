@@ -112,13 +112,17 @@ def test_save_atomic_idempotent_and_retains_review_status(tmp_path: Path, monkey
 
 
 def test_order_duplicate_any_stage_but_not_same_amount(tmp_path: Path) -> None:
+    from invoice_print_layout.transaction_evidence import extract_transaction_evidence
     store = ExpenseStore(tmp_path)
-    existing = store.create(fields(order_number='1234567890123456789'))
+    def transaction(number: str) -> dict[str, Any]:
+        return fields(order_number=number, transaction_identifiers=extract_transaction_evidence(
+            '淘宝闪购\n订单号：' + number, 'order')['identifiers'])
+    existing = store.create(transaction('1234567890123456789'))
     store.transition(existing['id'], 'cancelled')
-    duplicate = intake.save_receipt(store, 'receipt.png', picture(), fields(order_number='1234567890123456789'), 'purchase')
+    duplicate = intake.save_receipt(store, 'receipt.png', picture(), transaction('1234567890123456789'), 'purchase')
     assert duplicate['duplicates'][0]['stage'] == 'cancelled'
     assert list(store.files.iterdir()) == []
-    saved = intake.save_receipt(store, 'receipt.png', picture(), fields(order_number='9876543210987654321'), 'purchase')
+    saved = intake.save_receipt(store, 'receipt.png', picture(), transaction('9876543210987654321'), 'purchase')
     assert saved['item']['id'] != existing['id']
 
 
@@ -167,9 +171,16 @@ def test_http_preview_save_and_duplicate(tmp_path: Path, monkeypatch: pytest.Mon
         saved = post('receipt', body)
         assert saved['item']['amount'] == '24.60'
         assert post('receipt', body)['duplicates']
-        for route in ('/', '/receipt.js'):
-            with urlopen(url+route) as response:
-                assert '上传凭证并识别' in response.read().decode()
+        with urlopen(url+'/') as response:
+            page = response.read().decode()
+            assert 'id="materialMatching"' in page
+            assert 'id="recognizeReceipt"' not in page
+            assert 'id="checkMail"' not in page
+        with urlopen(url+'/matching-desk.js') as response:
+            desk = response.read().decode()
+            assert '>＋ 收材料</button>' in desk and '补收邮件' in desk
+        with urlopen(url+'/receipt.js') as response:
+            assert '上传凭证并识别' in response.read().decode()
     finally:
         server.shutdown()
         server.server_close()
