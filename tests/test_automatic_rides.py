@@ -127,3 +127,56 @@ def test_server_start_organizes_existing_inbox(tmp_path: Path) -> None:
     server = make_server(tmp_path, 0)
     server.server_close()
     assert len(store.list_items()) == 1 and not inbox_files(store)
+
+
+def test_cached_parse_is_outside_write_lock_and_only_new_paths_parse(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    import invoice_print_layout.automatic_rides as rides
+    store = ExpenseStore(tmp_path)
+    pair(store)
+    calls: list[Path] = []
+    original = rides._parse_material
+
+    def observe(path: Path) -> rides.Material:
+        with store.connect() as writer:
+            writer.execute('BEGIN IMMEDIATE')
+            writer.rollback()
+        calls.append(path)
+        return original(path)
+
+    monkeypatch.setattr(rides, '_parse_material', observe)
+    assert organize_rides(store)['created'] == 1
+    assert organize_rides(store)['created'] == 0
+    assert len(calls) == len(set(calls)), 'unchanged paths are parsed once, including newly stored copies'
+    count = len(calls)
+    organize_rides(store)
+    assert len(calls) == count
+    path = calls[0]
+    with pymupdf.open(path) as pdf:
+        pdf.set_metadata({'title': 'replacement'})
+        pdf.saveIncr()
+    rides.read_material(path)
+    assert len(calls) == count + 1
+
+
+def test_concurrent_attachment_change_defers_instead_of_creating_duplicate(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    import invoice_print_layout.automatic_rides as rides
+    store = ExpenseStore(tmp_path)
+    trip, invoice = pair(store)
+    original = rides._parse_material
+    changed = False
+
+    def modify(path: Path) -> rides.Material:
+        nonlocal changed
+        parsed = original(path)
+        if not changed:
+            changed = True
+            item = store.create({'title': 'Concurrent ride', 'category': '打车', 'amount': '123.45'})
+            store.add_attachment(item['id'], trip.name, trip.read_bytes(), 'trip')
+        return parsed
+
+    monkeypatch.setattr(rides, '_parse_material', modify)
+    result = organize_rides(store)
+    assert result['created'] == result['supplemented'] == 0
+    assert any('台账材料在整理期间已变化' in reason for reason in result['issues'].values())
+    assert len(store.list_items()) == 1
+    assert organize_rides(store)['supplemented'] == 1

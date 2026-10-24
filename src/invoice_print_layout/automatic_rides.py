@@ -2,11 +2,13 @@
 from __future__ import annotations
 
 import hashlib
+from copy import copy
 import json
 import os
 import re
 import uuid
 from dataclasses import dataclass
+from functools import lru_cache
 from datetime import date
 from pathlib import Path
 from typing import Any
@@ -18,6 +20,7 @@ from invoice_print_layout.models import DocumentKind, PdfDocument, RideProvider
 from invoice_print_layout.reliability import save_json
 from invoice_print_layout.storage import read_history
 from invoice_print_layout.workbench import ExpenseStore, now
+from invoice_print_layout.file_cache import FileSignature, file_signature
 
 
 @dataclass
@@ -28,7 +31,31 @@ class Material:
     end: str = ''
 
 
+@lru_cache(maxsize=512)
+def _material_result(signature: FileSignature) -> Material | str:
+    path = Path(signature[0])
+    try:
+        material = _parse_material(path)
+    except (ValueError, OSError) as error:
+        if file_signature(path) != signature:
+            raise PdfInspectionError('材料在读取期间已变化') from error
+        return str(error)
+    if file_signature(path) != signature:
+        raise PdfInspectionError('材料在读取期间已变化')
+    return material
+
+
 def read_material(path: Path) -> Material:
+    signature = file_signature(path)
+    result = _material_result(signature)
+    if file_signature(path) != signature:
+        raise PdfInspectionError('材料在读取期间已变化')
+    if isinstance(result, str):
+        raise PdfInspectionError(result)
+    return copy(result)
+
+
+def _parse_material(path: Path) -> Material:
     document = inspect_pdf(path)
     with pymupdf.open(path) as pdf:  # type: ignore[no-untyped-call]
         text = compact_text(''.join(page.get_text() for page in pdf))
@@ -66,9 +93,48 @@ def organize_rides(store: ExpenseStore, *, folder: Path | None = None) -> dict[s
     def issue(path: Path, reason: str) -> None:
         result['issues'][hashlib.sha256(str(path).encode()).hexdigest()] = reason
 
+    # PDF parsing happens before acquiring the write transaction. Re-read rows
+    # and file identities under the lock; a changing source defers the scan.
+    with store.connect() as source_db:
+        source_rows = [tuple(row) for row in source_db.execute(
+            "SELECT id,item_id,path,digest FROM attachments WHERE role IN ('invoice','trip')")]
+    paths = sorted(folder.glob('*.pdf'))
+    prepared: dict[Path, tuple[FileSignature | None, Material | None, str]] = {}
+    for path in dict.fromkeys([Path(row[2]) for row in source_rows] + paths):
+        signature = None
+        material = None
+        digest = ''
+        try:
+            signature = file_signature(path)
+            try:
+                material = read_material(path)
+                digest = material.document.sha256
+            except (ValueError, OSError):
+                digest = hashlib.sha256(path.read_bytes()).hexdigest()
+            if file_signature(path) != signature:
+                material = None
+                signature = None
+        except (ValueError, OSError):
+            pass
+        prepared[path] = signature, material, digest
+
+    def unchanged(path: Path) -> bool:
+        if path not in prepared:
+            return False
+        try:
+            return file_signature(path) == prepared[path][0]
+        except OSError:
+            return prepared[path][0] is None
+
     with store.connect() as db:
         # Serialize source lookup, expense creation, attachment links and receipts.
         db.execute('BEGIN IMMEDIATE')
+        current_rows = [tuple(row) for row in db.execute(
+            "SELECT id,item_id,path,digest FROM attachments WHERE role IN ('invoice','trip')")]
+        if set(current_rows) != set(source_rows) or any(not unchanged(Path(row[2])) for row in current_rows):
+            issue(folder, '台账材料在整理期间已变化，本轮未自动配对，请重新整理')
+            save_json(store.root / 'automatic-rides.json', result)
+            return result
         used = {r[0] for r in db.execute('SELECT digest FROM attachments UNION SELECT digest FROM automatic_ride_files')}
         if db.execute("SELECT 1 FROM sqlite_master WHERE name='expense_project_deleted_materials'").fetchone():
             used.update(row['digest'] for row in db.execute('SELECT digest FROM expense_project_deleted_materials'))
@@ -82,20 +148,20 @@ def organize_rides(store: ExpenseStore, *, folder: Path | None = None) -> dict[s
         materials: dict[str, Material] = {}
         variants: dict[str, list[Material]] = {}
         conflicts: set[str] = set()
-        for row in db.execute("SELECT item_id,path FROM attachments WHERE role IN ('invoice','trip')"):
-            try:
-                material = read_material(Path(row['path']))
-            except (ValueError, OSError):
+        for _, item_id, source_path, _ in current_rows:
+            material = prepared[Path(source_path)][1]
+            if material is None:
                 continue
-            owners.setdefault(material.key, set()).add(row['item_id'])
+            owners.setdefault(material.key, set()).add(item_id)
             materials[material.key] = material
         for path in sorted(folder.glob('*.pdf')):
-            digest = hashlib.sha256(path.read_bytes()).hexdigest()
+            if not unchanged(path):
+                issue(path, '材料在整理期间已变化，请重新整理')
+                continue
+            _, material, digest = prepared[path]
             if digest in used:
                 continue
-            try:
-                material = read_material(path)
-            except (ValueError, OSError):
+            if material is None:
                 issue(path, '未识别为可自动整理的打车材料，请核对材料类型')
                 continue
             prior = materials.get(material.key)
@@ -140,7 +206,10 @@ def organize_rides(store: ExpenseStore, *, folder: Path | None = None) -> dict[s
                         if not target.exists():
                             temp = target.with_suffix('.' + uuid.uuid4().hex + '.tmp')
                             try:
-                                temp.write_bytes(doc.path.read_bytes())
+                                payload = doc.path.read_bytes()
+                                if hashlib.sha256(payload).hexdigest() != doc.sha256:
+                                    raise ValueError('材料在整理期间已变化，本轮未自动配对')
+                                temp.write_bytes(payload)
                                 os.replace(temp, target)
                             finally:
                                 temp.unlink(missing_ok=True)
