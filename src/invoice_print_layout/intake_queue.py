@@ -999,6 +999,27 @@ class IntakeQueue:
                 data['native_transport_evidence'] = transport['evidence']
                 if fields.get('amount'):
                     data['issues'] = [i for i in data.get('issues', []) if i != '金额冲突']
+        # Reuse the Agent's native rail facts without letting a missing value
+        # erase an identified conflict or a human's amount/role choice.
+        if (Path(str(data.get('path') or '')).suffix.lower() == '.pdf' and
+                not original.get('manual_role') and 'amount' not in manual and
+                not data.get('field_conflicts') and not original.get('field_conflicts')):
+            from invoice_print_layout.agent_combinations import local_structured_facts
+            facts = local_structured_facts(data)
+            if facts and facts['fields'].get('category') == '高铁' and (
+                    not fields.get('amount') or
+                    amount_cents(fields['amount']) == amount_cents(facts['fields']['amount'])):
+                changes = {k: v for k, v in facts['fields'].items() if k not in manual and (
+                    not fields.get(k) or k in {'category', 'title'} and
+                    fields[k] in {'其他', '待核对购买凭证'})}
+                fields.update(changes)
+                data['role'] = facts['role']
+                if changes.get('amount'):
+                    data['issues'] = [i for i in data.get('issues', []) if i != '金额冲突']
+                if changes:
+                    data.setdefault('local_evidence', {})['structured_rail'] = {
+                        'fields': changes, 'source_sha256': original['digest'], 'source': 'native_pdf'}
+                    self._complete_local_evidence(data, str(data.get('text') or '').splitlines())
         payment_text = str(data.get('text') or '')
         payment = extract_local_payment(payment_text, current_fields=fields, manual_fields=manual,
                                         state_text=payment_state_text(payment_text))
