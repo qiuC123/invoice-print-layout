@@ -65,7 +65,7 @@ async function run(pw){
   await page.goto('http://127.0.0.1:18771/?project=p2');
   // Keep this existing manual intake/relationship regression in manual mode.
   await page.waitForFunction(()=>!!document.querySelector('#manualAgent input[type="checkbox"]'));
-  await page.locator('#openManualAgent').click();
+  await page.locator('#manualAgent summary').click();
   await page.getByLabel('上传后自动整理',{exact:true}).uncheck();
   await page.locator('#materialMatching').click();
   assert.equal(await page.locator('#matchingProject').count(),0);

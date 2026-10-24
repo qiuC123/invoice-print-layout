@@ -227,4 +227,5 @@ cases['timeout-recovery'] = () => {
   h.emit(stalled, 'load'); h.windowLoad(); h.advance(30000); assert.equal(h.count(stalled), 2);
   assert.equal(h.document.documentElement.dataset.workbenchAssets, 'ready'); h.noBusinessEffects();
 };
-const name = process.argv[2]; assert.ok(cases[name], 'unknown recovery scenario: ' + name); cases[name](); console.log('PASS ' + name);
+const selected = process.argv[2] ? [process.argv[2]] : Object.keys(cases);
+for (const name of selected) { assert.ok(cases[name], 'unknown recovery scenario: ' + name); cases[name](); console.log('PASS ' + name); }

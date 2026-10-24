@@ -300,7 +300,7 @@ async function run(pw) {
     // This regression exercises explicit manual preparation and composition.
     // The default automatic path has its own upload/Agent integration coverage.
     await page.waitForFunction(() => !!document.querySelector('#manualAgent input[type="checkbox"]'));
-    await page.locator('#openManualAgent').click();
+    await page.locator('#manualAgent summary').click();
     await page.getByLabel('上传后自动整理', {exact: true}).uncheck();
     assert.equal(await page.getByRole('button', {name: '确认当前费用金额／分笔付款', exact: true}).count(), 0, 'old split-payment button must be removed');
     assert.equal(await page.locator('#newItem').count(), 0, 'the old separate manual-entry button should not duplicate this creation flow');

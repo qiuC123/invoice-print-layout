@@ -81,7 +81,7 @@ async function run(pw){
 
   await page.locator('#scheduledTasks').click();assert.equal(await page.locator('[data-todo-id="todo1"]').count(),0);
   await page.locator('#todoForm [name="title"]').fill('每日整理飞检照片');await page.locator('#todoForm [name="times"]').fill('18：00');
-  await page.locator('#todoForm [name="start_on"]').fill('2026-09-27');await page.locator('#todoForm [name="end_on"]').fill('2026-10-05');
+  await page.locator('#todoForm [name="start_on"]').fill('2026-09-27');await page.locator('#todoForm [name="end_on"]').fill('2099-10-05');
   await page.locator('#todoSave').click();await page.locator('[data-todo-id="todo2"]').waitFor();
   assert.match(await page.locator('[data-todo-id="todo2"]').innerText(),/每天 18:00/);
   assert.match(await page.locator('[data-todo-id="todo2"]').innerText(),/照片来源群/);

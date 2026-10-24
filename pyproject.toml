@@ -22,6 +22,7 @@ dependencies = [
 dev = [
   "mypy>=1.11,<2",
   "pytest>=8,<9",
+  "pytest-xdist>=3.6,<4",
 ]
 
 [project.scripts]

@@ -48,7 +48,7 @@ function buildReportPreviewHtml(items, meta={}) {
     }).join('<br>')):'';
     rows+=`<tr>${sections[r]?`<th rowspan="${sections[r][1]}">${sections[r][0]}</th>`:''}<th data-cell="B${r}">${esc(rowLabels[r]||(r>=29?(r-28)+'、':(r-23)+'、'))}${names}</th><td></td><td></td><td></td><td></td><td></td><td class="amount ${group.length?'filled':''}" data-cell="H${r}">${group.length?`<span title="${esc(group.map(x=>x.title).join('；'))}">${money(amount)}</span>`:''}</td><td></td><td></td><td></td><td></td><td></td></tr>`;
   }
-  const stage=x=>x.stage==='draft'?(x.ready&&x.missing_acknowledged?'已核对 · 已核对 · 已确认缺材料':!x.complete?'待核对 · 仍缺材料':!x.verified?'待核对':'已核对 · 已核对'):({'submitted':'已核对 · 已生成报销包','reimbursed':'已核对 · 历史记录','cancelled':'已取消'}[x.stage]||x.stage);
+  const stage=x=>x.stage==='draft'?(x.ready&&x.missing_acknowledged?'已核对 · 已确认缺材料':!x.complete?'待核对 · 仍缺材料':!x.verified?'待核对':'已核对'):({'submitted':'已核对 · 已生成报销包','reimbursed':'已核对 · 历史记录','cancelled':'已取消'}[x.stage]||x.stage);
   const fileBase=new URL('/file/',location.origin).href;
   // Use the same template order as the PDF and Excel without changing the frozen
   // selection or its request-cache key. Older snapshots keep their input order.

@@ -51,6 +51,8 @@ async function run(pw) {
   try {
     await fs.mkdir(evidence, {recursive: true});
     await page.goto(origin + '/?project=p1');
+    await page.locator('#manualAgent summary').click();
+    await page.getByLabel('上传后自动整理',{exact:true}).uncheck();
     await page.locator('#materialMatching').click();
     await page.locator('#matchingAuto:not([disabled])').waitFor();
     assert.equal(await page.locator('#matchingAIStatus').count(), 0);

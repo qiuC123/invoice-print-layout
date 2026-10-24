@@ -63,7 +63,7 @@ async function run(pw){
   await page.evaluate(()=>{checked.clear();$('search').value='';});await page.locator('#previewReport').click();await ready(6,'21.00');
   const expectedOrder=['rail-a','rail-b','taxi-a','taxi-b','hotel-a','hotel-b'];
   assert.deepEqual(snapshotOrders.at(-1),{requested:inputOrder,ordered:expectedOrder});
-  const imageOrder=await frame.locator('img').evaluateAll(nodes=>nodes.slice(1).map(node=>decodeURIComponent(new URL(node.src).pathname.split('/').pop()).replace(/\.png$/,'')));
+  const imageOrder=await frame.locator('img').evaluateAll(nodes=>nodes.slice(1).map(node=>decodeURIComponent(new URL(node.src||node.dataset.pageSrc).pathname.split('/').pop()).replace(/\.png$/,'')));
   assert.deepEqual(imageOrder,expectedOrder,'Final page images follow canonical train/taxi/hotel order from the server');
   assert.deepEqual(await page.evaluate(()=>previewSnapshot.map(x=>x.id)),inputOrder,'Frozen selection order must not be mutated');
   const shared=sharedSnapshot(mixed);

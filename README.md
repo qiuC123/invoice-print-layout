@@ -187,4 +187,16 @@ $env:PYTHONPATH = Join-Path (Get-Location) "src"
 .\.venv\Scripts\python.exe -m mypy src
 ```
 
+安装开发依赖后也可运行 `python -m pytest -n auto`（需要 `pytest-xdist`）；串行跑法保持有效。
+浏览器测试统一入口会按顺序执行全部 `tests/*.cjs`，失败后继续其他文件，最后返回非零退出码：
+
+```powershell
+node scripts/run-browser-tests.mjs --list
+node scripts/run-browser-tests.mjs
+```
+
+Playwright 按 Node 标准模块规则解析：优先项目本地依赖，也可把已有 Playwright 所在的 `node_modules` 绝对路径放入 `NODE_PATH`。
+可用 `node -p "require.resolve('playwright')"` 检查解析位置。入口不会自动安装依赖或启动正式服务。 包含 Python HTTP 夹具的用例优先使用项目 `.venv`，也可通过 `PHOTO_TEST_PYTHON` 显式指定。
+默认日志保存在忽略的 `workspace/browser-tests/`；可通过 `--output=目录` 指定，单文件超时默认180秒，可用 `BROWSER_TEST_TIMEOUT_MS` 调整。
+
 真实票据、生成结果和工作区均被 `.gitignore` 排除，不能提交到仓库。
