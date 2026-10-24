@@ -132,6 +132,8 @@ def classify_intake(intake: IntakeQueue, values: dict[str, Any]) -> dict[str, An
                 raise ValueError('材料属于另一项目，请切换项目后处理')
             entry['project_id'] = project_id
         entry.setdefault('transaction_source_role', entry['role'])
+        from invoice_print_layout.recognition_corrections import record
+        record(db, entry['id'], entry.get('fields', {}), fields, entry.get('field_sources', {}))
         entry.update(role=role, fields={**entry.get('fields', {}),
                                       **{k: v for k, v in fields.items() if k != 'project_id'}},
                      manual_fields=sorted(set(entry.get('manual_fields', [])) | (set(fields) - {'project_id'})),

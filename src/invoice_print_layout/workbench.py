@@ -155,6 +155,9 @@ class ExpenseStore:
                 CREATE TABLE IF NOT EXISTS events (
                     id INTEGER PRIMARY KEY, item_id TEXT, at TEXT, message TEXT);
                 CREATE TABLE IF NOT EXISTS selections (owner TEXT PRIMARY KEY, item_id TEXT);
+                CREATE TABLE IF NOT EXISTS recognition_corrections (
+                    id INTEGER PRIMARY KEY, material_id TEXT NOT NULL, field TEXT NOT NULL,
+                    old_value TEXT, new_value TEXT, source TEXT NOT NULL, at TEXT NOT NULL);
                 CREATE TABLE IF NOT EXISTS automatic_ride_files (
                     digest TEXT PRIMARY KEY, item_id TEXT REFERENCES expenses(id), material_key TEXT NOT NULL);
             ''')
@@ -584,6 +587,8 @@ class ExpenseStore:
                 data['legacy'] = False
             from invoice_print_layout.material_matching import MaterialMatching
             MaterialMatching.preserve_edit_guard(db, item_id)
+            from invoice_print_layout.recognition_corrections import record_expense
+            record_expense(db, item_id, old, data)
             db.execute('UPDATE expenses SET data=? WHERE id=?', (json.dumps(data, ensure_ascii=False), item_id))
             db.execute('INSERT INTO events(item_id,at,message) VALUES (?,?,?)', (item_id, now(), '更新事项；内容变更后需重新核对'))
         current = self.get(item_id)
@@ -609,6 +614,8 @@ class ExpenseStore:
             if item['stage'] != 'draft' or item['deleted'] or item.get('merged_into') or item.get('returned_to_synthesis'):
                 raise ValueError('仅可编辑未删除、未合并且已确认合成的草稿费用')
             stored = json.loads(db.execute('SELECT data FROM expenses WHERE id=?', (item_id,)).fetchone()['data'])
+            from invoice_print_layout.recognition_corrections import record_expense
+            record_expense(db, item_id, stored, {**stored, **choice, 'amount_cents': cents, 'amount_pending': False})
             if stored['category'] != choice['category']:
                 stored['legacy'] = False
             from invoice_print_layout.material_matching import MaterialMatching

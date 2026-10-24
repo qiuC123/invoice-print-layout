@@ -84,6 +84,8 @@ class ExpenseReview:
                 MaterialMatching.preserve_edit_guard(db, key)
                 if group and not group.get('aggregate_after'):
                     group = json.loads(db.execute('SELECT data FROM material_matches WHERE id=?', (group['id'],)).fetchone()['data'])
+                from invoice_print_layout.recognition_corrections import record_expense
+                record_expense(db, key, data, {**data, **fields})
                 data.update(**fields, updated_at=timestamp)
                 db.execute('UPDATE expenses SET data=? WHERE id=?', (json.dumps(data, ensure_ascii=False), key))
                 cursor = db.execute('INSERT INTO events(item_id,at,message) VALUES (?,?,?)',
@@ -155,6 +157,8 @@ class ExpenseReview:
             confirmation = {'face_amount_cents': face, 'actual_amount_cents': amount,
                             'payments_cents': parts, 'reason': reason, 'at': now(),
                             'attachment_ids': [a['id'] for a in item['attachments']]}
+            from invoice_print_layout.recognition_corrections import record_expense
+            record_expense(db, key, stored, {**stored, 'title': title, 'amount_cents': amount})
             stored.update(title=title, amount_cents=amount, confirmation=confirmation, verified=False, updated_at=now())
             stored.pop('review_requested', None)
             stored.setdefault('confirmations', []).append(confirmation)

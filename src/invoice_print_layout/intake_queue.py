@@ -913,6 +913,11 @@ class IntakeQueue:
             data['role'] = original.get('role', 'other')
         data['field_sources'] = {key: 'manual' if key in manual else native_source
                                 for key, value in data.get('fields', {}).items() if value}
+        # Every retry has fresh local fields; old AI conflicts must not outlive
+        # their extraction or appear against manually corrected values.
+        data.pop('field_conflicts', None)
+        self._complete_local_special_fields(data, original, native_source)
+        self._project_transaction_evidence(data, manual, native_source)
         category_origin = data.get('local_evidence', {}).get('category', {})
         if isinstance(category_origin, dict) and category_origin.get('source') and 'category' not in manual:
             data['field_sources']['category'] = category_origin['source']
@@ -920,11 +925,6 @@ class IntakeQueue:
         if (old_category_source in {'human', 'experience', 'preference', 'category_experience', 'expense_preferences'}
                 and data.get('fields', {}).get('category') == original.get('fields', {}).get('category')):
             data['field_sources']['category'] = old_category_source
-        # Every retry has fresh local fields; old AI conflicts must not outlive
-        # their extraction or appear against manually corrected values.
-        data.pop('field_conflicts', None)
-        self._complete_local_special_fields(data, original, native_source)
-        self._project_transaction_evidence(data, manual, native_source)
         data['issues'] = [issue for issue in data.get('issues', []) if not optional_material_issue(issue)]
         local_ready = complete and self._local_core_ready(data, manual)
         local_unused = complete and rail_payment_not_required(data)
@@ -1437,6 +1437,8 @@ class IntakeQueue:
                     self._deleted_owners(db, fields, data['digest'], record={**data, 'fields': fields})):
                 raise ValueError('材料对应已删除事项，请先恢复该事项，不能重新记账或补件')
             incoming_keys = record_identifier_keys(data)
+            from invoice_print_layout.recognition_corrections import record
+            record(db, key, data.get('fields', {}), fields, data.get('field_sources', {}))
             owners = {row['id'] for row in db.execute('SELECT id,data FROM expenses')
                       if incoming_keys & record_identifier_keys(json.loads(row['data']))}
             owners.update(entry.get('item_id') for row in db.execute('SELECT data FROM intake_queue')

@@ -72,6 +72,8 @@ def evaluate(workspace: Path) -> dict[str, Any]:
     before = hashlib.sha256(database.read_bytes()).hexdigest()
     with sqlite3.connect(database.as_uri() + '?mode=ro', uri=True) as db:
         db.row_factory = sqlite3.Row
+        from invoice_print_layout.recognition_corrections import summary
+        corrections = summary(db)
         expenses = [json.loads(row[0]) for row in db.execute('SELECT data FROM expenses')]
         files = [dict(row) for row in db.execute('SELECT * FROM attachments ORDER BY rowid')]
     counts = Counter(row['item_id'] for row in files)
@@ -114,4 +116,6 @@ def evaluate(workspace: Path) -> dict[str, Any]:
         row['milliseconds'] = (time.perf_counter() - started) * 1000
         rows.append(row)
     assert hashlib.sha256(database.read_bytes()).hexdigest() == before
-    return {'samples': len(rows), 'metrics': score(rows), 'rows': rows, 'oracle_unchanged': True, 'network': False}
+    return {'samples': len(rows), 'metrics': score(rows), 'rows': rows, 'corrections': corrections,
+            'correction_denominator': 'unique currently observed or audited material fields, not extraction attempts',
+            'oracle_unchanged': True, 'network': False}
