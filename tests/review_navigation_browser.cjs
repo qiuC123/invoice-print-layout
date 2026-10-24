@@ -218,6 +218,19 @@ async function run(pw) {
     await page.locator('#tabs [data-view="submitted"]').click();count=transitions.length;
     await press('Enter');assert.equal(transitions.length,count,'shortcuts only run in review');
 
+    // Native interactive controls keep their Enter/E behavior while a fee is selected.
+    await reset([fee('native-control'),fee('native-next')]);await show('native-control');count=transitions.length;
+    await page.locator('#editReviewFields').focus();await page.keyboard.press('Enter');
+    await page.locator('#reviewEditDialog[open]').waitFor();
+    assert.equal(transitions.length,count,'Enter on the edit button opens only its editor');
+    await page.locator('#reviewEditDialog [data-close]').click();
+    await page.evaluate(()=>{const link=document.createElement('a');link.id='nativeShortcutLink';link.href='#native-link-target';link.textContent='Native link';document.body.append(link);});
+    await page.locator('#nativeShortcutLink').focus();await page.keyboard.press('e');
+    assert.equal(await page.locator('#reviewEditDialog').count(),0,'E on an interactive control must not open the editor');
+    await page.keyboard.press('Enter');await page.waitForURL(url=>url.hash==='#native-link-target');
+    assert.equal(transitions.length,count,'Enter on a link does not verify a fee');
+    assert.equal(items[0].verified,false);await page.locator('#nativeShortcutLink').evaluate(node=>node.remove());
+
     // The original explicit destination remains available without automatic next-item verification.
     await reset([fee('original-action'), fee('original-next')]); await show('original-action'); count = transitions.length;
     await page.locator('[data-action="verify"]').click(); await settled();

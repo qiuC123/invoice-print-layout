@@ -519,6 +519,8 @@ document.addEventListener('keydown',event=>{
   setExpensePreview(target.id);revealExpenseRow(target.id);return;
  }
  if(key==='enter'||key==='e'){
+  const control=event.target instanceof Element?event.target.closest('button,a[href],summary,[role="button"],[role="link"],[tabindex]'):null;
+  if(control&&control.id!=='list'&&control!==document.body)return;
   const button=$(key==='enter'?'verifyNext':'editReviewFields');
   if(button&&!button.disabled){event.preventDefault();button.click();}return;
  }
