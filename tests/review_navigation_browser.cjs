@@ -231,6 +231,12 @@ async function run(pw) {
     assert.equal(transitions.length,count,'Enter on a link does not verify a fee');
     assert.equal(items[0].verified,false);await page.locator('#nativeShortcutLink').evaluate(node=>node.remove());
 
+    // Focusable scroll regions are not controls: clicking the preview keeps Enter as verify-and-next.
+    await reset([fee('preview-focus'),fee('preview-next')]);await show('preview-focus');count=transitions.length;
+    await page.locator('#detail h2').first().click();assert.equal(await page.evaluate(()=>document.activeElement.id),'detail');
+    await page.keyboard.press('Enter');await settled();
+    assert.equal(transitions.length,count+1);assert.equal(await activeId(),'preview-next');
+
     // The original explicit destination remains available without automatic next-item verification.
     await reset([fee('original-action'), fee('original-next')]); await show('original-action'); count = transitions.length;
     await page.locator('[data-action="verify"]').click(); await settled();
