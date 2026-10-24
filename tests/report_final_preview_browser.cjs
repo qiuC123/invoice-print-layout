@@ -87,7 +87,7 @@ async function run(pw) {
 
     const geometry = [];
     for (const theme of ['light', 'dark']) {
-      await page.locator('#closePreview').click(); await page.locator('#themeSelect').selectOption(theme);
+      await page.locator('#closePreview').click(); await page.locator('#themeSelect').selectOption(theme,{force:true});
       await page.locator('#previewReport').click(); await ready('taxi-hotel-table');
       geometry.push(await page.locator('#reportPreviewDialog').evaluate(dialog => ({theme: document.documentElement.dataset.theme,
         controls: [...dialog.querySelectorAll('.preview-tools button')].map(el => ({

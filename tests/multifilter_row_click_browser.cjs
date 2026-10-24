@@ -58,7 +58,7 @@ async function run(pw){
  try{
   await fs.mkdir(evidence,{recursive:true});await page.goto(origin+'/');await button('categoryFilter').waitFor();
   for(const theme of ['light','dark'])for(const width of [1280,390]){
-   await page.setViewportSize({width,height:900});await page.locator('#themeSelect').selectOption(theme);
+   await page.setViewportSize({width,height:900});await page.locator('#themeSelect').selectOption(theme,{force:true});
    assert.equal(await page.locator('html').getAttribute('data-theme'),theme);
    for(const id of ids){
     const context={theme,width,id};

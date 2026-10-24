@@ -822,7 +822,7 @@
     await read();
   };
   const openButton = el('materialMatching');
-  openButton.onclick = window.openMaterialMatching;
+  openButton.onclick = () => {if(!currentInvoiceProjectId()&&!new URLSearchParams(location.search).get('project')){notify('请先从侧栏选择一个项目，再打开材料合成台。',true);document.querySelector('#projectLinks a')?.focus();return;}return window.openMaterialMatching();};
   openButton.disabled = false;
   let backgroundDirty = false;
   async function showBackgroundResult() {

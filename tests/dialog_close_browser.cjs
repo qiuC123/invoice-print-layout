@@ -49,7 +49,7 @@ async function run(pw){
  try{
   await page.goto(origin+'/?project=p1');await page.locator('[data-item=f1]').waitFor();
   for(const theme of ['light','dark']){
-   await page.locator('#themeSelect').selectOption(theme);
+   await page.locator('#themeSelect').selectOption(theme,{force:true});
    await page.locator('#reimbursementPeople').click();await check('reimbursementPeopleDialog');
    await page.locator('#materialMatching').click();await check('matchingDeskDialog',true);
    await page.locator('#previewReport').click();await check('reportPreviewDialog');

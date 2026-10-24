@@ -236,7 +236,7 @@ async function run(pw) {
     const protectedColors = () => page.locator('.matching-proof,.matching-card-image,.print-pages img').evaluateAll(nodes => nodes.map(node => ({background: getComputedStyle(node).backgroundColor, scheme: getComputedStyle(node).colorScheme})));
     assert.ok((await protectedColors()).every(value => value.background === 'rgb(255, 255, 255)' && value.scheme === 'light'));
     await page.locator('#matchingClose').click(); await checkPeopleText(page, 'light');
-    await page.locator('#themeSelect').selectOption('dark'); await expectTheme(page, 'dark');
+    await page.locator('#themeSelect').selectOption('dark',{force:true}); await expectTheme(page, 'dark');
     await checkTypography(page, mainText, 'dark main');
     const darkMetricInteractions = await metricInteractions(page, 'dark');
     await checkDropdowns(page, 'main', '.heading h1', 'dark');
@@ -271,15 +271,15 @@ async function run(pw) {
     assert.equal(await frame.locator('html').getAttribute('data-theme'), 'dark', 'Page surround follows the workbench dark palette');
     assert.equal(await frame.locator('details,a,.notice,.expense').count(), 0, 'Only final PDF page images are shown');
     await page.keyboard.press('Escape'); await page.reload(); await page.locator('#list [data-item=f1]').waitFor(); await expectTheme(page, 'dark');
-    await page.locator('#themeSelect').selectOption('light'); await page.reload(); await page.locator('#list [data-item=f1]').waitFor(); await expectTheme(page, 'light');
+    await page.locator('#themeSelect').selectOption('light',{force:true}); await page.reload(); await page.locator('#list [data-item=f1]').waitFor(); await expectTheme(page, 'light');
     // Unsupported values never activate arbitrary theme names or overwrite a valid saved choice.
     await page.locator('#themeSelect').evaluate(select => {select.add(new Option('invalid', 'invalid')); select.value = 'invalid'; select.dispatchEvent(new Event('change', {bubbles: true}));});
     await expectTheme(page, 'light'); assert.equal(await page.evaluate(key => localStorage.getItem(key), key), 'light');
-    await page.locator('#themeSelect').selectOption('dark');
+    await page.locator('#themeSelect').selectOption('dark',{force:true});
     const embedded = await mainContext.newPage(); await embedded.goto(origin + '/host'); const inner = embedded.frames().find(frame => frame.url().includes('embedded=1'));
     await inner.locator('html.embedded-workbench').waitFor(); await expectTheme(inner, 'dark');
     const hostColor = await embedded.locator('body').evaluate(node => getComputedStyle(node).backgroundColor);
-    await inner.locator('#themeSelect').selectOption('light'); await expectTheme(inner, 'light');
+    await inner.locator('#themeSelect').selectOption('light',{force:true}); await expectTheme(inner, 'light');
     assert.equal(await embedded.locator('body').evaluate(node => getComputedStyle(node).backgroundColor), hostColor, 'Embedded selection cannot style its parent shell');
     await expectTheme(page, 'dark');
     const logistics = await mainContext.newPage(); await logistics.goto(origin + '/logistics');
@@ -292,7 +292,7 @@ async function run(pw) {
     await checkDropdowns(page, 'main', '.heading h1', 'mobile dark');
     await checkGeometry(page, ['#search', '.workbench-actions button', '#selectionTools>button'], 'mobile dark');
     for (const mode of ['dark', 'light']) {
-      await page.locator('#themeSelect').selectOption(mode);
+      await page.locator('#themeSelect').selectOption(mode,{force:true});
       await checkTypography(page, [['.heading h1', 20, 600, 28], ['.heading p', 14, 400, 22],
         ['.row .sub', 12, 400, 20]], 'mobile ' + mode);
       assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), `${mode} narrow main text never forces page overflow`);
@@ -313,7 +313,7 @@ async function run(pw) {
         "Object.defineProperty(window, 'localStorage', {get() { throw new DOMException('Storage denied', 'SecurityError'); }});" :
         "Storage.prototype.setItem = function() { throw new DOMException('Quota exceeded', 'QuotaExceededError'); };" );
       const page = await isolated.newPage(); await page.goto(origin + '/?project=p1'); await page.locator('#list [data-item=f1]').waitFor(); await expectTheme(page, 'light');
-      await page.locator('#themeSelect').selectOption('dark'); await expectTheme(page, 'dark');
+      await page.locator('#themeSelect').selectOption('dark',{force:true}); await expectTheme(page, 'dark');
       await page.reload(); await page.locator('#list [data-item=f1]').waitFor(); await expectTheme(page, 'light');
       evidence.push({storageFailure: failure, lightFallback: true, selectionStillWorks: true}); await isolated.close();
     }

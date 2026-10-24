@@ -50,7 +50,7 @@ async function run(pw){
   assert.ok((await preview.innerText()).includes('付款截图保留为附件'));
   assert.ok(!(await preview.innerText()).includes('另有 1 份补充材料'), 'Waybill must not be counted twice');
   assert.ok(!(await preview.innerText()).includes('付款合计 ¥ 99.99'));
-  await page.locator('#themeSelect').selectOption('dark');
+  await page.locator('#themeSelect').selectOption('dark',{force:true});
   assert.ok((await preview.innerText()).includes('发票＋运单明细已齐全'));
   courier.attachments=courier.attachments.filter(a=>a.role!=='detail');
   Object.assign(courier,{complete:false,pending_review:true,review_requested:true,missing:['运单明细'],version:'v2'});

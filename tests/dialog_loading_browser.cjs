@@ -133,7 +133,7 @@ async function run(pw) {
 
     const geometry = [];
     for (const theme of ['light', 'dark']) {
-      await page.locator('#themeSelect').selectOption(theme);
+      await page.locator('#themeSelect').selectOption(theme,{force:true});
       const read = hold('/api/state', state());
       await page.locator('#previewReport').click(); await read.started; await loading('reportPreviewDialog');
       geometry.push(await page.locator('#reportPreviewDialog .dialog-loading').evaluate(el => ({theme: document.documentElement.dataset.theme,

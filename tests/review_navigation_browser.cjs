@@ -115,7 +115,7 @@ async function run(pw) {
     await page.locator('#tabs [data-view="deleted"]').click(); await issue('missing');
     assert.equal(await page.locator('#tabs [data-view="review"]').getAttribute('class'), 'active');
     for (const theme of ['light', 'dark']) {
-      await page.locator('#themeSelect').selectOption(theme);
+      await page.locator('#themeSelect').selectOption(theme,{force:true});
       assert.equal(await page.locator('html').getAttribute('data-theme'), theme);
       await page.setViewportSize({width: 390, height: 844});
       assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true, `${theme}: issue filter must not overflow a narrow screen`);

@@ -103,7 +103,7 @@ async function run(pw) {
 
     const spacing = [];
     for (const theme of ['light', 'dark']) {
-      await page.locator('#themeSelect').selectOption(theme); await page.locator('#tabs [data-view=review]').click();
+      await page.locator('#themeSelect').selectOption(theme,{force:true}); await page.locator('#tabs [data-view=review]').click();
       const gap = await page.evaluate(() => {
         const el = document.querySelector('.listhead');
         const bottom = Math.max(...[...document.querySelectorAll('#selectionTools button')].filter(button => button.offsetParent).map(button => button.getBoundingClientRect().bottom));

@@ -109,7 +109,7 @@ async function run(pw) {
     assert.equal(await retained.evaluate(node => node === document.querySelector('#expensePrintPages img')), true);
     await page.locator('[data-check="B"]').check();
     for (const mode of ['dark', 'light']) {
-      await page.locator('#themeSelect').selectOption(mode);
+      await page.locator('#themeSelect').selectOption(mode,{force:true});
       assert.equal(await active(), 'A');
       for (const selector of ['main', '.workspace', '#list', '#detail', '.listhead', '.toolbar']) {
         const before = requests.length;

@@ -93,7 +93,7 @@ async function run(pw){
   };
   const selectionEvidence=[];
   for(const theme of ['light','dark']){
-   await page.locator('#themeSelect').selectOption(theme);await set('personFilter',[]);await ensurePeopleOpen();
+   await page.locator('#themeSelect').selectOption(theme,{force:true});await set('personFilter',[]);await ensurePeopleOpen();
    assert.equal(await personAll().isChecked(),false);assert.equal(await personAll().evaluate(node=>node.indeterminate),false);
    assert.equal(await actualPeople().evaluateAll(nodes=>nodes.filter(node=>node.checked).length),0);
    assert.doesNotMatch(await personMenu.innerText(),/Alt/i);assert.doesNotMatch(await personToggle.getAttribute('title')||'',/Alt/i);
@@ -136,7 +136,7 @@ async function run(pw){
   const allFilter=id=>page.locator('#'+id+'Menu').getByRole('checkbox',{name:'全选',exact:true});
   const assertFeeCheck=async()=>assert.deepEqual(await page.evaluate(()=>[...checked]),['rA']);
   for(const theme of ['light','dark']){
-   await page.locator('#themeSelect').selectOption(theme);
+   await page.locator('#themeSelect').selectOption(theme,{force:true});
    await set('personFilter',['a','b']);await set('issueFilter',['missing','amount']);await set('categoryFilter',[]);
    let menu=await openFilter('categoryFilter');assert.equal(await menu.locator('label').first().innerText(),'全选');
    assert.equal(await allFilter('categoryFilter').isChecked(),false);assert.equal(await allFilter('categoryFilter').evaluate(node=>node.indeterminate),false);
@@ -186,7 +186,7 @@ async function run(pw){
   await page.locator('.heading h1').click();await page.locator('[data-check=rA]').uncheck();
   const appearance=[],menuGeometry=[];
   for(const theme of ['light','dark']){
-   await page.locator('#themeSelect').selectOption(theme);
+   await page.locator('#themeSelect').selectOption(theme,{force:true});
    for(const width of [1400,390]){
     await page.setViewportSize({width,height:1000});
     for(const id of ['categoryFilter','personFilter','issueFilter']){

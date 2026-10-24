@@ -1,4 +1,15 @@
 'use strict';
+// Normalize transport failures once for all workbench API consumers, without retrying writes.
+const nativeWorkbenchFetch=window.fetch.bind(window);
+window.fetch=async(...args)=>{
+ try{return await nativeWorkbenchFetch(...args);}
+ catch(error){
+  const target=args[0] instanceof Request?args[0].url:String(args[0]);
+  const url=new URL(target,location.href);
+  if(url.origin===location.origin&&url.pathname.startsWith('/api/')&&/failed to fetch|networkerror|load failed/i.test(error.message))throw Error('工作台服务未响应，请确认工作台仍在运行后重试');
+  throw error;
+ }
+};
 const projectScope=new URLSearchParams(location.search).get('project')||'';
 const embeddedWorkbench=!!projectScope&&new URLSearchParams(location.search).get('embedded')==='1'&&window.parent!==window;
 if(embeddedWorkbench)document.documentElement.classList.add('embedded-workbench');
@@ -14,7 +25,7 @@ let projectReimbursementView=null;
 function projectReimbursementStatus(project){return project?.reimbursement_status==='reimbursed'?'reimbursed':'unreimbursed';}
 function renderProjectNavigation(){
  const projects=state.projects||[];
- if(projectReimbursementView===null)projectReimbursementView=projectReimbursementStatus(projectContext());
+ if(projectReimbursementView===null)projectReimbursementView=projectContext()?projectReimbursementStatus(projectContext()):projects.some(p=>projectReimbursementStatus(p)==='unreimbursed')?'unreimbursed':'reimbursed';
  let nav=$('projectWorkbenches');
  if(!nav){nav=document.createElement('nav');nav.id='projectWorkbenches';nav.setAttribute('aria-label','项目报销工作台');document.querySelector('.rail').append(nav);}
  const statuses=[['unreimbursed','未报销'],['reimbursed','已报销']];

@@ -5,7 +5,7 @@ const path=require('node:path');
 async function run(pw){
  const browser=await pw.chromium.launch({headless:true});
  const page=await browser.newPage({viewport:{width:1500,height:1000}}),errors=[],writes=[];
- const base='http://127.0.0.1:18772',previewRequests=[];
+ const base='http://127.0.0.1:18772',previewRequests=[];let failState=false;
  const projects=[{id:'p1',name:'项目甲'},{id:'p2',name:'项目乙'}];
  const reportTypes=[{code:'other',label:'其他',names:[],editable_name:true}];
  const item=(id,p)=>({id,title:id,project:p.name,project_id:p.id,category:'其他',amount:'10.00',amount_cents:1000,stage:'draft',verified:false,complete:true,ready:false,attachments:[],events:[],expense_date:'',note:'',merchant:'',order_number:'',followup_date:'',invoice_state:'not_requested',missing:[],version:'v1'});
@@ -22,7 +22,7 @@ async function run(pw){
    if(url.pathname==='/api/intake/receive'){const q={...queue[0],id:'new',name:data.name,project_id:data.project_id,status:'received',revision:0};queue.push(q);return json(q);}
    return json({});
   }
-  if(url.pathname==='/api/state')return json(state);
+  if(url.pathname==='/api/state'){if(failState){failState=false;return route.abort('connectionrefused');}return json(state);}
   if(url.pathname==='/api/logistics')return json({projects,tasks:[],outbox:[],token:'test'});
   if(url.pathname==='/api/logistics/inbox')return json({groups:[],messages:[],receiver:{status:'disconnected'}});
   if(url.pathname.startsWith('/export/'))return route.fulfill({contentType:'image/svg+xml',body:'<svg xmlns="http://www.w3.org/2000/svg" width="842" height="595"><rect width="842" height="595" fill="white"/></svg>'});
@@ -81,6 +81,23 @@ async function run(pw){
   await page.goto(base+'/');
   await page.locator('[data-item="同名但未归属"]').waitFor();
   assert.equal(await page.locator('[data-item]').count(),4);
+  await page.locator('#materialMatching').click();
+  assert.match(await page.locator('#error').innerText(),/请先从侧栏选择一个项目/);
+  assert.equal(await page.locator('#themeSelect').isVisible(),false);
+  await page.locator('#workbenchMore summary').click();assert.equal(await page.locator('#themeSelect').isVisible(),true);
+  assert.equal(await page.locator('#importHistory').isVisible(),true);
+  await page.locator('#themeSelect').selectOption('dark');assert.equal(await page.locator('html').getAttribute('data-theme'),'dark');
+  await page.locator('#workbenchMore summary').click();
+  failState=true;await page.evaluate(async()=>{try{await load();}catch(error){notify(error.message,true);}});
+  assert.match(await page.locator('#error').innerText(),/工作台服务未响应，请确认工作台仍在运行后重试/);
+  assert.doesNotMatch(await page.locator('#error').innerText(),/Failed to fetch/);
+  projects.forEach(p=>p.reimbursement_status='reimbursed');await page.goto(base+'/');
+  await page.locator('#projectLinks a').first().waitFor();
+  assert.equal(await page.locator('[data-project-status="reimbursed"]').getAttribute('aria-pressed'),'true');
+  assert.match(await page.locator('[data-project-status="unreimbursed"]').innerText(),/未报销 0/);
+  assert.equal(await page.locator('#projectLinks a').count(),2,'the nonempty side opens on first visit');
+  projects.forEach(p=>delete p.reimbursement_status);
+
   await page.goto(base+'/?project=nonexistent');
   await page.locator('#error').filter({hasText:'项目不存在，请返回项目列表重新选择。'}).waitFor();
   assert.equal(await page.getByRole('link',{name:'返回项目列表',exact:true}).getAttribute('href'),'/');
