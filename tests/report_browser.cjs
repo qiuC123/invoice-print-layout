@@ -37,8 +37,8 @@ async function run(pw){
   assert.equal(await page.locator('#reportForm [name=payment]').count(),0);
   await page.evaluate(()=>{view='review';renderSelection();});
   await page.locator('#createReport').click();await page.waitForFunction(()=>!reportBusy);
-  assert.match(await page.locator('#reportError').innerText(),/可提交/);
-  assert.equal(requests.length,0,'an already open dialog must reject submission after leaving 可提交');
+  assert.match(await page.locator('#reportError').innerText(),/已核对/);
+  assert.equal(requests.length,0,'an already open dialog must reject submission after leaving 已核对');
   await page.evaluate(()=>{view='submitted';renderSelection();});
   await page.locator('#createReport').click();await pendingReport;
   assert.equal(await page.locator('#reportProgress').innerText(),'正在制作报销包…');releaseReport();
@@ -49,10 +49,10 @@ async function run(pw){
   assert.deepEqual(requests[1].ids,['synthetic']);assert.equal(requests[1].options.payment,undefined);
   assert.equal(await page.locator('#reportDownloads a').count(),3);
   assert.equal(await page.locator('#reportDownloads a').last().getAttribute('href'),'/export/report.xlsx');
-  assert.match(await page.locator('#reportProgress').innerText(),/报销包已保留在“可提交”/);
+  assert.match(await page.locator('#reportProgress').innerText(),/报销包已保留在“已核对”/);
   assert.equal(await page.evaluate(()=>checked.size),0);
   assert.equal(item.stage,'submitted');
-  assert.equal(await page.locator('[data-check="synthetic"]').count(),1,'generated package remains visible in 可提交');
+  assert.equal(await page.locator('[data-check="synthetic"]').count(),1,'generated package remains visible in 已核对');
   await page.setViewportSize({width:390,height:844});
   assert.equal(await page.locator('#reportDialog').evaluate(x=>x.scrollWidth<=x.clientWidth),true);
   await page.locator('#closeReport').click();item.stage='reimbursed';

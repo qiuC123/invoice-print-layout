@@ -105,7 +105,7 @@ async function run(pw) {
     await page.goto(`${origin}/?project=p1`);
     await page.locator('[data-item="A"]').waitFor();
     assert.equal(await page.locator('[data-view="ready"]').count(), 0, 'obsolete ready tab and card must be removed');
-    assert.equal(await page.locator('#tabs [data-view="submitted"]').innerText(), '可提交');
+    assert.equal(await page.locator('#tabs [data-view="submitted"]').innerText(), '已核对');
     assert.equal(await page.locator('#tabs [data-view="reimbursed"]').count(), 0, 'expense reimbursed tab is removed');
 
     await select('A');
@@ -215,19 +215,19 @@ async function run(pw) {
     assert.equal(await page.locator('#exportSelected').isVisible(),false);
     await page.evaluate(()=>$('exportSelected').onclick());
     await page.waitForFunction(() => !document.getElementById('error').hidden);
-    assert.match(await page.locator('#error').innerText(), /可提交/);
+    assert.match(await page.locator('#error').innerText(), /已核对/);
     assert.equal(await page.locator('#reportDialog[open]').count(), 0, 'unreviewed draft must not open report production');
 
     await page.locator('#tabs [data-view="deleted"]').click();
     await select('F');
     assert.equal(count('F'), 0, 'merged original record is read-only and does not generate a separate print package');
     assert.match(await page.locator('[data-item="F"] .badge').innerText(), /已合并/);
-    assert.match(await page.locator('#detail').innerText(), /原费用记录只读保留.*不参与待核对或可提交金额/);
+    assert.match(await page.locator('#detail').innerText(), /原费用记录只读保留.*不参与待核对或待提交金额/);
     assert.equal(await page.locator('#detail [data-action="draft"]').count(), 0,
       'merged source expense must not offer independent restore and duplicate the group total');
 
     assert.equal(await page.locator('[data-view="ready"]').count(), 0);
-    assert.equal(await page.locator('#tabs [data-view="submitted"]').innerText(), '可提交');
+    assert.equal(await page.locator('#tabs [data-view="submitted"]').innerText(), '已核对');
     assert.deepEqual(errors, []);
     assert.deepEqual(requests.filter(x => x.path !== '/api/expense-print-preview').map(x => x.path), ['/api/transition'],
       'preview, selection and opening report dialog must not update, submit or make reports');

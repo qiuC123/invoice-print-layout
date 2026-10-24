@@ -48,7 +48,7 @@ function buildReportPreviewHtml(items, meta={}) {
     }).join('<br>')):'';
     rows+=`<tr>${sections[r]?`<th rowspan="${sections[r][1]}">${sections[r][0]}</th>`:''}<th data-cell="B${r}">${esc(rowLabels[r]||(r>=29?(r-28)+'、':(r-23)+'、'))}${names}</th><td></td><td></td><td></td><td></td><td></td><td class="amount ${group.length?'filled':''}" data-cell="H${r}">${group.length?`<span title="${esc(group.map(x=>x.title).join('；'))}">${money(amount)}</span>`:''}</td><td></td><td></td><td></td><td></td><td></td></tr>`;
   }
-  const stage=x=>x.stage==='draft'?(x.ready&&x.missing_acknowledged?'可提交 · 已核对 · 已确认缺材料':!x.complete?'待核对 · 仍缺材料':!x.verified?'待核对':'可提交 · 已核对'):({'submitted':'可提交 · 已生成报销包','reimbursed':'可提交 · 历史记录','cancelled':'已取消'}[x.stage]||x.stage);
+  const stage=x=>x.stage==='draft'?(x.ready&&x.missing_acknowledged?'已核对 · 已核对 · 已确认缺材料':!x.complete?'待核对 · 仍缺材料':!x.verified?'待核对':'已核对 · 已核对'):({'submitted':'已核对 · 已生成报销包','reimbursed':'已核对 · 历史记录','cancelled':'已取消'}[x.stage]||x.stage);
   const fileBase=new URL('/file/',location.origin).href;
   // Use the same template order as the PDF and Excel without changing the frozen
   // selection or its request-cache key. Older snapshots keep their input order.
@@ -247,7 +247,7 @@ reportDialog.innerHTML=`<div class="dialoghead"><h2>制作报销包</h2><button 
 <label>设置／更换公司模板（XLSX，最多5MB）<input id="reportTemplateFile" type="file" accept=".xlsx"></label>
 <form id="reportForm"><div class="formgrid"><label>报销人<input name="person" maxlength="80"></label><label>报销期间（不填写则按所选事项日期）<input name="period" maxlength="120"></label>
 </div>
-<p class="muted">主表费用区仅填写“现场现金支付（需报销）”列及合计，其他费用栏留空。活动日期、审核签字等未知内容留空。制作成功后，报销包保留在“可提交”供查看与下载；失败保持原状态。</p>
+<p class="muted">主表费用区仅填写“现场现金支付（需报销）”列及合计，其他费用栏留空。活动日期、审核签字等未知内容留空。制作成功后，报销包保留在“已核对”供查看与下载；失败保持原状态。</p>
 <div class="actions"><button type="submit" id="createReport" class="primary">开始制作 PDF＋MD＋Excel</button></div></form>
 <p id="reportProgress" role="status"></p><p id="reportError" role="alert" hidden></p><div id="reportDownloads" class="actions"></div>`;
 document.body.append(reportDialog);
@@ -290,11 +290,11 @@ $('reportForm').onsubmit=async e=>{
     for(const [key,label] of [['pdf','下载总 PDF'],['md','下载 MD 清单'],['xlsx','下载 Excel 报销表']]){
       const a=document.createElement('a');a.href='/export/'+encodeURIComponent(result[key]);a.textContent=label;a.target='_blank';a.rel='noopener';$('reportDownloads').append(a);
     }
-    $('reportProgress').textContent='三份文件已生成，报销包已保留在“可提交”。PDF请选择A4、1×1打印。';
-    $('notice').replaceChildren();notify('报销包已生成（PDF＋MD＋Excel），可在“可提交”查看最终打印页。');
+    $('reportProgress').textContent='三份文件已生成，报销包已保留在“已核对”。PDF请选择A4、1×1打印。';
+    $('notice').replaceChildren();notify('报销包已生成（PDF＋MD＋Excel），可在“已核对”查看最终打印页。');
     for(const a of $('reportDownloads').children)$('notice').append(a.cloneNode(true));
     for(const id of reportIds)checked.delete(id);
-    try{await load();}catch(error){$('reportProgress').textContent+=' 列表刷新失败，请刷新页面查看“可提交”中的报销包；文件已生成，无需重复制作。';}
+    try{await load();}catch(error){$('reportProgress').textContent+=' 列表刷新失败，请刷新页面查看“已核对”中的报销包；文件已生成，无需重复制作。';}
   }catch(error){$('reportProgress').textContent='制作未完成，请按提示检查；原件与事项状态保留。';reportFail(error);}
   finally{reportLock(false);}
 };

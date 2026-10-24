@@ -147,7 +147,7 @@ async function run(playwright){
       assert.equal(await page.locator('#exportSelected').isVisible(),false);
       assert.equal(await page.locator('#exportSelected').isDisabled(),true);
       await page.evaluate(()=>$('exportSelected').onclick());
-      assert.match(await page.locator('#error').innerText(),/可提交/);
+      assert.match(await page.locator('#error').innerText(),/已核对/);
       assert.equal(await page.locator('#reportDialog[open]').count(),0);
     }
     assert.deepEqual(errors,[]);

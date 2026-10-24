@@ -76,7 +76,7 @@ async function run(playwright) {
   try {
     await page.goto(`${origin}/?project=p1`);
     await page.locator('[data-item="review"]').waitFor();
-    assert.equal(await tab('submitted').innerText(), '可提交');
+    assert.equal(await tab('submitted').innerText(), '已核对');
     assert.equal(await tab('reimbursed').count(), 0, 'only the expense reimbursed tab is removed');
     assert.equal(await page.locator('[data-project-status="reimbursed"]').innerText(), '已报销 1', 'project classification survives');
     assert.equal(await page.locator('#projectReimbursementStatus,#requestReviewSelected').count(), 0);
@@ -131,7 +131,7 @@ async function run(playwright) {
     await select('review');
     await image('review');
     assert.deepEqual(await ids(), ['ready', 'reimbursed', 'review', 'submitted']);
-    assert.match(await page.locator('#notice').innerText(), /核对完成.*可提交/);
+    assert.match(await page.locator('#notice').innerText(), /核对完成.*已核对/);
     assert.equal(state.items.find(x => x.id === 'review').stage, 'draft', 'UI view does not rewrite stored stage');
     await tab('review').click();assert.deepEqual(await ids(), ['missing','requested']);
     await tab('submitted').click();
@@ -162,6 +162,16 @@ async function run(playwright) {
     assert.doesNotMatch(await page.locator('#metrics').innerText(), /9,999\.99/);
     await page.locator('#matchingClose').click();
     assert.equal(writes.length, 1);
+    state.items.push(item('historical-project', {project_id:'p2', verified:true, ready:true}));
+    await page.goto(origin + '/');
+    await page.locator('.metric[data-view="submitted"]').waitFor();
+    const metric = page.locator('.metric[data-view="submitted"]');
+    assert.equal(await metric.locator('b').innerText(), '¥ 200.00', 'only two reviewed unexported drafts in a pending project count');
+    assert.match(await metric.innerText(), /已报销项目中另有 1 笔已核对未生成报销包/);
+    await metric.click();
+    assert.deepEqual(await page.locator('#list [data-item]').evaluateAll(rows=>rows.slice(0,2).map(x=>x.dataset.item)), ['review','ready']);
+    assert.match(await page.locator('[data-item="historical-project"]').innerText(), /项目已报销/);
+    assert.equal(await page.evaluate(()=>reportEligible(state.items.find(x=>x.id==='historical-project'))),true,'package eligibility remains unchanged');
     assert.deepEqual(errors, []);
     return {passed: true, scope: 'synthetic browser only', reviewSplit: true, preservedHistoricalBills: true,
       finalPrintPreview: true, materialDeskEntry: true, createdExpenseFocus: true, legacySynthesisRedirect: true,
