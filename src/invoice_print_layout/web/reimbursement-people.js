@@ -366,7 +366,16 @@
   }
   const bulkAssignExpenses = (items, config) => bulkAssign(items, config);
   const bulkAssignMaterials = (entries, config) => bulkAssign(entries, config, true);
-  window.reimbursementPeopleUI = {refresh, options, markup, label, choice, choiceControl, groupMarkup, newPerson, editExpense, activePeople, filterOptions, matchesPerson, bulkAssignExpenses, bulkAssignMaterials,
+  function batchChoice(select, projectId) {
+    const people = activePeople(projectId), key = 'invoice-batch-person:' + projectId;
+    let selected = '';
+    try { selected = localStorage.getItem(key) || ''; } catch (_) { /* Optional preference. */ }
+    select.innerHTML = '<option value="">不指定</option>' + people.map(p => `<option value="${esc(p.id)}">${esc(p.label)}</option>`).join('');
+    select.value = people.some(p => p.id === selected) ? selected : '';
+    select.disabled = !projectId;
+    select.onchange = () => { try { localStorage.setItem(key, select.value); } catch (_) { /* Current batch still works. */ } };
+  }
+  window.reimbursementPeopleUI = {batchChoice, refresh, options, markup, label, choice, choiceControl, groupMarkup, newPerson, editExpense, activePeople, filterOptions, matchesPerson, bulkAssignExpenses, bulkAssignMaterials,
     people: () => cache.projectId === project() ? cache.people : [],
     hasPeople: () => cache.projectId === project() && cache.people.length > 0};
   const button = $('reimbursementPeople'); if (button) button.onclick = openSummary;

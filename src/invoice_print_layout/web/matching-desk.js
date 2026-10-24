@@ -7,6 +7,7 @@
   dialog.innerHTML = `
     <div class="matching-header"><div><small>材料合成台</small><h2>选择材料，确认创建报销项目</h2></div><button id="matchingClose" type="button" aria-label="关闭材料合成台" class="dialog-close">×</button></div>
     <div class="matching-toolbar">
+      <label>本批归属人<select id="matchingBatchPerson"><option value="">不指定</option></select></label>
       <button id="matchingUpload" type="button" class="primary">＋ 收材料</button>
       <input id="matchingFiles" type="file" accept=".pdf,.png,.jpg,.jpeg,.webp" multiple hidden>
       <button id="matchingClaim" type="button">二维码／链接领票</button>
@@ -527,6 +528,7 @@
     if (busy || !files.length) return;
     if (files.length > 50) {message('每批最多50份，请分批上传。', true); return;}
     if (files.some(file => file.size > 20 * 1024 * 1024) || files.reduce((sum, file) => sum + file.size, 0) > 200 * 1024 * 1024) {message('每份最多20MB，每批合计最多200MB，请分批上传。', true); return;}
+    const batchPerson = el('matchingBatchPerson').value;
     const uploadProject = projectId, agent = window.manualInvoiceAgent;
     const organizer = uploadProject && typeof agent?.shouldAutoOrganize === 'function' && typeof agent?.startReceived === 'function' && agent.shouldAutoOrganize(uploadProject) ? agent : null;
     const background = !organizer && window.invoiceIntakeProgress?.available();
@@ -540,7 +542,7 @@
         el('matchingProgressText').textContent = `${index + 1} / ${files.length} · ${file.name}`;
         try {
           const data = await new Promise((resolve, reject) => {const reader = new FileReader(); reader.onload = () => resolve(reader.result.split(',')[1]); reader.onerror = reject; reader.readAsDataURL(file);});
-          const entry = await api('intake/receive', {name: file.name, data, project_id: uploadProject, batch}); received++;
+          const entry = await api('intake/receive', {name: file.name, data, project_id: uploadProject, batch, reimbursement_person_id: batchPerson}); received++;
           if (entry.duplicate || entry.status === 'duplicate') duplicates++;
           else if (organizer || background) {
             if (typeof entry.id === 'string' && entry.id && entry.project_id === uploadProject && !entry.item_id && ['received', 'review'].includes(entry.status)) entryIds.add(entry.id);
@@ -801,6 +803,7 @@
         if (!state.token) await load();
         if (!current()) return;
         projectId = currentInvoiceProjectId();
+        window.reimbursementPeopleUI?.batchChoice(el('matchingBatchPerson'), projectId);
         if (suggestion && suggestion.project_id !== projectId) throw Error('请先进入这组建议所属的项目。');
         await refreshBoard(false);
         if (!current()) return;

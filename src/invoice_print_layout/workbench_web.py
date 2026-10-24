@@ -659,7 +659,7 @@ def make_server(workspace: Path, port: int = 8765, *, mode: str = 'workbench') -
                         result = store.remove(body['id'], body['expected_version'], restore=path.endswith('/restore'))
                     elif path == '/api/intake/receive':
                         result = intake.receive(body['name'], base64.b64decode(body['data'], validate=True),
-                                                project_id=body.get('project_id', ''), batch=body.get('batch', ''))
+                                                project_id=body.get('project_id', ''), batch=body.get('batch', ''), reimbursement_person_id=body.get('reimbursement_person_id', ''))
                     elif path == '/api/intake/classify':
                         result = classify_intake(intake, body)
                     elif path in {'/api/intake/archive', '/api/intake/restore', '/api/intake/delete', '/api/intake/restore-deleted'}:

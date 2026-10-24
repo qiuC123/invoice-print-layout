@@ -9,7 +9,7 @@ async function run(pw) {
   const assets = path.resolve(__dirname, '../src/invoice_print_layout/web');
   const origin = 'http://127.0.0.1:18944';
   const results = [];
-  async function scenario(kind, resume = false) {
+  async function scenario(kind, resume = false, person = '') {
     const context = await browser.newContext();
     const page = await context.newPage(); page.setDefaultTimeout(10000);
     const writes = [], errors = [], entries = [];
@@ -22,7 +22,7 @@ async function run(pw) {
     const harness = `
       'use strict'; const projectScope='p1';
       let state={background_intake_ready:true,token:'synthetic',projects:[{id:'p1',name:'Synthetic'}],items:[],roles:{invoice:'发票',payment:'付款'}};
-      let active=null,view='review',checked=new Set();
+      let active=null,view='review',checked=new Set();window.currentInvoiceProjectId=()=>projectScope;
       const $=id=>document.getElementById(id), esc=x=>String(x??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
       const money=c=>(c/100).toFixed(2), currentInvoiceProjectId=()=>projectScope,projectContext=()=>state.projects[0];
       const dialogLoadingMarkup=text=>'<p>'+esc(text)+'</p>',dialogLoadErrorMarkup=text=>'<p>'+esc(text)+'</p><button data-dialog-retry>重试</button>';
@@ -53,19 +53,30 @@ async function run(pw) {
         }
         assert.fail('Unexpected mutation while background work is held: ' + url.pathname);
       }
+      if (url.pathname === '/api/reimbursement-people') return json({project_id:'p1',people:[{id:'person-1',label:'Synthetic person',project_id:'p1'}]});
       if (url.pathname === '/api/intake/progress') return json({batches: job ? [job] : [],
         pending: !job && resume ? entries : [], pending_count: !job && resume ? entries.length : 0});
       if (url.pathname === '/api/intake') return json({queue: [old, ...entries]});
       if (url.pathname === '/api/material-matching') {boardReads++; return json(board);}
       if (url.pathname === '/harness.js') return route.fulfill({contentType: 'text/javascript', body: harness});
-      if (url.pathname === '/') return route.fulfill({contentType: 'text/html; charset=utf-8', body: `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"></head><body><button id="materialMatching">材料合成台</button><p id="feedback"></p><script src="/harness.js"></script><script src="/intake-progress.js"></script><script src="/intake.js"></script><script src="/matching-desk.js"></script></body></html>`});
+      if (url.pathname === '/') return route.fulfill({contentType: 'text/html; charset=utf-8', body: `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"></head><body><button id="materialMatching">材料合成台</button><p id="feedback"></p><script src="/harness.js"></script><script src="/reimbursement-people.js"></script><script src="/intake-progress.js"></script><script src="/intake.js"></script><script src="/matching-desk.js"></script></body></html>`});
       if (url.pathname.startsWith('/intake-file/')) return route.fulfill({contentType: 'image/png', body: Buffer.from('synthetic')});
       return route.fulfill({contentType: 'text/javascript', body: await fs.readFile(path.join(assets, url.pathname.slice(1)))});
     });
     try {
       await page.goto(origin + '/');
+      await page.evaluate(()=>window.reimbursementPeopleUI.refresh('p1'));
       if (kind === 'matching') await page.evaluate(() => window.openMaterialMatching());
       else await page.evaluate(() => window.openUnifiedIntake());
+      const personSelect=page.locator(kind==='matching'?'#matchingBatchPerson':'#intakeBatchPerson');
+      assert.equal(await personSelect.inputValue(),'');
+      if(person){
+        await personSelect.selectOption(person);
+        if(kind==='matching'){await page.locator('#matchingClose').click();await page.evaluate(()=>window.openMaterialMatching());}
+        else {await page.locator('#intakeDialog [data-close]').click();await page.evaluate(()=>window.openUnifiedIntake());}
+        assert.equal(await personSelect.inputValue(),person,'last choice survives closing and reopening the upload entry');
+        assert.equal(await page.evaluate(()=>localStorage.getItem('invoice-batch-person:p2')),null,'choices stay per project');
+      }
       if (resume) {
         await page.locator('#matchingBackgroundStatus [data-resume-intake]').waitFor();
         assert.equal(writes.length, 0, 'a restart/page load must never start recognition');
@@ -81,6 +92,7 @@ async function run(pw) {
         const closableMs = performance.now() - start;
         assert.ok(closableMs < 5000, `window should be closable before OCR is released: ${closableMs}ms`);
         assert.equal(entries.length, 20);
+        assert.ok(writes.filter(w=>w.route==='/api/intake/receive').every(w=>w.body.reimbursement_person_id===person));
         const enqueue = writes.filter(write => write.route === '/api/intake/enqueue');
         assert.equal(enqueue.length, 1); assert.equal(enqueue[0].body.ids.length, 20);
         assert.ok(writes.slice(0, 20).every(write => write.route === '/api/intake/receive'));
@@ -104,7 +116,7 @@ async function run(pw) {
     } finally {await context.close();}
   }
   try {
-    await scenario('intake'); await scenario('matching'); await scenario('matching', true);
+    await scenario('intake'); await scenario('matching'); await scenario('matching', true); await scenario('intake',false,'person-1'); await scenario('matching',false,'person-1');
     return {passed: true, results, resumed_only_on_click: true, edits_during_recognition: true, no_live_data: true};
   } finally {await browser.close();}
 }
