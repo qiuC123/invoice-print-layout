@@ -12,7 +12,9 @@ from invoice_print_layout.workbench_web import classify_intake
 
 @pytest.mark.parametrize('text,category', [('*住宿服务*住宿费','酒店'),('*铁路客运*车票','高铁'),
  ('＊五金＊螺丝\n*文具用品*笔','材料采购'),('*餐饮服务*午餐',''),('*五金*鼠标\n*食品*蛋糕',''),
- ('*五金*安装锁服务费',''),('*五金*租赁设备',''),('*未知*用品','')])
+ ('*五金*安装锁服务费',''),('*五金*租赁设备',''),('*未知*用品',''),
+ ('*计算机外部设备*有线鼠标','材料采购'),('*计算机外围设备*键盘','材料采购'),
+ ('*计算机外部设备*设备安装服务费',''),('*计算机外部设备*鼠标\n*食品*蛋糕','')])
 def test_conservative_tax_rules(text,category):
     assert classify_tax(text)['category']==category
 
