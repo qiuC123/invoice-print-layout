@@ -565,6 +565,26 @@ class IntakeQueue:
                     if '铁路电子客票' in compact_text(invoice_text):
                         fields.update(category='高铁', title='铁路车票')
                     if len(headers) == 1:
+                        from invoice_print_layout.tax_categories import classify_tax, human_category
+                        if (original.get('field_sources', {}).get('category') in
+                                {'manual', 'human', 'experience', 'preference', 'category_experience', 'expense_preferences'}
+                                and original.get('fields', {}).get('category')):
+                            fields['category'] = original['fields']['category']
+                        if (fields.get('category') in {'', '其他', None} and 'category' not in self._manual_keys(original) and
+                                original.get('field_sources', {}).get('category') not in
+                                {'manual', 'human', 'experience', 'preference', 'category_experience', 'expense_preferences'}):
+                            learned, has_human = human_category(self.store, original, fields, invoice_text)
+                            rule = classify_tax(invoice_text)
+                            if has_human:
+                                if learned:
+                                    fields['category'] = learned
+                                    data['local_evidence']['category'] = {'source': 'human_experience', 'category': learned}
+                            elif rule['category']:
+                                fields['category'] = rule['category']
+                                fields['title'] = rule['category'] + ' · ' + (fields.get('merchant') or '发票')
+                                data['local_evidence']['category'] = rule
+                            elif rule['tax_classes']:
+                                data['local_evidence']['category'] = rule
                         from invoice_print_layout.invoice_checks import issue_date, read_tax_qr, compare_qr
                         from invoice_print_layout.company_profile import check_pdf
                         data['company_check'] = check_pdf(self.store.root, pages[headers[0]])
@@ -893,6 +913,13 @@ class IntakeQueue:
             data['role'] = original.get('role', 'other')
         data['field_sources'] = {key: 'manual' if key in manual else native_source
                                 for key, value in data.get('fields', {}).items() if value}
+        category_origin = data.get('local_evidence', {}).get('category', {})
+        if isinstance(category_origin, dict) and category_origin.get('source') and 'category' not in manual:
+            data['field_sources']['category'] = category_origin['source']
+        old_category_source = original.get('field_sources', {}).get('category')
+        if (old_category_source in {'human', 'experience', 'preference', 'category_experience', 'expense_preferences'}
+                and data.get('fields', {}).get('category') == original.get('fields', {}).get('category')):
+            data['field_sources']['category'] = old_category_source
         # Every retry has fresh local fields; old AI conflicts must not outlive
         # their extraction or appear against manually corrected values.
         data.pop('field_conflicts', None)

@@ -55,7 +55,8 @@ def clean(text: str) -> str:
 def goods_from_rows(rows: list[str]) -> str:
     """Only recognized goods section or invoice item lines, never whole OCR output."""
     compact = [re.sub(r'\s+', '', row) for row in rows]
-    invoice = [row for row in compact if row.startswith(('*', '＊'))]
+    from invoice_print_layout.tax_categories import tax_rows
+    invoice = [row['raw'] for row in tax_rows('\n'.join(compact))]
     if invoice:
         return clean('\n'.join(invoice))
     start = next((i + 1 for i, row in enumerate(compact)
@@ -93,7 +94,8 @@ def collect(store: ExpenseStore, item: dict[str, Any]) -> tuple[dict[str, str], 
                         warnings.append('PDF超过3页，仅取前3页项目名称；请核对是否有遗漏。')
                     # Never send complete invoice text containing tax and contact data.
                     lines = [line for page in list(doc)[:3] for line in page.get_text().splitlines()]
-                    text = clean('\n'.join(line for line in lines if line.strip().startswith(('*', '＊'))))
+                    from invoice_print_layout.tax_categories import tax_rows
+                    text = clean('\n'.join(row['raw'] for row in tax_rows('\n'.join(lines))))
             else:
                 payload = path.read_bytes()
                 suffix = validate_image(path.name, payload)

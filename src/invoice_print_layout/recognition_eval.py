@@ -85,7 +85,7 @@ def evaluate(workspace: Path) -> dict[str, Any]:
     configure_ocr_cache(workspace / 'ocr-cache.sqlite3')
     rows = []
     for file in files:
-        if file['item_id'] not in oracle or digest_counts[file['digest']] != 1:
+        if file['item_id'] not in oracle or digest_counts[file['digest']] != 1 or file['role'] == 'package':
             continue
         item, path = oracle[file['item_id']], Path(file['path']).resolve()
         if not path.is_relative_to(workspace):
@@ -95,19 +95,21 @@ def evaluate(workspace: Path) -> dict[str, Any]:
                 'merchant': item.get('merchant', ''), 'category': item.get('category', ''),
                 'expense_date': item.get('expense_date', '')}
         started = time.perf_counter()
+        kind = ('screenshot' if path.suffix.lower() != '.pdf' else 'trip' if file['role'] == 'trip'
+                else 'pdf_invoice' if file['role'] == 'invoice' else 'pdf_other')
         try:
             entry = queue.receive(path.name, path.read_bytes())
             parsed = queue._analyze_batch_pdf(entry) if path.suffix.lower() == '.pdf' else queue._analyze_batch_image(entry)
             prediction = dict(parsed['fields'])
             if prediction.get('category') == '其他':
                 prediction['category'] = ''  # Unknown is an abstention, not a category prediction.
-            kind = ('trip' if parsed['role'] == 'trip' else 'screenshot' if path.suffix.lower() != '.pdf'
-                    else 'pdf_invoice' if parsed['role'] == 'invoice' else 'pdf_other')
+            if kind == 'pdf_other' and parsed['role'] == 'trip':
+                kind = 'trip'
             row = {'id': item['id'], 'digest': file['digest'], 'type': kind, 'gold': gold, 'predicted': prediction,
                    'qr_check': parsed.get('qr_check'), 'company_check': parsed.get('company_check'),
                    'category_rule': parsed.get('local_evidence', {}).get('category'), 'error': ''}
         except (ValueError, OSError, RuntimeError) as exc:
-            row = {'id': item['id'], 'digest': file['digest'], 'type': 'pdf_invoice' if path.suffix.lower() == '.pdf' else 'screenshot',
+            row = {'id': item['id'], 'digest': file['digest'], 'type': kind,
                    'gold': gold, 'predicted': {}, 'error': type(exc).__name__}
         row['milliseconds'] = (time.perf_counter() - started) * 1000
         rows.append(row)
