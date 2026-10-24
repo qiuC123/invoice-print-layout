@@ -364,7 +364,10 @@ def test_native_columnar_rail_document_reaches_preview_without_title_as_goods(
     assert linked['fields']['merchant'] == '中国铁路'  # Filled by the real structured-native step.
     assert '中国铁路祝您旅途愉快\n电子发票' in linked['text']
     assert '票\n监\n制\n章' in linked['text']  # Native seal text is broken into separate lines.
-    assert linked.get('agent_local_evidence')
+    # Ordinary intake now completes the shared native parser before the Agent.
+    evidence = linked['local_evidence']['structured_rail']
+    assert evidence['source'] == 'native_pdf' and evidence['source_sha256'] == source_digest
+    assert evidence['fields']['amount'] == f'{expected_cents / 100:.2f}'
     assert done['state'] == 'ready' and done['models'] == 0
     assert done['preview']['total_cents'] == expected_cents
     item = tools.store.get(done['item_ids'][0])
