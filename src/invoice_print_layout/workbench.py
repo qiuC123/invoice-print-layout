@@ -332,8 +332,9 @@ class ExpenseStore:
                            if entry.get('item_id') == item_id or entry.get('id') == source_id]
         data['version'] = hashlib.sha256(json.dumps(data, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
         data['returned_to_synthesis'] = returned
-        data['material_checks'] = [{'name': entry.get('name', ''), 'qr_check': entry.get('qr_check')}
-                                   for entry in saved_materials if entry.get('qr_check')]
+        data['material_checks'] = [{'name': entry.get('name', ''), 'qr_check': entry.get('qr_check'),
+                                    'company_check': entry.get('company_check')}
+                                   for entry in saved_materials if entry.get('qr_check') or entry.get('company_check')]
         # Display attribution without rewriting old records or their versions.
         from invoice_print_layout.reimbursement_people import current_person_label
         if data.get('reimbursement_person_id') or 'reimbursement_person_label' in data:

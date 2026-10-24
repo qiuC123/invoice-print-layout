@@ -12,10 +12,13 @@ async function run(pw){
    {name:'<img src=x onerror=alert(1)>',qr_check:{status:'match',checked:['invoice_number','amount','issue_date']}},
    {qr_check:{status:'mismatch',checked:['invoice_number'],mismatches:['amount']}},
    {qr_check:{status:'unreadable'}},
+   {company_check:{status:'unreadable'}},{company_check:{status:'mismatch',tax_id_read:true}},
   ]));
   assert.match(await page.locator('#checks').innerText(),/号码✓ 金额✓ 日期✓/);
   assert.match(await page.locator('#checks').innerText(),/金额不一致/);
   assert.equal(await page.locator('#checks img').count(),0);
+  assert.match(await page.locator('#checks').innerText(),/未读取抬头/);
+  assert.match(await page.locator('#checks').innerText(),/发票抬头\/税号与公司信息不一致/);
   assert.match(await page.locator('small').nth(1).getAttribute('style'),/color/);
   return {passed:true,readable:true,mismatch:true,unreadable:true,escaped:true};
  }finally{await browser.close();}

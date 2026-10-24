@@ -527,6 +527,7 @@ class MaterialMatching:
         return {**person_fields(entry), 'key': 'q:' + entry['id'], 'id': entry['id'], 'name': entry['name'],
                 'kind': 'qr_claim' if entry.get('qr_status') == 'manual' else role,
                 'fields': visible_fields, 'qr_status': entry.get('qr_status', ''), 'qr_check': entry.get('qr_check'),
+                'company_check': entry.get('company_check'),
                 'claim_message': str(entry.get('result', '')) if entry.get('qr_status') == 'manual' else '',
                 'ai_analysis': {name: value for name, value in (entry.get('ai_analysis') or {}).items()
                                 if name in {'status', 'model', 'message', 'failure_code', 'failure_field'}

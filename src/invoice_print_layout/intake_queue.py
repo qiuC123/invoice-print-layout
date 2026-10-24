@@ -482,6 +482,7 @@ class IntakeQueue:
         """Read one PDF with mature invoice parsers, without organizing older inbox files."""
         original = dict(data)
         data.pop('qr_check', None)
+        data.pop('company_check', None)
         images: list[bytes] | None = None
         complete = True
         from invoice_print_layout.documents import (classify_text, compact_text,
@@ -565,6 +566,10 @@ class IntakeQueue:
                         fields.update(category='高铁', title='铁路车票')
                     if len(headers) == 1:
                         from invoice_print_layout.invoice_checks import issue_date, read_tax_qr, compare_qr
+                        from invoice_print_layout.company_profile import check_pdf
+                        data['company_check'] = check_pdf(self.store.root, pages[headers[0]])
+                        if data['company_check'] and data['company_check']['status'] == 'mismatch':
+                            issues.append('发票抬头/税号与公司信息不一致')
                         fields['issue_date'] = issue_date(pages[headers[0]])
                         try:
                             data['qr_check'] = compare_qr(read_tax_qr(pages[headers[0]]), fields)
@@ -870,6 +875,13 @@ class IntakeQueue:
                                native_source: str, force_ai: bool = False) -> dict[str, Any]:
         """Merge suggestions into unknown machine fields and atomically save one proof."""
         manual = self._manual_keys(original)
+        if native_source == 'local_ocr':
+            data.pop('company_check', None)
+        if native_source == 'local_ocr' and data.get('role') == 'invoice':
+            from invoice_print_layout.company_profile import check_screenshot
+            data['company_check'] = check_screenshot(self.store.root, data.get('text', ''))
+            if data['company_check'] and data['company_check']['status'] == 'mismatch':
+                data['issues'] = [*data.get('issues', []), '发票抬头/税号与公司信息不一致']
         if original.get('result') == '人工补充材料信息，尚未关联费用':
             # Migrate the old manual marker before replacing the result text.
             data['manual_fields'] = sorted(manual)

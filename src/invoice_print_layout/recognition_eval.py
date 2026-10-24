@@ -80,6 +80,8 @@ def evaluate(workspace: Path) -> dict[str, Any]:
               and not item.get('amount_pending') and counts[item['id']] == 1}
     shadow = workspace / 'analysis' / uuid.uuid4().hex
     queue = IntakeQueue(ExpenseStore(shadow), ai=LocalOnlyInvoiceAI())
+    if (workspace / '工作台' / 'company-profile.json').is_file():
+        shutil.copyfile(workspace / '工作台' / 'company-profile.json', queue.store.root / 'company-profile.json')
     configure_ocr_cache(workspace / 'ocr-cache.sqlite3')
     rows = []
     for file in files:

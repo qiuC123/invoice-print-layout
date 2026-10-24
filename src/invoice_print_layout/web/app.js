@@ -117,10 +117,11 @@ function matchesExpenseIssue(x,value=null){
 }
 function expenseGoods(x){return Array.isArray(x.agent_content?.goods)?x.agent_content.goods.filter(g=>g&&typeof g==='object'&&!Array.isArray(g)):[];}
 window.invoiceCheckMarkup=checks=>(checks||[]).map(check=>{
- const qr=check.qr_check;if(!qr)return '';
+ const company=check.company_check;const companyText=company?`<small class="invoice-company-check" ${company.status==='mismatch'?'style="color:var(--danger,#b42318)"':''}>${company.status==='unreadable'?'未读取抬头':company.status==='mismatch'?'发票抬头/税号与公司信息不一致':'发票抬头核对：已读取'+(company.tax_id_read?' · 税号已读取':' · 未读取税号')}</small>`:'';
+ const qr=check.qr_check;if(!qr)return companyText;
  const labels={invoice_number:'号码',amount:'金额',issue_date:'日期'};
  const text=qr.status==='unreadable'?'未读取':[...(qr.checked||[]).map(key=>(labels[key]||key)+'✓'),...(qr.mismatches||[]).map(key=>(labels[key]||key)+'不一致'),...(qr.not_compared||[]).map(key=>(labels[key]||key)+'未比较')].join(' ');
- return `<small class="invoice-check" ${qr.status==='mismatch'?'style="color:var(--danger,#b42318)"':''}>${check.name?esc(check.name)+' · ':''}二维码核对：${esc(text)}</small>`;
+ return companyText+`<small class="invoice-check" ${qr.status==='mismatch'?'style="color:var(--danger,#b42318)"':''}>${check.name?esc(check.name)+' · ':''}二维码核对：${esc(text)}</small>`;
 }).join('');
 function matchesExpenseFilters(x){const q=$('search').value.trim().toLowerCase();return matchesReimbursementPerson(x)&&matchesExpenseIssue(x)&&matchesExpenseCategory(x.category)&&(!q||[x.title,x.merchant,x.order_number,x.id,...expenseGoods(x).flatMap(g=>[g.name,g.raw_name].filter(v=>typeof v==='string'))].join(' ').toLowerCase().includes(q));}
 function base(){return state.items.filter(matchesExpenseFilters);}
