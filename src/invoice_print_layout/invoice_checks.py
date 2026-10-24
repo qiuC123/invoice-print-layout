@@ -10,14 +10,15 @@ from invoice_print_layout.mail_search import qr_value
 
 
 def parse_tax_qr(value: str) -> dict[str, str] | None:
-    parts = value.strip().split(',')
+    parts = [part.strip() for part in value.split(',')]
     if (not 7 <= len(parts) <= 12 or parts[0] != '01' or not re.fullmatch(r'\d{2}', parts[1]) or
             not re.fullmatch(r'(?:\d{10}|\d{12})?', parts[2]) or not re.fullmatch(r'\d{8,20}', parts[3]) or
             not re.fullmatch(r'(?:0|[1-9]\d*)(?:\.\d{1,2})?', parts[4]) or
-            not re.fullmatch(r'\d{8}', parts[5]) or not re.fullmatch(r'\d{0,20}', parts[6])):
+            not re.fullmatch(r'(?:\d{8}|\d{4}-\d{2}-\d{2})', parts[5]) or
+            not re.fullmatch(r'\d{0,20}', parts[6])):
         return None
     try:
-        date = datetime.strptime(parts[5], '%Y%m%d').date().isoformat()
+        date = datetime.strptime(parts[5], '%Y-%m-%d' if '-' in parts[5] else '%Y%m%d').date().isoformat()
     except ValueError:
         return None
     return {'type': parts[1], 'code': parts[2], 'invoice_number': parts[3], 'amount': parts[4], 'issue_date': date}

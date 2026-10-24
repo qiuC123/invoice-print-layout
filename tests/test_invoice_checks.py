@@ -45,6 +45,24 @@ def test_invalid_tax_qr_fails_closed(value):
     assert parse_tax_qr(value) is None
 
 
+@pytest.mark.parametrize('date', ['20260930', '2026-09-30'])
+@pytest.mark.parametrize('spaced', [False, True])
+def test_tax_qr_date_and_field_whitespace_are_normalized(date, spaced):
+    payload = PAYLOAD.replace('20260930', date)
+    if spaced:
+        payload = ','.join(' \t' + part + ' \n' for part in payload.split(','))
+    qr = parse_tax_qr(payload)
+    assert qr == {'type': '32', 'code': '', 'invoice_number': NUMBER,
+                  'amount': '14.00', 'issue_date': '2026-09-30'}
+    assert compare_qr(qr, {'invoice_number': NUMBER, 'amount': '14.00',
+                           'issue_date': '2026-09-30'})['status'] == 'match'
+
+
+@pytest.mark.parametrize('date', ['2026-02-30', '2026-9-30', '2026/09/30', '2026-0930'])
+def test_tax_qr_extended_date_still_rejects_invalid_or_unsupported_forms(date):
+    assert parse_tax_qr(PAYLOAD.replace('20260930', date)) is None
+
+
 @pytest.mark.parametrize('payload,second,readable',[(PAYLOAD,False,True),('',False,False),(PAYLOAD,True,False)])
 def test_real_qr_decode_and_multi_code_rejection(payload,second,readable):
     with pymupdf.open(stream=pdf_bytes(payload,second),filetype='pdf') as doc:
