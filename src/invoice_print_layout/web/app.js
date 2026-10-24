@@ -497,6 +497,26 @@ function setExpensePreview(id){
  for(const row of $('list').querySelectorAll('[data-item]'))row.classList.toggle('selected',row.dataset.item===active);
  renderDetail();
 }
+document.addEventListener('keydown',event=>{
+ if(view!=='review'||event.defaultPrevented||event.repeat||event.isComposing||event.ctrlKey||event.metaKey||event.altKey||singleVerifyBusy||batchVerifyBusy||batchReturnBusy||document.querySelector('dialog[open]'))return;
+ if(event.target instanceof Element&&event.target.closest('input,select,textarea,[contenteditable]:not([contenteditable="false"]),[role="textbox"],[role="combobox"],[role="menu"]'))return;
+ const key=event.key.toLowerCase();
+ if(['j','k','arrowdown','arrowup'].includes(key)){
+  const queue=base().filter(pendingReview);if(!queue.length)return;
+  event.preventDefault();const direction=['j','arrowdown'].includes(key)?1:-1,index=queue.findIndex(x=>x.id===active);
+  const target=queue[index<0?(direction>0?0:queue.length-1):Math.max(0,Math.min(queue.length-1,index+direction))];
+  setExpensePreview(target.id);revealExpenseRow(target.id);return;
+ }
+ if(key==='enter'||key==='e'){
+  const button=$(key==='enter'?'verifyNext':'editReviewFields');
+  if(button&&!button.disabled){event.preventDefault();button.click();}return;
+ }
+ if(key==='?'){
+  event.preventDefault();const dialog=document.createElement('dialog');dialog.id='reviewShortcuts';
+  dialog.innerHTML='<div class="dialoghead"><h2>核对快捷键</h2><button type="button" class="dialog-close" aria-label="关闭快捷键说明">×</button></div><p>J / ↓：下一笔；K / ↑：上一笔</p><p>Enter：核对并下一笔；E：修改报销信息</p><p>?：显示本说明。输入和对话框内不响应快捷键。</p>';
+  dialog.querySelector('button').onclick=()=>dialog.remove();dialog.addEventListener('close',()=>dialog.remove());document.body.append(dialog);dialog.showModal();
+ }
+});
 window.showCreatedMaterialExpenses=items=>{
  const first=Array.isArray(items)?items.find(item=>item&&typeof item.id==='string'&&item.id):null;
  if(!first)return false;

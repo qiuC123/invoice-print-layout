@@ -22,7 +22,7 @@ async function run(pw) {
   let holdNextState = false, heldState = null, stateGate = null;
   const defer = () => {let resolve; const promise = new Promise(done => {resolve = done;}); return {promise, resolve};};
   const state = () => ({
-    app_mode: 'invoice', token: 'synthetic-review', projects: [{id: 'p1', name: '合成测试项目'}, {id: 'p2', name: '另一测试项目'}],
+    app_mode: 'invoice', token: 'synthetic-review', report_types:[{code:'materials',label:'材料采购',editable_name:true,names:[]}], projects: [{id: 'p1', name: '合成测试项目'}, {id: 'p2', name: '另一测试项目'}],
     items, inbox: [], categories: ['高铁', '打车', '材料采购', '其他'], roles: {invoice: '发票', trip: '行程单', payment: '付款截图'},
     stages: {draft: '待核对', submitted: '已制包'}, category_auto_ready: false, report_template_ready: true,
   });
@@ -192,6 +192,31 @@ async function run(pw) {
     assert.equal(await page.locator('#personFilter').inputValue(), 'alice'); assert.equal(await page.locator('#issueFilter').inputValue(), 'complete');
     assert.match(await page.locator('#detail').innerText(), /当前筛选范围已核对完/);
     assert.equal(await page.locator('#tabs [data-view="review"]').getAttribute('class'), 'active'); await assertIds([]);
+
+    // Keyboard actions use the same bounded review queue and confirmation path.
+    await reset([fee('key-a'),fee('key-b',{complete:false,missing:['行程单']}),fee('key-c')]);
+    const press=async key=>{await page.locator('#list').focus();await page.keyboard.press(key);};
+    await press('j');assert.equal(await activeId(),'key-a');
+    await press('ArrowDown');assert.equal(await activeId(),'key-b');
+    await press('k');assert.equal(await activeId(),'key-a');
+    await press('j');await press('ArrowUp');assert.equal(await activeId(),'key-a');
+    count=transitions.length;
+    await page.locator('#search').focus();await page.keyboard.press('j');assert.equal(transitions.length,count);
+    await page.locator('#search').fill('');assert.equal(await activeId(),'key-a');
+    await page.evaluate(()=>document.getElementById('personFilter').dispatchEvent(new KeyboardEvent('keydown',{key:'j',bubbles:true})));assert.equal(await activeId(),'key-a');
+    await press('?');await page.locator('#reviewShortcuts[open]').waitFor();
+    await page.keyboard.press('j');assert.equal(await activeId(),'key-a');await page.locator('#reviewShortcuts button').click();
+    await press('e');await page.locator('#reviewEditDialog[open]').waitFor();
+    await page.evaluate(()=>{const text=document.createElement('textarea');document.querySelector('#reviewEditDialog').append(text);text.focus();});await page.keyboard.press('j');assert.equal(transitions.length,count);
+    await page.locator('#reviewEditDialog [data-close]').click();
+    await press('Enter');await settled();assert.equal(await activeId(),'key-b');assert.equal(transitions.length,count+1);
+    await press('Enter');await page.locator('#verifyDialog[open]').waitFor();assert.equal(transitions.length,count+1);
+    await page.keyboard.press('j');assert.equal(await activeId(),'key-b');
+    await page.locator('#cancelVerify').click();await settled();assert.equal(items[1].verified,false);
+    await press('Enter');await page.locator('#confirmVerify').click();await settled();
+    assert.equal(await activeId(),'key-c');assert.equal(transitions.at(-1).acknowledge_missing,true);
+    await page.locator('#tabs [data-view="submitted"]').click();count=transitions.length;
+    await press('Enter');assert.equal(transitions.length,count,'shortcuts only run in review');
 
     // The original explicit destination remains available without automatic next-item verification.
     await reset([fee('original-action'), fee('original-next')]); await show('original-action'); count = transitions.length;
