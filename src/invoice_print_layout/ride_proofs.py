@@ -4,12 +4,14 @@ from __future__ import annotations
 import hashlib
 from pathlib import Path
 import re
+from functools import lru_cache
 from typing import Any
 
 import pymupdf
 
 from invoice_print_layout.documents import classify_text, compact_text, _freight_evidence
 from invoice_print_layout.models import DocumentKind
+from invoice_print_layout.file_cache import FileSignature, file_signature
 
 
 def invoice_trip_required(item: dict[str, Any]) -> bool:
@@ -19,12 +21,22 @@ def invoice_trip_required(item: dict[str, Any]) -> bool:
 
 
 def native_trip_pdf(path: Path, expected_digest: str = '') -> bool:
+    try:
+        signature = file_signature(path)
+        return _native_trip_pdf(signature, expected_digest) and file_signature(path) == signature
+    except (ValueError, OSError, RuntimeError):
+        return False
+
+
+@lru_cache(maxsize=512)
+def _native_trip_pdf(signature: FileSignature, expected_digest: str) -> bool:
     """Recognize a trip proof without filename, amount, OCR or ledger changes.
 
     A supplied digest protects historical role projection from accepting a
     replaced original. Mixed invoice/trip packages and freight documents are
     left for explicit classification rather than treated as a trip proof.
     """
+    path = Path(signature[0])
     try:
         if path.suffix.lower() != '.pdf' or not path.is_file():
             return False

@@ -4,9 +4,11 @@ from __future__ import annotations
 import hashlib
 from pathlib import Path
 import re
+from functools import lru_cache
 from typing import Any
 
 import pymupdf
+from invoice_print_layout.file_cache import FileSignature, file_signature
 
 
 _COURIER_NAMES = frozenset({
@@ -31,12 +33,22 @@ def invoice_waybill_required(item: dict[str, Any]) -> bool:
 
 
 def native_waybill_pdf(path: Path, expected_digest: str = '') -> bool:
+    try:
+        signature = file_signature(path)
+        return _native_waybill_pdf(signature, expected_digest) and file_signature(path) == signature
+    except (ValueError, OSError, RuntimeError):
+        return False
+
+
+@lru_cache(maxsize=512)
+def _native_waybill_pdf(signature: FileSignature, expected_digest: str) -> bool:
     """Recognize verified SF/same-city native detail without changing its role.
 
     Mixed invoice/detail packages, image-only PDFs and changed source bytes are
     left for explicit review. No filename, OCR, amount-only or cloud guess is
     used as evidence of the document type.
     """
+    path = Path(signature[0])
     try:
         if path.suffix.lower() != '.pdf' or not path.is_file():
             return False

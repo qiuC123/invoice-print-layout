@@ -5,6 +5,7 @@ import hashlib
 import json
 from pathlib import Path
 from typing import Any, TYPE_CHECKING
+from invoice_print_layout.file_cache import file_digest
 
 if TYPE_CHECKING:
     from invoice_print_layout.workbench import ExpenseStore
@@ -41,7 +42,7 @@ def source_snapshot(attachments: list[dict[str, Any]], workspace: Path) -> list[
         digest = None
         if available:
             try:
-                digest = hashlib.sha256(path.read_bytes()).hexdigest()
+                digest = file_digest(path)
             except OSError:
                 available = False
         sources.append({'id': attachment['id'], 'role': attachment['role'],

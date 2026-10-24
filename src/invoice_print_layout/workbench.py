@@ -7,6 +7,8 @@ import os
 import sqlite3
 import uuid
 from contextlib import contextmanager, nullcontext
+from collections import OrderedDict
+from threading import Lock
 from collections.abc import Iterator
 from datetime import date, datetime
 from decimal import Decimal, InvalidOperation
@@ -25,6 +27,25 @@ ROLES = {'purchase': '购买明细', 'invoice': '发票', 'receipt': '收据', '
          'order': '订单记录', 'trip': '行程单', 'detail': '运单明细', 'other': '待分类材料', 'package': '历史打印包'}
 STAGES = {'draft': '待提交', 'submitted': '已提交', 'reimbursed': '已报销', 'cancelled': '已取消'}
 MAX_BYTES = 20 * 1024 * 1024
+_identifier_cache: OrderedDict[tuple[str, str], frozenset[str]] = OrderedDict()
+_identifier_lock = Lock()
+
+
+def _cached_identifier_keys(item_id: str, data: dict[str, Any]) -> set[str]:
+    from invoice_print_layout.transaction_evidence import record_identifier_keys
+    signature = hashlib.sha256(json.dumps(data, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
+    key = item_id, signature
+    with _identifier_lock:
+        if key in _identifier_cache:
+            _identifier_cache.move_to_end(key)
+            return set(_identifier_cache[key])
+    value = frozenset(record_identifier_keys(data))
+    with _identifier_lock:
+        _identifier_cache[key] = value
+        _identifier_cache.move_to_end(key)
+        while len(_identifier_cache) > 4096:
+            _identifier_cache.popitem(last=False)
+    return set(value)
 
 
 def now() -> str:
@@ -54,19 +75,19 @@ def returned_material_state(db: sqlite3.Connection, item: dict[str, Any]) -> boo
 
 
 def expense_identifier_keys(db: sqlite3.Connection, item_id: str, data: dict[str, Any], *,
-                            source: str | None = '') -> set[str]:
+                            source: str | None = '', intake_entries: list[dict[str, Any]] | None = None) -> set[str]:
     """Read typed transaction identities without migrating historical ledgers."""
-    from invoice_print_layout.transaction_evidence import record_identifier_keys
     if data.get('undone_material_group') or data.get('merged_into'):
         return set()
-    keys = record_identifier_keys(data)
-    if not db.execute("SELECT 1 FROM sqlite_master WHERE name='intake_queue'").fetchone():
-        return keys
+    keys = _cached_identifier_keys(item_id, data)
+    if intake_entries is None:
+        if not db.execute("SELECT 1 FROM sqlite_master WHERE name='intake_queue'").fetchone():
+            return keys
+        intake_entries = [json.loads(row['data']) for row in db.execute('SELECT data FROM intake_queue')]
     original_id = source.removeprefix('intake:') if source and source.startswith('intake:') else ''
-    for row in db.execute('SELECT data FROM intake_queue'):
-        entry = json.loads(row['data'])
+    for entry in intake_entries:
         if entry.get('item_id') == item_id or original_id and entry.get('id') == original_id:
-            keys.update(record_identifier_keys(entry))
+            keys.update(_cached_identifier_keys('intake:' + str(entry.get('id', '')), entry))
     return keys
 
 
@@ -154,6 +175,7 @@ class ExpenseStore:
                     UNIQUE(item_id,digest,role));
                 CREATE TABLE IF NOT EXISTS events (
                     id INTEGER PRIMARY KEY, item_id TEXT, at TEXT, message TEXT);
+                CREATE INDEX IF NOT EXISTS events_item_id_id ON events(item_id, id);
                 CREATE TABLE IF NOT EXISTS selections (owner TEXT PRIMARY KEY, item_id TEXT);
                 CREATE TABLE IF NOT EXISTS recognition_corrections (
                     id INTEGER PRIMARY KEY, material_id TEXT NOT NULL, field TEXT NOT NULL,

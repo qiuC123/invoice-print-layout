@@ -2234,7 +2234,12 @@ class MaterialMatching:
                     entry['digest'] not in attached and _material_role(entry) in {'invoice', 'receipt', 'payment'} and
                     _identified_amount(entry) and not rail_payment_not_required(entry) and not _rail_invoice(entry)):
                 result['q:' + entry['id']] = entry['revision']
-        for item in self.store.list_items():
+        # Revalidate against the caller's current read/guard transaction rather than
+        # opening a second list_items connection. Keep the race check itself.
+        rows = db.execute('SELECT id,source,data FROM expenses ORDER BY rowid DESC').fetchall()
+        for item in self.store._read_items(db, rows):
+            if item['deleted']:
+                continue
             if item.get('project_id') == project_id and (not item['complete'] or item.get('returned_to_synthesis')):
                 card = self._expense_card(item)
                 if card and not card.get('payment_not_required'):
@@ -2285,8 +2290,18 @@ class MaterialMatching:
         # pool, but a spent transaction is never offered as another expense.
         owners: dict[str, set[str]] = {}
         with self.store.connect() as db:
+            entries_by_item: dict[str, list[dict[str, Any]]] = {}
+            entries_by_id: dict[str, dict[str, Any]] = {}
+            for source_row in db.execute('SELECT data FROM intake_queue'):
+                entry = _data(source_row['data'])
+                entries_by_item.setdefault(str(entry.get('item_id') or ''), []).append(entry)
+                entries_by_id[str(entry.get('id') or '')] = entry
             for row in db.execute('SELECT id,source,data FROM expenses'):
-                for key in expense_identifier_keys(db, row['id'], _data(row['data']), source=row['source']):
+                associated = list(entries_by_item.get(row['id'], []))
+                source_id = str(row['source'] or '').removeprefix('intake:')
+                if str(row['source'] or '').startswith('intake:') and source_id in entries_by_id:
+                    associated.append(entries_by_id[source_id])
+                for key in expense_identifier_keys(db, row['id'], _data(row['data']), source=row['source'], intake_entries=associated):
                     owners.setdefault(key, set()).add(row['id'])
         for card in [*vouchers, *eligible_payments]:
             owned_elsewhere = set().union(*(owners.get(key, set()) for key in
