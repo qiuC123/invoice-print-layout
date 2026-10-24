@@ -26,7 +26,7 @@ from invoice_print_layout.agent_transport import (MailOrigin, identity_conflict,
 
 
 def local_structured_facts(entry: dict[str, Any]) -> dict[str, Any]:
-    """Recover only explicit totals in structured native rail/waybill PDFs."""
+    """Recover only explicit totals (and a rail departure date) in structured native rail/waybill PDFs."""
     transport = project_transport(entry)
     if transport:
         return {'role': transport['role'], 'fields': transport['fields']}
@@ -56,9 +56,14 @@ def local_structured_facts(entry: dict[str, Any]) -> dict[str, Any]:
         values = {amount_cents(v) for v in re.findall(r'[¥￥](\d+\.\d{2})(?![\d.])', text)}
         if len(values) == 1 and next(iter(values)) > 0:
             cents = next(iter(values))
-            return {'role': 'invoice', 'fields': {'amount': f'{cents / 100:.2f}',
-                    'category': '高铁', 'merchant': '中国铁路', 'invoice_number': number,
-                    'title': '铁路退票费' if '退票费' in text else '铁路车票'}}
+            fields = {'amount': f'{cents / 100:.2f}', 'category': '高铁', 'merchant': '中国铁路',
+                      'invoice_number': number, 'title': '铁路退票费' if '退票费' in text else '铁路车票'}
+            # The verified ledger dates rail expenses by departure, not issue date.
+            departures = {f'{int(y):04d}-{int(m):02d}-{int(d):02d}' for y, m, d in
+                          re.findall(r'(\d{4})年(\d{1,2})月(\d{1,2})日\d{1,2}:\d{2}开', text)}
+            if len(departures) == 1:
+                fields['expense_date'] = next(iter(departures))
+            return {'role': 'invoice', 'fields': fields}
     if '运单明细' in text and re.search(r'SF\d{10,}', text):
         totals = {amount_cents(v) for v in re.findall(
             r'发票总金额[（(]元[)）][:：]?(\d+(?:\.\d{1,2})?)(?![\d.])', text)}

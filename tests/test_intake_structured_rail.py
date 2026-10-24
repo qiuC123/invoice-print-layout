@@ -21,8 +21,9 @@ def test_normal_upload_rail_is_ready_locally_without_ai(tmp_path: Path, monkeypa
     payload = columnar_rail_ticket(refund=refund)
     entry = queue.receive('synthetic-rail.pdf', payload)
     result = queue.prepare_batch_entry(entry['id'])
-    assert {k: result['fields'][k] for k in ('amount', 'category', 'merchant', 'title')} == {
-        'amount': amount, 'category': '高铁', 'merchant': '中国铁路', 'title': title}
+    # Departure date, not the later issue date on the same ticket.
+    assert {k: result['fields'][k] for k in ('amount', 'category', 'merchant', 'title', 'expense_date')} == {
+        'amount': amount, 'category': '高铁', 'merchant': '中国铁路', 'title': title, 'expense_date': '2026-01-19'}
     assert len(result['fields']['invoice_number']) == 20
     assert result['role'] == 'invoice' and '金额冲突' not in result['issues']
     assert result['ai_analysis']['status'] == 'not_needed'
