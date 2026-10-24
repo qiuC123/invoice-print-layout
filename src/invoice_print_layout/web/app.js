@@ -116,6 +116,12 @@ function matchesExpenseIssue(x,value=null){
  return true;
 }
 function expenseGoods(x){return Array.isArray(x.agent_content?.goods)?x.agent_content.goods.filter(g=>g&&typeof g==='object'&&!Array.isArray(g)):[];}
+window.invoiceCheckMarkup=checks=>(checks||[]).map(check=>{
+ const qr=check.qr_check;if(!qr)return '';
+ const labels={invoice_number:'号码',amount:'金额',issue_date:'日期'};
+ const text=qr.status==='unreadable'?'未读取':[...(qr.checked||[]).map(key=>(labels[key]||key)+'✓'),...(qr.mismatches||[]).map(key=>(labels[key]||key)+'不一致'),...(qr.not_compared||[]).map(key=>(labels[key]||key)+'未比较')].join(' ');
+ return `<small class="invoice-check" ${qr.status==='mismatch'?'style="color:var(--danger,#b42318)"':''}>${check.name?esc(check.name)+' · ':''}二维码核对：${esc(text)}</small>`;
+}).join('');
 function matchesExpenseFilters(x){const q=$('search').value.trim().toLowerCase();return matchesReimbursementPerson(x)&&matchesExpenseIssue(x)&&matchesExpenseCategory(x.category)&&(!q||[x.title,x.merchant,x.order_number,x.id,...expenseGoods(x).flatMap(g=>[g.name,g.raw_name].filter(v=>typeof v==='string'))].join(' ').toLowerCase().includes(q));}
 function base(){return state.items.filter(matchesExpenseFilters);}
 function retiredExpense(x){return !!x.deleted||x.stage==='cancelled'||!!x.merged_into;}
@@ -455,6 +461,7 @@ function renderDetail(){
   ${window.reimbursementPeopleUI ? `<div class="reimbursement-detail-person">${personMarkup}${reviewFieldsEditable(x)?`<button type="button" data-edit-expense-person="${esc(x.id)}">修改费用归属人</button>`:''}</div>`:''}
   ${!x.complete?`<div class="rule warn">${x.missing_acknowledged?'已确认仍缺：':'还缺：'}${esc(x.missing.join('、'))}${x.missing_acknowledged?'。已人工确认核对通过，打印仅使用已收到的材料。':''}</div>`:''}
   ${materialMatchNotice(x)}
+  ${window.invoiceCheckMarkup(x.material_checks)}
   ${expenseGoodsMarkup(x)}
   <div class="actions print-actions">${progressActions(x)}<a id="expensePrintPdf" target="_blank" rel="noopener" hidden>放大／下载打印 PDF</a></div>
   <p id="expensePrintStatus" class="muted" role="status">正在生成实际打印页…</p>

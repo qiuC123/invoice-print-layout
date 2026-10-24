@@ -88,7 +88,7 @@
     const issues = (card.issues || []).map(String).filter(value => !['商品不明', '归属不明', '归属未定'].includes(value));
     const warnings = issues.filter(value => !optionalOrderIssue(value)).map(readableIssue);
     const conflicts = (Array.isArray(card.field_conflicts) ? card.field_conflicts : []).filter(value => fieldLabels[value.field]);
-    const values = conflicts.map(value => `<small class="matching-field-conflict">${escape(fieldLabels[value.field])}：${value.observed_source === 'labelled_payment' ? '原有识别' : '本地识别'}“${escape(value.local_value || '未保存')}”；${value.observed_source === 'labelled_payment' ? '付款原文' : 'AI补读'}“${escape(value.ai_value || '未保存')}”。请对照原件确认。</small>`).join('');
+    const values = (window.invoiceCheckMarkup?.([card]) || '') + conflicts.map(value => `<small class="matching-field-conflict">${escape(fieldLabels[value.field])}：${value.observed_source === 'labelled_payment' ? '原有识别' : '本地识别'}“${escape(value.local_value || '未保存')}”；${value.observed_source === 'labelled_payment' ? '付款原文' : 'AI补读'}“${escape(value.ai_value || '未保存')}”。请对照原件确认。</small>`).join('');
     const legacyMerchant = warnings.some(value => /AI.*商家名称.*不同/.test(value)) && !conflicts.some(value => value.field === 'merchant');
     return `${warnings.length ? `<small class="matching-card-issues">${escape((card.key?.startsWith('e:') ? warnings.map(value => /^\s*(?:待配对|缺)/.test(value) ? value : `待配对：${value}`) : warnings).join('、'))}</small>` : ''}${values}${legacyMerchant ? '<small class="matching-field-conflict">历史记录未保存AI候选商家名称，请对照原件确认。</small>' : ''}`;
   }

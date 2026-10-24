@@ -481,6 +481,7 @@ class IntakeQueue:
     def _analyze_batch_pdf(self, data: dict[str, Any], *, force_ai: bool = False) -> dict[str, Any]:
         """Read one PDF with mature invoice parsers, without organizing older inbox files."""
         original = dict(data)
+        data.pop('qr_check', None)
         images: list[bytes] | None = None
         complete = True
         from invoice_print_layout.documents import (classify_text, compact_text,
@@ -562,6 +563,16 @@ class IntakeQueue:
                     fields['title'] = (fields['merchant'] + ' · 发票') if fields.get('merchant') else '电子发票（费用类别待核对）'
                     if '铁路电子客票' in compact_text(invoice_text):
                         fields.update(category='高铁', title='铁路车票')
+                    if len(headers) == 1:
+                        from invoice_print_layout.invoice_checks import issue_date, read_tax_qr, compare_qr
+                        fields['issue_date'] = issue_date(pages[headers[0]])
+                        try:
+                            data['qr_check'] = compare_qr(read_tax_qr(pages[headers[0]]), fields)
+                        except (ValueError, OSError, RuntimeError):
+                            data['qr_check'] = compare_qr(None, fields)
+                        if data['qr_check']['mismatches']:
+                            labels = {'invoice_number': '号码', 'amount': '金额', 'issue_date': '日期'}
+                            issues.append('二维码与正文不一致：' + '、'.join(labels[key] for key in data['qr_check']['mismatches']))
                 else:
                     # An invoice number copied into a waybill is not an invoice.
                     if parsed['role'] == 'invoice':
