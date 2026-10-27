@@ -60,7 +60,7 @@ def network(monkeypatch: pytest.MonkeyPatch, answer: Any, **envelope_changes: An
     envelope = {'model': glm.MODEL, 'choices': [{'finish_reason': 'stop', 'message': {'content': content}}]}
     envelope.update(envelope_changes)
     opener = Opener(Response(json.dumps(envelope, ensure_ascii=False).encode()))
-    monkeypatch.setattr(glm.urllib.request, 'build_opener', lambda handler: opener)
+    monkeypatch.setattr(glm.urllib.request, 'build_opener', lambda *handlers: opener)
     return opener
 
 
@@ -150,6 +150,109 @@ def test_enabled_without_key_reports_safe_error(tmp_path: Path) -> None:
     with pytest.raises(glm.GlmAIError) as error:
         client.extract(TEXT)
     assert error.value.failure_code == 'config_unavailable'
+
+
+def test_legacy_config_defaults_to_glm(client: glm.GlmInvoiceAI) -> None:
+    assert client.provider == 'glm'
+    assert client.public_status()['model'] == glm.MODEL
+
+
+@pytest.mark.parametrize('base,endpoint', [
+    (None, 'http://127.0.0.1:3425/v1/chat/completions'),
+    ('http://localhost:3425/v1/', 'http://localhost:3425/v1/chat/completions'),
+    ('http://127.0.0.1:3425', 'http://127.0.0.1:3425/v1/chat/completions'),
+    ('http://localhost', 'http://localhost/v1/chat/completions'),
+])
+def test_workbuddy_config_ignores_glm_credentials(tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+                                               base: str | None, endpoint: str) -> None:
+    config = {'enabled': True, 'provider': 'workbuddy', 'model': 'workbuddy/glm-5.3-flash',
+              'secret_env_file': {'must': 'never be read'}}
+    if base is not None:
+        config['base_url'] = base
+    (tmp_path / 'invoice-ai.json').write_text(json.dumps(config))
+    class NoGlmCredentials(dict):
+        def get(self, key: str, default: Any = None) -> Any:
+            assert key != 'GLM_API_KEY', 'WorkBuddy must not read GLM credentials'
+            return super().get(key, default)
+    with monkeypatch.context() as patch:
+        patch.setattr(glm.os, 'environ', NoGlmCredentials())
+        client = glm.GlmInvoiceAI(tmp_path)
+    assert client.public_status()['available']
+    assert client.public_status()['model'] == config['model']
+    assert client._endpoint == endpoint and client._key == 'magpie'
+
+
+@pytest.mark.parametrize('change', [
+    {'provider': 'other'}, {'model': None}, {'model': ''}, {'model': 'glm-5.3-flash'},
+    {'model': 'workbuddy/'}, {'model': 'workbuddy/a b'}, {'model': 'workbuddy/a\n'},
+    {'model': 'workbuddy/' + 'a' * 119}, {'model': 'workbuddy/a?token=x'},
+    {'base_url': None}, {'base_url': ''}, {'base_url': 'https://127.0.0.1:3425/v1'},
+    {'base_url': 'http://example.com/v1'}, {'base_url': 'http://127.0.0.2:3425/v1'},
+    {'base_url': 'http://localhost.example.com:3425/v1'},
+    {'base_url': 'http://127.0.0.1@evil.example/v1'},
+    {'base_url': 'http://user@localhost:3425/v1'}, {'base_url': 'http://localhost:65536/v1'},
+    {'base_url': 'http://localhost:0/v1'}, {'base_url': 'http://localhost:3425/v1?url=evil'},
+    {'base_url': 'http://localhost:3425/v1#evil'}, {'base_url': 'http://localhost:3425/v1/../../evil'},
+    {'base_url': 'http://localhost:3425/v1\n'}, {'base_url': 'http://[::1]:3425/v1'},
+])
+def test_workbuddy_bad_config_fails_before_network(tmp_path: Path, change: dict[str, Any]) -> None:
+    config = {'enabled': True, 'provider': 'workbuddy', 'model': 'workbuddy/glm-5.3-flash', **change}
+    (tmp_path / 'invoice-ai.json').write_text(json.dumps(config))
+    client = glm.GlmInvoiceAI(tmp_path)
+    assert not client.public_status()['available']
+    with pytest.raises(glm.GlmAIError) as error:
+        client._request('synthetic', 'synthetic', max_tokens=16)
+    assert error.value.failure_code == 'config_unavailable'
+
+
+def test_workbuddy_requires_explicit_model(tmp_path: Path) -> None:
+    (tmp_path / 'invoice-ai.json').write_text('{"enabled":true,"provider":"workbuddy"}')
+    assert not glm.GlmInvoiceAI(tmp_path).public_status()['available']
+
+
+@pytest.mark.parametrize('served', ['workbuddy/glm-5.3-flash', 'glm-5.3-flash', 'other', None, []])
+def test_workbuddy_request_and_served_model_validation(tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+                                                      served: Any) -> None:
+    model = 'workbuddy/glm-5.3-flash'
+    (tmp_path / 'invoice-ai.json').write_text(json.dumps({'enabled': True, 'provider': 'workbuddy', 'model': model}))
+    client = glm.GlmInvoiceAI(tmp_path)
+    opener = network(monkeypatch, extraction(), model=served)
+    handlers_seen = []
+    def build_opener(*handlers: Any) -> Opener:
+        handlers_seen.extend(handlers)
+        return opener
+    monkeypatch.setattr(glm.urllib.request, 'build_opener', build_opener)
+    before = {path: path.read_bytes() for path in tmp_path.rglob('*') if path.is_file()}
+    if served in (model, 'glm-5.3-flash'):
+        assert client.extract(TEXT)['model'] == model
+        assert client.decide({}, [])['model'] == model
+        network(monkeypatch, {'option_id': 'review'}, model=served)
+        assert client.decide({}, [{'id': 'candidate'}])['model'] == model
+    else:
+        with pytest.raises(glm.GlmAIError) as error:
+            client.extract(TEXT)
+        assert error.value.failure_code == 'response_schema'
+    assert len(opener.calls) == 1
+    request, timeout = opener.calls[0]
+    assert request.full_url == 'http://127.0.0.1:3425/v1/chat/completions' and timeout == 60
+    assert request.get_header('Authorization') == 'Bearer magpie'
+    body = json.loads(request.data)
+    assert body['model'] == model and 'thinking' not in body
+    assert body['reasoning_effort'] == 'high' and body['stream'] is False
+    assert body['max_tokens'] == 16384 and body['response_format'] == {'type': 'json_object'}
+    assert [row['role'] for row in body['messages']] == ['system', 'user']
+    assert any(isinstance(handler, glm._NoRedirect) for handler in handlers_seen)
+    assert any(isinstance(handler, glm.urllib.request.ProxyHandler) and handler.proxies == {} for handler in handlers_seen)
+    assert {path: path.read_bytes() for path in tmp_path.rglob('*') if path.is_file()} == before
+
+
+def test_custom_glm_model_used_for_request_and_result(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    (tmp_path / 'invoice-ai.json').write_text('{"enabled":true,"model":"glm-other"}')
+    monkeypatch.setenv('GLM_API_KEY', KEY)
+    client = glm.GlmInvoiceAI(tmp_path)
+    opener = network(monkeypatch, extraction(), model='glm-other')
+    assert client.extract(TEXT)['model'] == client.public_status()['model'] == 'glm-other'
+    assert json.loads(opener.calls[0][0].data)['model'] == 'glm-other'
 
 
 def test_native_text_extraction_keeps_original_and_uses_official_contract(client: glm.GlmInvoiceAI,

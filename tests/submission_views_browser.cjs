@@ -85,6 +85,10 @@ async function run(playwright) {
     assert.equal(await page.locator('.metric').count(), 2);
     const metricWidths = await page.locator('.metric').evaluateAll(nodes => nodes.map(node => node.getBoundingClientRect().width));
     assert.ok(Math.abs(metricWidths[0] - metricWidths[1]) < 1, 'Both financial stage cards fill equal columns');
+    const reviewedMetric = page.locator('.metric[data-view="submitted"]');
+    assert.equal(await reviewedMetric.locator('small').innerText(), '已核对');
+    assert.equal(await reviewedMetric.locator('b').innerText(), '¥ 300.00', 'Reviewed totals include existing packages and historical expenses');
+    assert.match(await reviewedMetric.innerText(), /3 笔事项/);
 
     await tab('review').click();
     assert.deepEqual(await ids(), ['missing', 'requested', 'review'], 'every incomplete or unverified draft remains in review');
@@ -162,16 +166,27 @@ async function run(playwright) {
     assert.doesNotMatch(await page.locator('#metrics').innerText(), /9,999\.99/);
     await page.locator('#matchingClose').click();
     assert.equal(writes.length, 1);
-    state.items.push(item('historical-project', {project_id:'p2', verified:true, ready:true}));
+    state.items.push(item('historical-project', {project_id:'p2', amount_cents:2500, verified:true, ready:true}));
     await page.goto(origin + '/');
     await page.locator('.metric[data-view="submitted"]').waitFor();
     const metric = page.locator('.metric[data-view="submitted"]');
-    assert.equal(await metric.locator('b').innerText(), '¥ 200.00', 'only two reviewed unexported drafts in a pending project count');
-    assert.match(await metric.innerText(), /已报销项目中另有 1 笔已核对未生成报销包/);
+    assert.equal(await metric.locator('b').innerText(), '¥ 425.00', 'The summary and reviewed list use the same scope across both project statuses');
+    assert.match(await metric.innerText(), /5 笔事项/);
+    assert.doesNotMatch(await metric.innerText(), /待提交|已报销项目中另有/);
     await metric.click();
     assert.deepEqual(await page.locator('#list [data-item]').evaluateAll(rows=>rows.slice(0,2).map(x=>x.dataset.item)), ['review','ready']);
     assert.match(await page.locator('[data-item="historical-project"]').innerText(), /项目已报销/);
     assert.equal(await page.evaluate(()=>reportEligible(state.items.find(x=>x.id==='historical-project'))),true,'package eligibility remains unchanged');
+    await page.locator('#search').fill('historical-project');
+    assert.equal(await metric.locator('b').innerText(), '¥ 25.00');
+    assert.match(await metric.innerText(), /已核对 · 筛选结果.*1 笔事项/s);
+    assert.deepEqual(await ids(), ['historical-project']);
+    await page.goto(origin + '/?project=p2&view=submitted');
+    await page.locator('[data-item="historical-project"]').waitFor();
+    assert.equal(await metric.locator('b').innerText(), '¥ 25.00', 'A reimbursed project still displays its reviewed amount');
+    assert.match(await metric.innerText(), /1 笔事项/);
+    assert.deepEqual(await ids(), ['historical-project']);
+    assert.equal(writes.length, 1, 'Summary clicks and filters never modify financial records');
     assert.deepEqual(errors, []);
     return {passed: true, scope: 'synthetic browser only', reviewSplit: true, preservedHistoricalBills: true,
       finalPrintPreview: true, materialDeskEntry: true, createdExpenseFocus: true, legacySynthesisRedirect: true,

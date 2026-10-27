@@ -10,7 +10,7 @@ async function run(pw){
  const items=[fee('rA','高铁','a',{complete:false,missing:['发票']}),fee('rB','酒店','b',{material_match:{voucher_count:1,payment_count:1,voucher_total_cents:200,payment_total_cents:100}}),
   fee('rC','打车','c'),fee('rD','高铁','b'),fee('rFail','酒店','a'),fee('ready1','酒店','a',{verified:true,ready:true}),
   fee('ready2','高铁','b',{verified:true,ready:true}),fee('amountPending','酒店','a',{amount_cents:0,amount:'0.00',amount_pending:true,complete:false,missing:['金额待确认']}),fee('unassigned','酒店','',{complete:false,missing:['发票']}),fee('history','酒店','a',{verified:true,ready:true,stage:'submitted',report_files:{pdf:'old.pdf'}})];
- let categoryOptions=['高铁','酒店','打车'],peopleIds=['a','b','c'],returnError=false,releaseReturn,returnStarted,holdReturn=false,failStateAfterTransition=false,failNextState=false;
+ let categoryOptions=['高铁','酒店','打车'],peopleIds=['a','b','c'],returnError=false,releaseReturn,returnStarted,holdReturn=false,failStateAfterTransition=false,failStateAfterReturn=false,failNextState=false;
  const people=()=>peopleIds.map(id=>({id,label:'Person '+id,project_id:'p1',state:'active',version:'pv1-'+id}));
  const state=()=>({app_mode:'invoice',token:'synthetic',items,projects:[{id:'p1',name:'Synthetic project'}],inbox:[],categories:categoryOptions,
   roles:{invoice:'发票'},stages:{draft:'待核对',submitted:'可提交'},report_template_ready:true,category_auto_ready:false});
@@ -41,6 +41,7 @@ async function run(pw){
     if(returnError)return json({error:'Synthetic return conflict'},409);
     const selected=body.ids.map(id=>items.find(item=>item.id===id));
     for(const item of selected)Object.assign(item,{stage:'draft',verified:false,ready:false,review_requested:true,version:'returned-'+item.id});
+    if(failStateAfterReturn){failStateAfterReturn=false;failNextState=true;}
     return json({items:selected,changed:selected.length,message:'returned'});
    }
    throw Error('Unexpected synthetic mutation '+url.pathname);
@@ -233,26 +234,42 @@ async function run(pw){
 
   await page.evaluate(()=>{checked.clear();renderSelection();});
   await page.locator('[data-check=ready1]').check();await page.locator('[data-check=ready2]').check();await set('categoryFilter',['酒店']);
-  const beforeCancel=writes.length;await page.locator('#returnSelected').click();await page.locator('#cancelVerify').click();
+  const beforeCancel=writes.length,beforeCancelUrl=page.url();await page.locator('#returnSelected').click();await page.locator('#cancelVerify').click();
   await page.waitForFunction(()=>!batchReturnBusy);assert.equal(writes.length,beforeCancel);assert.deepEqual((await page.evaluate(()=>[...checked])).sort(),['ready1','ready2']);
+  assert.equal(page.url(),beforeCancelUrl);assert.equal(await page.evaluate(()=>view),'submitted');
   holdReturn=true;const started=new Promise(resolve=>{returnStarted=resolve;});
   await page.locator('#returnSelected').click();await page.locator('#confirmVerify').click();await started;
   assert.equal(await page.locator('#returnSelected').isDisabled(),true);await page.evaluate(()=>document.querySelector('#returnSelected').click());
   assert.equal(returns.length,1);assert.deepEqual(returns[0].ids,['ready1']);assert.equal(returns[0].project_id,'p1');assert.deepEqual(returns[0].versions,{ready1:'v1-ready1'});
   holdReturn=false;releaseReturn();await page.waitForFunction(()=>!batchReturnBusy);
-  assert.deepEqual(await page.evaluate(()=>[...checked]),['ready2'],'Hidden selections survive a visible-only return');
-  assert.equal(items.find(item=>item.id==='ready1').verified,false);assert.equal(await page.locator('[data-item=ready1]').count(),0);
-  await page.locator('#tabs [data-view=review]').click();assert.equal(await page.locator('[data-item=ready1]').count(),1);
+  assert.deepEqual((await page.evaluate(()=>[...checked])).sort(),['ready1','ready2'],'Returned and hidden selections survive a visible-only return');
+  assert.equal(items.find(item=>item.id==='ready1').verified,false);assert.equal(await page.locator('[data-item=ready1]').count(),1);
+  assert.equal(await page.locator('[data-check=ready1]').isChecked(),true);
+  assert.equal(await page.evaluate(()=>view),'review');assert.equal(new URL(page.url()).searchParams.get('view'),'review');
+  assert.equal(new URL(page.url()).searchParams.get('project'),'p1');
+  assert.match(await page.locator('#notice').innerText(),/已退回 1 笔，已切到待核对并保留勾选/);
+  assert.equal(await page.locator('#bulkAssignExpenses').isEnabled(),true);
+  assert.match(await page.locator('#bulkAssignExpenses').innerText(),/修改归属 · 1 笔/);
+  await page.locator('[data-check=ready1]').uncheck();
   await page.locator('#tabs [data-view=submitted]').click();await set('categoryFilter',['高铁']);
   assert.equal(await page.locator('[data-check=ready2]').isChecked(),true);returnError=true;
-  await page.locator('#returnSelected').click();await page.locator('#confirmVerify').click();await page.waitForFunction(()=>!batchReturnBusy);
+  const beforeFailureUrl=page.url();await page.locator('#returnSelected').click();await page.locator('#confirmVerify').click();await page.waitForFunction(()=>!batchReturnBusy);
   assert.match(await page.locator('#error').innerText(),/Synthetic return conflict/);assert.deepEqual(await page.evaluate(()=>[...checked]),['ready2']);
+  assert.equal(page.url(),beforeFailureUrl);assert.equal(await page.evaluate(()=>view),'submitted');
   assert.equal(items.find(item=>item.id==='ready2').ready,true);
+  returnError=false;await all();await page.evaluate(()=>{checked.clear();renderSelection();});
+  await page.locator('[data-check=rC]').check();await page.locator('[data-check=ready2]').check();failStateAfterReturn=true;
+  await page.locator('#returnSelected').click();await page.locator('#confirmVerify').click();await page.waitForFunction(()=>!batchReturnBusy);
+  assert.deepEqual((await page.evaluate(()=>[...checked])).sort(),['rC','ready2']);
+  assert.equal(await page.locator('[data-check=rC]').isChecked(),true);assert.equal(await page.locator('[data-check=ready2]').isChecked(),true);
+  assert.equal(await page.evaluate(()=>view),'review');assert.equal(new URL(page.url()).searchParams.get('view'),'review');
+  assert.equal(await page.locator('#bulkAssignExpenses').isEnabled(),true);
+  assert.match(await page.locator('#error').innerText(),/退回已成功；列表刷新失败/);
   assert.deepEqual(errors,[]);assert.ok(writes.every(value=>['/api/transition','/api/review/return'].includes(value)));
   return {passed:true,multiOptionOrAcrossFiltersAnd:true,blankAndEscapeDismiss:true,visiblePersonAllCheckbox:true,selectionEvidence,allFilterEvidence,categoryAndIssueExplicitAll:true,onlyAmountPendingSurvivesAllProblems:true,newOptionsDoNotExpandExplicitSelection:true,removedShortcutsStayInactive:true,personSelectionPreservesOtherScopesAndFeeChecks:true,appearance,menuGeometry,refreshPreservesSelections:true,
    rosterOnlyDropsStaleSelections:true,personDrilldownResetsOnePerson:true,deskSuggestionsIndependentOfExpenseFilters:true,
    verifySuccessClearsFailureRetains:true,verifyCommittedStateSurvivesRefreshFailure:true,returnOnlyVisibleChecked:true,cancelWrites:0,hiddenChecksPreserved:true,
-   duplicateReturnSuppressed:true,returnErrorPreservesChecks:true,syntheticTransitions:transitions.length,syntheticReturnRequests:returns.length};
+   duplicateReturnSuppressed:true,returnErrorPreservesChecks:true,returnSuccessRetainsChecksInReview:true,returnCommittedStateSurvivesRefreshFailure:true,syntheticTransitions:transitions.length,syntheticReturnRequests:returns.length};
  }finally{releaseReturn?.();await browser.close();}
 }
 module.exports=run;

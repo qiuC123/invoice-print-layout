@@ -49,9 +49,9 @@ def test_coordinated_goods_cannot_be_covered_by_only_the_familiar_product(separa
     assert _covered(text, complete)
     with pytest.raises(ValueError, match='遗漏多商品'):
         _validate({'goods': [{'name': '鼠标', 'source_ids': [0], 'quote': text}]},
-                  [{'id': 0, 'text': text}])
+                  [{'id': 0, 'text': text}], 'synthetic-model')
     assert _validate({'goods': [{'name': text, 'source_ids': [0], 'quote': text}]},
-                     [{'id': 0, 'text': text}])[0]['name'] == text
+                     [{'id': 0, 'text': text}], 'synthetic-model')[0]['name'] == text
 
 
 def test_conjunction_inside_a_name_or_device_compatibility_does_not_invent_products() -> None:
@@ -81,10 +81,10 @@ def test_bare_material_or_finish_fragments_are_not_independent_model_products(fr
     fragmented = {'goods': [{'name': row['text'], 'source_ids': [row['id']], 'quote': row['text']}
                             for row in sources]}
     with pytest.raises(ValueError, match='跨行修饰片段'):
-        _validate(fragmented, sources)
+        _validate(fragmented, sources, 'synthetic-model')
     grouped = {'goods': [{'name': fragment + '保温杯', 'source_ids': [0, 1], 'quote': fragment + '\n保温杯'},
                          {'name': '加厚帆布袋', 'source_ids': [2], 'quote': '加厚帆布袋'}]}
-    assert [row['name'] for row in _validate(grouped, sources)] == [fragment + '保温杯', '加厚帆布袋']
+    assert [row['name'] for row in _validate(grouped, sources, 'synthetic-model')] == [fragment + '保温杯', '加厚帆布袋']
 
 
 @pytest.mark.parametrize('quote,other', [('透明亚克力', False), ('透明亚克力 20元', True),
@@ -96,7 +96,7 @@ def test_independently_supported_raw_material_is_not_generally_forbidden(quote: 
     if other:
         sources.append({'id': 1, 'text': '保温杯'})
         goods.append({'name': '保温杯', 'source_ids': [1], 'quote': '保温杯'})
-    assert _validate({'goods': goods}, sources)[0]['name'] == '透明亚克力'
+    assert _validate({'goods': goods}, sources, 'synthetic-model')[0]['name'] == '透明亚克力'
 
 
 def test_natural_local_amount_field_is_filtered_before_wrapped_goods_completion(
@@ -180,7 +180,7 @@ def answer() -> dict[str, Any]:
 ])
 def test_missing_hallucinated_or_unbound_model_content_is_rejected(raw: dict[str, Any]) -> None:
     with pytest.raises(ValueError):
-        _validate(raw, _sources(facts()))
+        _validate(raw, _sources(facts()), 'synthetic-model')
 
 
 @pytest.mark.parametrize('indices', [[0, 1_000_000_000], [-1, 0], [1, 0], [0, 2], [0] * 21])
@@ -188,7 +188,7 @@ def test_model_source_indices_are_bounded_before_contiguous_range_validation(ind
     started = time.perf_counter()
     with pytest.raises(ValueError, match='引用无效'):
         _validate({'goods': [{'name': '鼠标', 'source_ids': indices, 'quote': '鼠标'}]},
-                  [{'id': 0, 'text': '鼠标'}, {'id': 1, 'text': '亚克力导视牌'}])
+                  [{'id': 0, 'text': '鼠标'}, {'id': 1, 'text': '亚克力导视牌'}], 'synthetic-model')
     assert time.perf_counter() - started < .5
 
 
@@ -247,14 +247,14 @@ def test_grounded_wrapped_products_require_all_rows_and_exact_quotes() -> None:
     sources = [{'id': 0, 'text': '一次性'}, {'id': 1, 'text': '防护面罩'}, {'id': 2, 'text': '亚克力导视牌'}]
     raw = {'goods': [{'name': '一次性防护面罩', 'source_ids': [0, 1], 'quote': '一次性\n防护面罩'},
                      {'name': '亚克力导视牌', 'source_ids': [2], 'quote': '亚克力导视牌'}]}
-    accepted = _validate(raw, sources)
+    accepted = _validate(raw, sources, 'synthetic-model')
     assert [row['name'] for row in accepted] == ['一次性防护面罩', '亚克力导视牌']
     with pytest.raises(ValueError, match='遗漏多商品'):
         _validate({'goods': [{'name': '鼠标', 'source_ids': [0], 'quote': '鼠标、亚克力导视牌'}]},
-                  [{'id': 0, 'text': '鼠标、亚克力导视牌'}])
+                  [{'id': 0, 'text': '鼠标、亚克力导视牌'}], 'synthetic-model')
     with pytest.raises(ValueError, match='遗漏跨行'):
         _validate({'goods': [{'name': '鼠标', 'source_ids': [0, 1], 'quote': '鼠标\n亚克力导视牌'}]},
-                  [{'id': 0, 'text': '鼠标'}, {'id': 1, 'text': '亚克力导视牌'}])
+                  [{'id': 0, 'text': '鼠标'}, {'id': 1, 'text': '亚克力导视牌'}], 'synthetic-model')
 
 
 def test_goods_region_never_turns_merchant_or_redacted_identifiers_into_products() -> None:
@@ -324,6 +324,28 @@ def test_text_completion_is_once_cached_and_bound_to_revision(environment: Any, 
     assert len(received) == jobs.get(job['id'])['models'] == 2
     with tools.store.connect() as db:
         assert not db.execute("SELECT 1 FROM sqlite_master WHERE name='invoice_agent_goods_cache'").fetchone()
+
+
+def test_goods_cache_and_records_follow_configured_model(environment: Any, monkeypatch: Any) -> None:
+    jobs, tools, _ = environment
+    job, _ = draft(environment)
+    job = jobs.update(job['id'], use_model=True)
+    entry = tools.intake.get(job['material_ids'][0])
+    calls = []
+    def request(ai: GlmInvoiceAI, *args: Any, **kwargs: Any) -> dict[str, Any]:
+        calls.append(ai.model)
+        return answer()
+    monkeypatch.setattr(GlmInvoiceAI, '_request', request)
+    config = jobs.store.root / 'invoice-ai.json'
+    for model in ['workbuddy/glm-5.3-flash', 'workbuddy/glm-5.3', 'workbuddy/glm-5.3-flash']:
+        config.write_text(json.dumps({'enabled': True, 'provider': 'workbuddy', 'model': model}))
+        result = supplement_goods(jobs, job, entry, facts(), [])
+        assert result['complete']
+        assert all(row['model'] == model for row in result['goods'])
+        cached = supplement_goods(jobs, job, entry, facts(), [])
+        assert cached['source'] == 'cache' and cached['goods'] == result['goods']
+    assert calls == ['workbuddy/glm-5.3-flash', 'workbuddy/glm-5.3']
+    assert jobs.get(job['id'])['models'] == 2
 
 
 def test_broad_local_quote_cannot_hide_an_unpriced_second_product(environment: Any, monkeypatch: Any) -> None:

@@ -2264,7 +2264,7 @@ class MaterialMatching:
             'suggestion_count': 0, 'suggestions_truncated': False, 'conflicts': conflicts,
             'engine': 'rules', 'requests': 0,
             'ai': {'requests': 0, 'reviewed': 0, 'failed': 0, 'used_for_matching': False,
-                   'message': 'GLM不参与配对；候选由本地规则核算，确认创建后进入待核对。'},
+                   'message': 'AI模型不参与配对；候选由本地规则核算，确认创建后进入待核对。'},
             'issues': ['系统候选进入待合成；选择材料并确认创建后进入待核对。',
                        '每组最多4份票据和4份付款；更大组合请在合成台人工选择。'],
         }
@@ -2408,7 +2408,7 @@ class MaterialMatching:
                 'suggestion_count': board['suggestion_count'], 'suggestions_truncated': board['suggestions_truncated'],
                 'conflicts': board['suggestion_conflicts'], 'engine': 'rules', 'requests': 0,
                 'ai': {'requests': 0, 'used_for_matching': False,
-                       'message': 'GLM不参与配对；确认创建后进入待核对。'},
+                       'message': 'AI模型不参与配对；确认创建后进入待核对。'},
                 'issues': ['系统候选进入待合成；选择材料并确认创建后进入待核对。',
                            '每组最多4份票据和4份付款；更大组合请在合成台人工选择。']}
 
@@ -2428,7 +2428,7 @@ class MaterialMatching:
         except (ValueError, OSError, RuntimeError):
             status = {'enabled': self.ai is not None, 'available': False}
         ai_status = {**status, 'requests': 0, 'reviewed': 0, 'failed': 0, 'used_for_matching': False,
-                     'message': 'GLM不参与配对；金额及对应关系由本地规则判断。'}
+                     'message': 'AI模型不参与配对；金额及对应关系由本地规则判断。'}
         result: dict[str, Any] = {'matched': 0, 'unmatched': len(vouchers), 'conflicts': conflicts, 'items': [],
                                  'engine': 'rules', 'requests': 0, 'ai': ai_status,
                                  'issues': ['本地规则核算金额与原件对应关系；明确组合进入待核对，有歧义保留人工。',

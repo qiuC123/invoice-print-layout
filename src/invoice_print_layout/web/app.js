@@ -314,11 +314,10 @@ function emptyExpenseView(){
  if(view==='review')return '<div class="empty"><h2>暂无待核对费用</h2><p>确认合成后进入这里核对；已经核对的费用请到“已核对”查看。</p></div>';
  return '<div class="empty"><h2>当前没有事项</h2><p>在材料合成台选择凭证，创建费用后可继续补材料。</p></div>';
 }
-function render(){view=normalizeExpenseView(view);const items=base(),filtered=expenseFilterLabels().length>0;$('inboxCount').textContent=state.inbox.length||'';$('metrics').innerHTML=[['review','待核对',''],['submitted','待提交','good']].map(([v,label,cls])=>{
+function render(){view=normalizeExpenseView(view);const items=base(),filtered=expenseFilterLabels().length>0;$('inboxCount').textContent=state.inbox.length||'';$('metrics').innerHTML=[['review','待核对',''],['submitted','已核对','good']].map(([v,label,cls])=>{
  label+=filtered?' · 筛选结果':'';
- const a=items.filter(v==='submitted'?pendingSubmission:x=>matches(x,v));
- const historical=v==='submitted'?items.filter(x=>reportEligible(x)&&expenseProjectReimbursed(x)).length:0;
- return `<button class="metric ${cls}" data-view="${v}"><small>${label}</small><b>¥ ${money(a.reduce((t,x)=>t+x.amount_cents,0))}</b><em>${a.length} 笔事项${v==='submitted'?' · 查看最终打印页':''}</em>${historical?`<em>已报销项目中另有 ${historical} 笔已核对未生成报销包</em>`:''}</button>`;
+ const a=items.filter(x=>matches(x,v));
+ return `<button class="metric ${cls}" data-view="${v}"><small>${label}</small><b>¥ ${money(a.reduce((t,x)=>t+x.amount_cents,0))}</b><em>${a.length} 笔事项${v==='submitted'?' · 查看最终打印页':''}</em></button>`;
 }).join('');document.querySelectorAll('[data-view]').forEach(b=>b.classList.toggle('active',b.dataset.view===view));$('tabs').hidden=view==='inbox';$('exportSelected').hidden=view==='inbox';
 if(view==='inbox'){$('listSummary').textContent=`${state.inbox.length} 份需处理邮件附件（打车材料已自动整理）`;$('list').innerHTML=state.inbox.length?state.inbox.map(f=>`<div class="mailrow"><a href="/inbox/${f.id}" target="_blank" rel="noopener">${esc(f.name)}</a><div class="actions"><select id="target-${f.id}" aria-label="关联事项"><option value="">选择所属事项</option>${state.items.filter(x=>!x.deleted&&x.stage==='draft').map(x=>`<option value="${x.id}">${esc(x.title)}</option>`).join('')}</select><select id="role-${f.id}" aria-label="材料用途">${Object.entries(state.roles).filter(([k])=>k!=="package").map(([k,v])=>`<option value="${k}" ${k==="other"?"selected":""}>${esc(v)}</option>`).join("")}</select><button data-assign="${f.id}">手动归档</button></div><small class="muted">${esc(f.reason||"非打车材料或无法确定归属，请核对后归档。")}</small></div>`).join(''):'<div class="empty">没有需处理的邮件附件。已配对的打车费用请到“事项台账”查看；补收邮件后会自动整理。</div>';}
 else{const visible=items.filter(x=>matches(x,view));if(view==='submitted')visible.sort((a,b)=>Number(pendingSubmission(b))-Number(pendingSubmission(a)));$('listSummary').textContent=`${visible.length} 笔 · 已勾选 ${checked.size} 笔`;$('list').innerHTML=visible.length?visible.map(x=>`<div class="row ${active===x.id?'selected':''}" data-item="${x.id}">${x.deleted?'<span class="row-select-spacer" aria-hidden="true"></span>':`<input type="checkbox" aria-label="选择 ${esc(x.title)}" data-check="${x.id}" ${checked.has(x.id)?'checked':''}>`}<div><div class="title">${esc(x.title)}</div>${window.reimbursementPeopleUI?.markup(x)||''}<div class="sub">${esc(x.project)} · ${esc(x.category)}<br>${esc(x.expense_date)} · ${esc(x.merchant||'未填商家')}</div>${!x.complete?`<div class="missing">缺：${esc(x.missing.join('、'))}${x.overdue?' · 已到跟进日':''}</div>`:''}${x.alternative?'<div class="missing">无发票替代：扣费记录</div>':''}</div><div class="money">${expenseMoney(x)}<br><span class="badge ${x.ready?'good':x.stage!=='draft'?'neutral':''}">${badge(x)}</span>${expenseRowActions(x)}</div></div>`).join(''):emptyExpenseView();}
@@ -571,10 +570,12 @@ async function returnReviewedExpenses(ids){
   const hidden=[...checked].filter(id=>!ids.includes(id)).length;
   if(!await confirmVerification(`将这 ${items.length} 笔费用退回待核对：\n\n${items.slice(0,10).map(item=>`${item.title} · ${expenseMoney(item)}`).join('\n')}${items.length>10?'\n…':''}\n\n金额、费用归属、原件和历史报销文件保留。退回后可修改费用，需要重新核对；缺材料的费用也需要重新确认。${hidden?`\n其他 ${hidden} 笔勾选不参与本次退回。`:''}`,{title:'批量退回待核对',confirmText:'确认退回'})){notify('已取消退回，费用保持原状。');return;}
   const result=await api('review/return',{ids,versions,project_id:projectId});committed=true;
-  for(const id of ids)checked.delete(id);
+  for(const id of ids)checked.add(id);
+  view='review';
+  const url=new URL(location.href);url.searchParams.set('view',view);history.replaceState(null,'',url);
   if(ids.includes(active))active=null;
   const updated=new Map(result.items.map(item=>[item.id,item]));state={...state,items:state.items.map(item=>updated.get(item.id)||item)};expensePreviewRequests.clear();
-  try{await load();notify(`已退回 ${result.changed} 笔费用，请到“待核对”继续修改和核对。`);}catch(error){render();throw Error('退回已成功；列表刷新失败，请刷新页面继续。'+error.message);}
+  try{await load();notify(`已退回 ${result.changed} 笔，已切到待核对并保留勾选。`);}catch(error){render();throw Error('退回已成功；列表刷新失败，请刷新页面继续。'+error.message);}
  }catch(error){if(!committed)render();throw error;}finally{batchReturnBusy=false;renderSelection();}
 }
 $('selectVisible').onchange=e=>{for(const x of base().filter(x=>matches(x,view))){if(e.target.checked)checked.add(x.id);else checked.delete(x.id);}renderSelection();};
