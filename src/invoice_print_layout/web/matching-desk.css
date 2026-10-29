@@ -68,3 +68,11 @@ html:has(#matchingDeskDialog[open]){overflow:hidden}
 .matching-transaction-summary>div{padding:12px;border:1px solid var(--line);border-radius:var(--radius,8px);min-width:0}
 .matching-transaction-summary small{display:block;line-height:1.6;overflow-wrap:anywhere}
 .matching-transaction-summary>div:empty{display:none}
+.matching-intake-hint { margin: 0 0 12px; font-size: 13px; }
+#matchingDropOverlay {
+  position: fixed; inset: 16px; width: auto; height: auto; margin: 0;
+  border: 3px dashed #2563eb; border-radius: 18px; padding: 24px;
+  background: rgba(239, 246, 255, .96); color: #17356b;
+  font-size: 28px; font-weight: 700; text-align: center; pointer-events: none;
+}
+#matchingDropOverlay:popover-open { display: grid; place-items: center; }

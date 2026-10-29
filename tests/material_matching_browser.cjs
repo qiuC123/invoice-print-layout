@@ -523,7 +523,7 @@ async function run(pw) {
       {name: 'invoice.pdf', mimeType: 'application/pdf', buffer: Buffer.from('%PDF-1.4 synthetic')},
       ...['payment.png', 'qr-ready.png', 'qr-pending.png', 'failed.png'].map(name => ({name, mimeType: 'image/png', buffer: png})),
     ]);
-    await page.waitForFunction(() => document.getElementById('matchingMessage').textContent.includes('本批 5 份'));
+    await page.waitForFunction(() => document.getElementById('matchingMessage').textContent.includes('新增 5 份'));
     assert.equal(received.length, 5); assert.equal(prepared.filter(id => id.startsWith('uploaded-')).length, 5);
     assert.equal(autoCount, 1, 'batch must trigger read-only suggestion discovery once after all preparation');
     const batchMessage = await page.locator('#matchingMessage').innerText();

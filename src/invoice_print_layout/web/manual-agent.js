@@ -56,7 +56,7 @@
     function saveRequests(projectId) {
       const rows = requestRecords(projectId);
       // Failed requests keep their exact identity. Only old, accepted requests can age out.
-      while (rows.length > 12) { const index = rows.findIndex(row => row.accepted); if (index < 0) break; rows.splice(index, 1); }
+      while (rows.length > 12) { const index = rows.findIndex(row => row.accepted && !rows.some(next => !next.accepted && next.after === row.key)); if (index < 0) break; rows.splice(index, 1); }
       remember('requests:' + projectId, JSON.stringify(rows.map(({result, ...row}) => row)));
     }
     function updateControls() {
@@ -148,7 +148,7 @@
           const data = await api('/api/agent/jobs?project=' + encodeURIComponent(requestedProject));
           if (destroyed || current() !== requestedProject || generation !== requestedGeneration) return null;
           if (revision !== requestedRevision) { again = true; return null; }
-          refreshError = ''; displayError(); applyJobs(data, requestedProject); return data;
+          refreshError = ''; displayError(); applyJobs(data, requestedProject); startNextReceived(); return data;
         } catch (_) {
           if (!destroyed && current() === requestedProject && generation === requestedGeneration) {
             refreshError = '整理状态暂未刷新，已保存的材料和任务会保留。'; displayError();
@@ -279,12 +279,19 @@
     }
     function renderPending() {
       pending.replaceChildren(); if (!project) return;
+      const waiting = requestRecords(project).filter(row => row.waiting && !row.accepted);
+      if (waiting.length) pending.append(node('p', `${waiting.reduce((sum, row) => sum + row.ids.length, 0)} 份材料等待分批整理；前一批结束后自动继续。切换项目或关闭页面后，回到本项目继续。`, 'mia-muted'));
       for (const record of requestRecords(project).filter(row => row.failed && !row.accepted)) {
         const card = node('div', undefined, 'mia-start-retry');
         card.append(node('span', record.ids.length + ' 份材料已保留，启动状态未确认。'));
         const button = makeButton('重试启动本批整理', () => startRecord(record));
         button.disabled = startLocks.has(project); card.append(button); pending.append(card);
       }
+    }
+    function startNextReceived() {
+      if (startLocks.has(project) || jobs.some(job => ['queued', 'running'].includes(job.state))) return;
+      const records = requestRecords(project), next = records.find(row => row.waiting && !row.accepted && !row.failed);
+      if (next && records.some(row => row.key === next.after && row.accepted)) void startRecord(next).catch(() => {});
     }
     async function startRecord(record) {
       const existing = startLocks.get(record.projectId);
@@ -308,7 +315,7 @@
           }
           revision += 1;
           const result = await api('/api/agent/start', record.body);
-          record.accepted = true; record.failed = false; record.jobId = result.job.id; record.result = result;
+          record.accepted = true; record.waiting = false; record.failed = false; record.jobId = result.job.id; record.result = result;
           saveRequests(record.projectId); watched.add(result.job.id); revision += 1;
           if (current() === record.projectId) {
             setProject(); actionError = ''; displayError(); panel.open = true; replaceJob(result.job);
@@ -317,7 +324,7 @@
           // later GET failure must never make the caller repeat the upload/start.
           void refresh(); return result;
         } catch (reason) {
-          record.failed = true; saveRequests(record.projectId);
+          record.failed = true; record.waiting = false; saveRequests(record.projectId);
           if (current() === record.projectId) { setProject(); panel.open = true; actionFailure(reason); }
           throw reason;
         } finally {
@@ -337,7 +344,13 @@
       const signature = JSON.stringify([projectId, typeof batch === 'string' ? batch : '', ids]);
       const records = requestRecords(projectId);
       let record = records.find(row => row.signature === signature);
-      if (!record) { record = {projectId, signature, ids, key:'manual_' + crypto.randomUUID(), body:null, accepted:false, failed:false}; records.push(record); saveRequests(projectId); }
+      if (!record) {
+        const previous = batch && records.findLast(row => row.batch === batch);
+        record = {projectId, signature, ids, batch, after:previous?.key, waiting:!!previous,
+          key:'manual_' + crypto.randomUUID(), body:null, accepted:false, failed:false};
+        records.push(record); saveRequests(projectId);
+      }
+      if (record.waiting) {renderPending(); void refresh(); return {queued:true};}
       return startRecord(record);
     }
     organize.addEventListener('click', async () => {

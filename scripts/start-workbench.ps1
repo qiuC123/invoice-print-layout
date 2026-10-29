@@ -2,7 +2,8 @@ param(
     [string]$Workspace = (Join-Path $PSScriptRoot '..\workspace'),
     [ValidateRange(1, 65535)][int]$Port = 8765,
     [ValidateSet('workbench', 'invoice')][string]$Mode = 'workbench',
-    [switch]$NoBrowser
+    [switch]$NoBrowser,
+    [switch]$BrowserTab
 )
 $ErrorActionPreference = 'Stop'
 $project = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
@@ -87,4 +88,9 @@ if ($null -eq $runtime) {
     if ($null -eq $runtime) { throw 'Workbench startup timed out. No ready service; browser was not opened.' }
 }
 Assert-WorkbenchRuntime $runtime
-if (-not $NoBrowser) { Start-Process $url }
+if (-not $NoBrowser) {
+    $edge = @('C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe', 'C:\Program Files\Microsoft\Edge\Application\msedge.exe') |
+        Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
+    if (-not $BrowserTab -and $edge) { Start-Process -FilePath $edge -ArgumentList "--app=$url" }
+    else { Start-Process $url }
+}

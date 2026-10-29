@@ -114,7 +114,7 @@ async function run(pw) {
             assert.match(await page.locator('#feedback').innerText(), /任务已启动.*无需重新上传/);
             assert.equal(starts.length, 1, 'panel display failure does not retry the accepted task');
           } else {
-            assert.match(await page.locator('#feedback').innerText(), new RegExp(`重复 ${names.includes('duplicate') ? 1 : 0} 份`));
+            assert.match(await page.locator('#feedback').innerText(), new RegExp(`${kind === 'matching' ? '已收过' : '重复'} ${names.includes('duplicate') ? 1 : 0} 份`));
             assert.match(await page.locator('#feedback').innerText(), new RegExp(`上传失败 ${names.includes('failed') ? 1 : 0} 份`));
           }
         } else assert.equal(await dialog.evaluate(node => node.open), true);

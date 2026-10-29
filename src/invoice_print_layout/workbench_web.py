@@ -299,6 +299,8 @@ def make_server(workspace: Path, port: int = 8765, *, mode: str = 'workbench',
                     self.send(file.read_bytes(), 'text/html; charset=utf-8' if name == 'index.html' else mimetypes.guess_type(file.name)[0] or 'application/octet-stream')
                 elif path in {'/settings.js', '/settings.css', '/phone-link.js', '/phone-link.css', '/app.js', '/workbench-theme.js', '/workbench-theme.css', '/project-menu.js', '/project-menu.css', '/review-edit.js', '/review-edit.css', '/review-batch.js', '/review-batch.css', '/amount-pairing.js', '/amount-pairing.css', '/reimbursement-people.js', '/reimbursement-people.css', '/intake.js', '/intake-progress.js', '/matching-desk.js', '/matching-desk.css', '/synthesis.js', '/receipt.js', '/report.js', '/report-preview.css', '/multi-filter.js', '/multi-filter.css', '/mail-search.js', '/expense-classifier.js', '/logistics.js', '/style.css', '/logistics.css', '/photos.js', '/photos.css'}:
                     self.send((assets / path[1:]).read_bytes(), 'text/javascript' if path.endswith('.js') else 'text/css')
+                elif path == '/favicon.svg':
+                    self.send((assets / 'favicon.svg').read_bytes(), 'image/svg+xml')
                 elif path == '/api/logistics':
                     self.respond({**logistics.snapshot(), 'token': token})
                 elif path == '/api/logistics/inbox':

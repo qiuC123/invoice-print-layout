@@ -1,4 +1,29 @@
 'use strict';
+async function readDroppedMaterialFiles(transfer) {
+  // Capture entries before awaiting: the browser protects DataTransfer after drop returns.
+  const items = [...(transfer.items || [])].filter(item => item.kind === 'file')
+    .map(item => ({entry: item.webkitGetAsEntry?.(), file: item.getAsFile()}));
+  const files = [];
+  async function read(entry) {
+    if (files.length > 200) return;
+    if (entry.isFile) files.push(await new Promise((resolve, reject) => entry.file(resolve, reject)));
+    else if (entry.isDirectory) {
+      const reader = entry.createReader();
+      while (files.length <= 200) {
+        const children = await new Promise((resolve, reject) => reader.readEntries(resolve, reject));
+        if (!children.length) break;
+        for (const child of children) {await read(child); if (files.length > 200) break;}
+      }
+    }
+  }
+  if (!items.length) return [...transfer.files];
+  for (const item of items) {
+    if (item.entry) await read(item.entry);
+    else if (item.file) files.push(item.file);
+    if (files.length > 200) break;
+  }
+  return files;
+}
 // Material links remain provisional; verification and submission use the ledger flow.
 (() => {
   const dialog = document.createElement('dialog');
@@ -10,6 +35,8 @@
       <label>本批归属人<select id="matchingBatchPerson"><option value="">不指定</option></select></label>
       <button id="matchingUpload" type="button" class="primary">＋ 收材料</button>
       <input id="matchingFiles" type="file" accept=".pdf,.png,.jpg,.jpeg,.webp" multiple hidden>
+      <button id="matchingImportFolder" type="button" aria-describedby="matchingFolderHint">导入文件夹</button>
+      <input id="matchingFolder" type="file" webkitdirectory multiple hidden>
       <button id="matchingClaim" type="button">二维码／链接领票</button>
       <button id="matchingMail" type="button">补收邮件</button>
       <button id="matchingAuto" type="button">寻找合成组合</button>
@@ -17,6 +44,7 @@
       <button id="matchingAssignPeople" type="button" disabled>指定材料归属</button>
       <button id="matchingRefresh" type="button">刷新材料</button>
     </div>
+    <p id="matchingFolderHint" class="muted matching-intake-hint">可以直接把文件或文件夹拖进来，包含子文件夹。导入文件夹时，浏览器会弹出“要上传这些文件吗”的确认，点上传即可；只会收 PDF 和图片（PNG、JPG、JPEG、WebP），每份最多 20MB，每次最多 200 个文件。</p>
     <p id="matchingMessage" class="matching-message" role="status"></p>
     <div id="matchingMailFeedback" class="matching-message is-error" hidden></div>
     <div id="matchingUploadProgress" class="matching-progress" hidden><progress id="matchingProgressBar"></progress><span id="matchingProgressText"></span></div>
@@ -175,7 +203,7 @@
     busy = value;
     for (const control of dialog.querySelectorAll('button,input,select')) control.disabled = value;
     updateSaveState();
-    for (const id of ['matchingAuto', 'matchingAmountPair', 'matchingClaim', 'matchingMail', 'matchingUpload', 'matchingRefresh']) el(id).disabled = value || !projectId;
+    for (const id of ['matchingAuto', 'matchingAmountPair', 'matchingClaim', 'matchingMail', 'matchingUpload', 'matchingImportFolder', 'matchingRefresh']) el(id).disabled = value || !projectId;
     for (const button of dialog.querySelectorAll('[data-undo-group]')) button.disabled = value || !button.dataset.groupVersion;
     if (!value) queueMicrotask(showBackgroundResult);
     window.lockSynthesisSuggestions?.(value);
@@ -527,8 +555,12 @@
   }
   async function uploadFiles(files) {
     if (busy || !files.length) return;
-    if (files.length > 50) {message('每批最多50份，请分批上传。', true); return;}
-    if (files.some(file => file.size > 20 * 1024 * 1024) || files.reduce((sum, file) => sum + file.size, 0) > 200 * 1024 * 1024) {message('每份最多20MB，每批合计最多200MB，请分批上传。', true); return;}
+    el('matchingFiles').value = ''; el('matchingFolder').value = '';
+    if (!projectId || projectId !== currentInvoiceProjectId()) {message('先在左侧选择一个项目', true); return;}
+    if (files.length > 200) {message('每次最多 200 个文件，请分批收材料；本次未上传。', true); return;}
+    const supported = files.filter(file => /\.(pdf|png|jpe?g|webp)$/i.test(file.name) && file.size <= 20 * 1024 * 1024);
+    const skipped = files.length - supported.length;
+    files = supported;
     const batchPerson = el('matchingBatchPerson').value;
     const uploadProject = projectId, agent = window.manualInvoiceAgent;
     const organizer = uploadProject && typeof agent?.shouldAutoOrganize === 'function' && typeof agent?.startReceived === 'function' && agent.shouldAutoOrganize(uploadProject) ? agent : null;
@@ -537,10 +569,12 @@
     el('matchingUploadProgress').hidden = false;
     const batch = crypto.randomUUID(), failures = [], entryIds = new Set();
     let received = 0, duplicates = 0, converted = 0, unused = 0, suggested = 0, recognitionReviews = 0, autoFeedback = '';
+    const receiptSummary = () => `新增 ${received - duplicates} 份，已收过 ${duplicates} 份（未重复导入），跳过 ${skipped} 个不支持或过大的文件。`;
+    if (!files.length) {message(receiptSummary()); el('matchingUploadProgress').hidden = true; lock(false); return;}
     el('matchingProgressBar').max = files.length; el('matchingProgressBar').value = 0;
     try {
       for (const [index, file] of files.entries()) {
-        el('matchingProgressText').textContent = `${index + 1} / ${files.length} · ${file.name}`;
+        el('matchingProgressText').textContent = `正在收材料 ${index + 1}/${files.length}`;
         try {
           const data = await new Promise((resolve, reject) => {const reader = new FileReader(); reader.onload = () => resolve(reader.result.split(',')[1]); reader.onerror = reject; reader.readAsDataURL(file);});
           const entry = await api('intake/receive', {name: file.name, data, project_id: uploadProject, batch, reimbursement_person_id: batchPerson}); received++;
@@ -554,19 +588,21 @@
         el('matchingProgressBar').value = index + 1;
       }
       if (organizer) {
-        // Receiving is already committed. Neither a failed start nor a later read
-        // may send the files again or start another task for this batch.
+        // Saved originals stay committed; refresh must not repeat uploads or accepted starts.
         el('matchingFiles').value = '';
-        let started = false, startError = '';
-        if (entryIds.size) {
-          try {await organizer.startReceived({projectId: uploadProject, entryIds: [...entryIds], batch}); started = true;}
-          catch (error) {startError = `自动整理未能启动：${error.message}。已收到的原件保留，请在自动整理助手中查看或重试。`;}
+        let started = 0, startError = '';
+        const ids = [...entryIds];
+        for (let offset = 0; offset < ids.length; offset += 20) {
+          const chunk = ids.slice(offset, offset + 20);
+          try {await organizer.startReceived({projectId: uploadProject, entryIds: chunk, batch}); started += chunk.length;}
+          catch (error) {startError = `自动整理未能全部启动：${error.message}。已收到的原件保留，请在自动整理助手中查看或重试。`;}
         }
-        const summary = `本批 ${files.length} 份 · 已保存 ${received} 份 · 重复 ${duplicates} 份 · 上传失败 ${failures.length} 份。` +
-          (started ? `已将本批 ${entryIds.size} 份新材料交给自动整理；缺少依据时会在当前工作台询问。` : startError || '本批没有可交给自动整理的新材料；原件及已有费用关联保持。');
+        const summary = receiptSummary() + `上传失败 ${failures.length} 份。` +
+          (started ? `已将本批 ${started} 份新材料交给自动整理；缺少依据时会在当前工作台询问。` : '') +
+          (startError || (!started ? '本批没有可交给自动整理的新材料；原件及已有费用关联保持。' : ''));
         el('matchingProgressText').textContent = failures.join('\n') || startError || '收件完成。';
         if (started) {
-          closeMatchingAfterCommit(); notify(summary, !!failures.length);
+          closeMatchingAfterCommit(); notify(summary, !!failures.length || !!startError);
           try {await organizer.open?.();} catch (error) {notify(summary + ` 助手显示未完成：${error.message}；任务已启动，请刷新查看，无需重新上传。`, true);}
         }
         else {
@@ -579,9 +615,9 @@
         el('matchingFiles').value = '';
         try {
           if (entryIds.size) await window.invoiceIntakeProgress.enqueue(batch, [...entryIds], uploadProject);
-          message(`本批已保存 ${received} 份 · 重复 ${duplicates} 份 · 上传失败 ${failures.length} 份。${entryIds.size ? '已交给后台逐份识别，可以关闭窗口；完成后会刷新建议组合。' : '没有新的待识别材料。'}`, !!failures.length);
+          message(receiptSummary() + `上传失败 ${failures.length} 份。${entryIds.size ? '已交给后台逐份识别，可以关闭窗口；完成后会刷新建议组合。' : '没有新的待识别材料。'}`, !!failures.length);
         } catch (error) {
-          message(`原件已保存，后台识别未能启动：${error.message}。可刷新后点击继续识别。`, true);
+          message(receiptSummary() + `原件已保存，后台识别未能启动：${error.message}。可刷新后点击继续识别。`, true);
           void window.invoiceIntakeProgress.refresh(uploadProject);
         }
         el('matchingProgressText').textContent = '文件已保存，可以关闭窗口。';
@@ -590,10 +626,10 @@
       try {const automatic = await autoMatch(); suggested = automatic.suggested; autoFeedback = automatic.feedback;}
       catch (error) {failures.push(`自动配对：${error.message}`);}
       await refreshBoard(); await refreshLedger();
-      message(`本批 ${files.length} 份 · 已保存 ${received} 份 · 重复 ${duplicates} 份 · 失败 ${failures.length} 项 · 转为发票 PDF ${converted} 份 · 建议组合 ${suggested} 组 · 无需使用 ${unused} 份。${recognitionReviews ? ` ${recognitionReviews}份识别结果需人工处理，原件留在材料区。` : ''}${failures.length ? '已收到的原件保留，可在材料区重试。' : '建议组合已显示在左侧，可直接预览并确认进入待核对。'}${autoFeedback ? ' ' + autoFeedback : ''}`, !!failures.length || recognitionReviews > 0);
+      message(receiptSummary() + `失败 ${failures.length} 项 · 转为发票 PDF ${converted} 份 · 建议组合 ${suggested} 组 · 无需使用 ${unused} 份。${recognitionReviews ? ` ${recognitionReviews}份识别结果需人工处理，原件留在材料区。` : ''}${failures.length ? '已收到的原件保留，可在材料区重试。' : '建议组合已显示在左侧，可直接预览并确认进入待核对。'}${autoFeedback ? ' ' + autoFeedback : ''}`, !!failures.length || recognitionReviews > 0);
       el('matchingProgressText').textContent = failures.length ? failures.join('\n') :
         recognitionReviews ? '收件完成，存疑材料留待人工处理。' : '收件与配对完成。';
-    } catch (error) {message(`${error.message}；已收到的原件保留。`, true);}
+    } catch (error) {message(receiptSummary() + `${error.message}；已收到的原件保留。`, true);}
     finally {el('matchingFiles').value = ''; lock(false);}
   }
   function classify(card) {
@@ -683,6 +719,8 @@
   };
   el('matchingUpload').onclick = () => {if (!busy) el('matchingFiles').click();};
   el('matchingFiles').onchange = () => uploadFiles([...el('matchingFiles').files]);
+  el('matchingImportFolder').onclick = () => {if (!busy) el('matchingFolder').click();};
+  el('matchingFolder').onchange = () => uploadFiles([...el('matchingFolder').files]);
   el('matchingClaim').onclick = () => {if (!busy) window.openInvoiceClaim({project_id: projectId,
     onComplete: async result => {await refreshBoard(); await refreshLedger(); message(result.message || '原始PDF已放入材料区，请选择材料后确认创建。');}});};
   el('matchingMail').onclick = () => mutation(async () => {
@@ -825,6 +863,43 @@
   const openButton = el('materialMatching');
   openButton.onclick = () => {if(!currentInvoiceProjectId()&&!new URLSearchParams(location.search).get('project')){notify('请先从侧栏选择一个项目，再打开材料合成台。',true);document.querySelector('#projectLinks a')?.focus();return;}return window.openMaterialMatching();};
   openButton.disabled = false;
+  const dropOverlay = document.createElement('div');
+  dropOverlay.id = 'matchingDropOverlay'; dropOverlay.setAttribute('popover', 'manual');
+  dropOverlay.setAttribute('role', 'status'); document.body.append(dropOverlay);
+  let dragDepth = 0, readingDrop = false;
+  const fileDrag = event => [...(event.dataTransfer?.types || [])].includes('Files');
+  const otherDialog = () => [...document.querySelectorAll('dialog[open]')].some(value => value !== dialog);
+  const hideDrop = () => {dragDepth = 0; dropOverlay.hidePopover();};
+  function showDrop(event) {
+    if (!fileDrag(event)) return;
+    event.preventDefault();
+    if (otherDialog() || busy || readingDrop) {hideDrop(); event.dataTransfer.dropEffect = 'none'; return;}
+    const selected = currentInvoiceProjectId();
+    event.dataTransfer.dropEffect = selected ? 'copy' : 'none';
+    dropOverlay.textContent = selected ? `松开即收进「${state.projects.find(value => value.id === selected)?.name || selected}」` : '先在左侧选择一个项目';
+    dropOverlay.showPopover();
+  }
+  document.addEventListener('dragenter', event => {if (fileDrag(event)) {dragDepth++; showDrop(event);}});
+  document.addEventListener('dragover', showDrop);
+  document.addEventListener('dragleave', event => {if (fileDrag(event) && --dragDepth <= 0) hideDrop();});
+  document.addEventListener('dragend', hideDrop);
+  window.addEventListener('blur', hideDrop);
+  document.addEventListener('drop', async event => {
+    hideDrop();
+    if (!fileDrag(event)) return;
+    event.preventDefault();
+    if (otherDialog() || busy || readingDrop) return;
+    const selected = currentInvoiceProjectId();
+    if (!selected) {notify('先在左侧选择一个项目', true); return;}
+    readingDrop = true;
+    try {
+      const files = await readDroppedMaterialFiles(event.dataTransfer);
+      if (otherDialog() || busy || selected !== currentInvoiceProjectId()) {notify('页面状态已变化，请在目标项目重新拖入。', true); return;}
+      await window.openMaterialMatching();
+      if (!opening && selected === projectId && !otherDialog()) await uploadFiles(files);
+    } catch (error) {notify(`文件夹读取失败，本次未上传：${error.message}`, true);}
+    finally {readingDrop = false;}
+  });
   let backgroundDirty = false;
   async function showBackgroundResult() {
     if (!backgroundDirty || busy || !dialog.open || dialog.querySelector('input:focus,select:focus,textarea:focus') ||

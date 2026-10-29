@@ -9,7 +9,7 @@ import pytest
 from invoice_print_layout.workbench_runtime import identity, source_build_id
 
 
-@pytest.mark.parametrize('mode', ['ready', 'cold', 'timeout', 'stale', 'workspace', 'foreign', 'capability', 'malformed', 'legacy', 'empty', 'not-ready', 'occupied'])
+@pytest.mark.parametrize('mode', ['ready', 'edge-x86', 'edge-x64', 'browser-tab', 'no-browser', 'cold', 'timeout', 'stale', 'workspace', 'foreign', 'capability', 'malformed', 'legacy', 'empty', 'not-ready', 'occupied'])
 def test_launcher_identity_readiness_and_failure(tmp_path, mode):
     powershell = shutil.which('powershell.exe')
     if not powershell:
@@ -49,8 +49,16 @@ function Start-Process {
     $global:launches.Add([PSCustomObject]@{FilePath=$FilePath;WindowStyle=$WindowStyle;Arguments=$ArgumentList})
 }
 function Start-Sleep { param($Seconds) }
+function Test-Path {
+    param($LiteralPath)
+    if ($LiteralPath -like '*\Microsoft\Edge\Application\msedge.exe') {
+        if ('MODE' -in @('edge-x86', 'browser-tab', 'no-browser')) { return $true }
+        return 'MODE' -eq 'edge-x64' -and $LiteralPath -eq 'C:\Program Files\Microsoft\Edge\Application\msedge.exe'
+    }
+    return Microsoft.PowerShell.Management\Test-Path -LiteralPath $LiteralPath
+}
 $failure = $null
-try { & 'LAUNCHER' -Workspace 'WORKSPACE' -Port PORT } catch { $failure = $_.Exception.Message }
+try { & 'LAUNCHER' -Workspace 'WORKSPACE' -Port PORT -BrowserTab:('MODE' -eq 'browser-tab') -NoBrowser:('MODE' -eq 'no-browser') } catch { $failure = $_.Exception.Message }
 [PSCustomObject]@{Probes=$global:probes;Basic=$global:basic;Launches=@($global:launches.ToArray());Failure=$failure} | ConvertTo-Json -Depth 6 -Compress
 '''
     for key,value in {'MODE':mode,'PORT':str(port),'PAYLOAD':str(payload),'LAUNCHER':str(root/'scripts/start-workbench.ps1'),'WORKSPACE':str(tmp_path)}.items():
@@ -58,17 +66,25 @@ try { & 'LAUNCHER' -Workspace 'WORKSPACE' -Port PORT } catch { $failure = $_.Exc
     script = tmp_path/'harness.ps1'
     script.write_text(harness, encoding='utf-8-sig')
     try:
-        result = subprocess.run([powershell, '-NoProfile', '-NonInteractive', '-File', str(script)],
+        result = subprocess.run([powershell, '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', str(script)],
                                 capture_output=True, text=True, timeout=40, check=True, cwd=root)
     finally:
         sock.close()
     data = json.loads(result.stdout)
     assert data['Basic']
     launches = data['Launches']
-    if mode in {'ready','cold'}:
+    if mode == 'no-browser':
+        assert data['Failure'] is None
+        assert launches == []
+    elif mode in {'ready', 'cold', 'edge-x86', 'edge-x64', 'browser-tab'}:
         assert data['Failure'] is None
         assert len(launches) == (2 if mode == 'cold' else 1)
-        assert launches[-1]['FilePath'] == f'http://127.0.0.1:{port}'
+        if mode.startswith('edge-'):
+            folder = 'Program Files (x86)' if mode == 'edge-x86' else 'Program Files'
+            assert launches[-1]['FilePath'] == f'C:\\{folder}\\Microsoft\\Edge\\Application\\msedge.exe'
+            assert launches[-1]['Arguments'] == f'--app=http://127.0.0.1:{port}'
+        else:
+            assert launches[-1]['FilePath'] == f'http://127.0.0.1:{port}'
     else:
         assert data['Failure']
         assert len(launches) == (1 if mode == 'timeout' else 0)

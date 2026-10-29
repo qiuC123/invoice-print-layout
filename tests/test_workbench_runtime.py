@@ -46,6 +46,11 @@ def test_runtime_identity_is_frozen_after_server_creation(tmp_path, monkeypatch)
         assert before['workspace_id'] == identity(tmp_path, '')['workspace_id']
         assert 'category_suggestion' in before['capabilities']
         assert 'token' not in before
+        with urlopen(f'http://127.0.0.1:{server.server_port}/favicon.svg') as response:
+            assert response.headers.get_content_type() == 'image/svg+xml'
+            assert b'<svg' in response.read()
+        with urlopen(f'http://127.0.0.1:{server.server_port}/') as response:
+            assert b'href="/favicon.svg"' in response.read()
     finally:
         server.shutdown()
         server.server_close()

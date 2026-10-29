@@ -45,6 +45,7 @@ async function run(pw) {
       throw Error('Unexpected mutation: ' + url.pathname);
     }
     if (url.pathname === '/api/state') return json(state);
+    if (url.pathname === '/api/runtime') return json({started_at: 'synthetic', build_id: 'synthetic'});
     if (url.pathname === '/api/material-matching') {boardReads++; return json({...board,
       vouchers: url.searchParams.get('project') === 'p2' ? [] : board.vouchers});}
     if (url.pathname === '/api/intake') return json({queue: []});
@@ -61,7 +62,7 @@ async function run(pw) {
     assert.equal(await page.locator('#recognizeReceipt, #checkMail').count(), 0);
     assert.equal(await page.locator('#matchingDeskDialog #matchingSuggestions').count(), 1, 'proposed combinations belong to the material desk');
     assert.equal(await page.locator('#tabs [data-view="synthesis"]').count(), 0);
-    assert.equal(await page.locator('#metrics .metric').count(), 2);
+    await page.waitForFunction(() => document.querySelectorAll('#metrics .metric').length === 2);
     assert.equal(await page.locator('#matchingUpload').isVisible(), true);
     assert.equal(await page.locator('#matchingMail').isVisible(), true);
     assert.equal(await page.locator('#matchingClaim').isVisible(), true);

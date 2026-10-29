@@ -61,4 +61,4 @@ module = [
 disallow_untyped_calls = false
 
 [tool.setuptools.package-data]
-invoice_print_layout = ["web/*.html", "web/*.css", "web/*.js", "*.mjs", "*.ps1"]
+invoice_print_layout = ["web/*.html", "web/*.css", "web/*.js", "web/*.svg", "*.mjs", "*.ps1"]
