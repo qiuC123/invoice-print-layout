@@ -2,7 +2,7 @@
 const assert=require('node:assert/strict'),fs=require('node:fs/promises'),path=require('node:path');
 async function run(pw){
   const browser=await pw.chromium.launch({headless:true}),page=await browser.newPage({viewport:{width:1100,height:900}});
-  const origin='http://127.0.0.1:18996',requests=[],errors=[];
+  const origin='http://127.0.0.1:18996',requests=[],errors=[];let mailAddress='synthetic@163.com';
   const harness=`<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"></head><body>
     <section id="manualAgent"></section><p id="manualMailStatus" hidden></p>
     <input id="search" value="保留搜索"><select id="category"><option>酒店</option><option>打车</option></select>
@@ -11,7 +11,7 @@ async function run(pw){
     let currentProject='p1',batchVerifyBusy=false,singleVerifyBusy=false,batchReturnBusy=false;
     let state={items:[{id:'e1',project_id:'p1',title:'原费用'},{id:'e-other',project_id:'p2',title:'其他项目费用'},{id:'e-deleted',project_id:'p1',deleted:true}]};
     const currentInvoiceProjectId=()=>currentProject;
-    window.calls={loads:[],notices:[],writes:[],located:[],previews:[],opened:0,matchingBusy:false,failLoad:false,holdLoad:false};
+    window.calls={loads:[],notices:[],writes:[],located:[],previews:[],opened:0,settings:[],matchingBusy:false,failLoad:false,holdLoad:false};window.invoiceSettings={open:tab=>calls.settings.push(tab)};
     window.checked=new Set(['hidden-item']);
     window.matchingSuggestionActions={isBusy:()=>calls.matchingBusy};
     window.manualInvoiceAgent={mount:options=>{window.bridgeOptions=options;return{open:()=>calls.opened++};}};
@@ -22,7 +22,8 @@ async function run(pw){
     function notify(message,error=false){calls.notices.push({message,error});}
     window.fixture={setProject:id=>{currentProject=id;},setBusy:(kind,value)=>{if(kind==='batchVerify')batchVerifyBusy=value;if(kind==='singleVerify')singleVerifyBusy=value;if(kind==='batchReturn')batchReturnBusy=value;}};
     </script><script src="/manual-agent-bridge.js"></script></body></html>`;
-  await page.clock.install();
+  await page.clock.install({time:new Date('2030-01-01T00:00:00Z')});
+  await page.clock.pauseAt(new Date('2030-01-01T00:00:00Z'));
   page.on('pageerror',error=>errors.push(error.message));
   await page.route(origin+'/**',async route=>{
     const request=route.request(),url=new URL(request.url());requests.push({path:url.pathname,method:request.method()});
@@ -30,7 +31,7 @@ async function run(pw){
     if(url.pathname==='/manual-agent-bridge.js')return route.fulfill({contentType:'text/javascript',body:await fs.readFile(path.resolve(__dirname,'../src/invoice_print_layout/web/manual-agent-bridge.js'))});
     if(url.pathname.startsWith('/api/')){
       assert.equal(request.method(),'GET','Background bridge reads must not use the original POST helper');
-      return route.fulfill({contentType:'application/json',body:JSON.stringify(url.pathname.endsWith('/mail')?{address:'synthetic@163.com',enabled:false}:{jobs:[],model:{available:false}})});
+      return route.fulfill({contentType:'application/json',body:JSON.stringify(url.pathname.endsWith('/mail')?{address:mailAddress,enabled:false}:{jobs:[],model:{available:false}})});
     }
     return route.abort();
   });
@@ -40,6 +41,11 @@ async function run(pw){
   try{
     await page.goto(origin+'/fixture');await page.waitForFunction(()=>!!window.bridgeOptions);
     await page.getByText('收件邮箱：synthetic@163.com · 自动收件已暂停，可在材料合成台手动补收',{exact:true}).waitFor();
+    await page.locator('#manualMailStatus').getByRole('button',{name:'设置',exact:true}).click();assert.deepEqual(await page.evaluate(()=>calls.settings),['mail']);
+    mailAddress='';await page.evaluate(()=>window.dispatchEvent(new CustomEvent('invoice-settings-changed')));
+    await page.getByText('未设置收件邮箱',{exact:true}).waitFor();assert.equal(await page.locator('#manualMailStatus').isVisible(),true);
+    mailAddress='updated@163.com';await page.evaluate(()=>window.dispatchEvent(new CustomEvent('invoice-settings-changed')));
+    await page.getByText('收件邮箱：updated@163.com · 自动收件已暂停，可在材料合成台手动补收',{exact:true}).waitFor();
     await changed('j1');await changed('j1');await changed('j2');
     await advance(499);assert.equal(await loads(),0);
     await advance(2);assert.equal(await loads(),1,'Same-project result changes coalesce into one deferred refresh');

@@ -42,7 +42,7 @@ class AutomaticCategory:
         return dict(row) if row else None
 
     def eligible(self, item: dict[str, Any], record: dict[str, Any] | None) -> bool:
-        if item.get('deleted') or item.get('returned_to_synthesis') or item['stage'] != 'draft' or item['verified']:
+        if item.get('deleted') or item.get('returned_to_synthesis') or item.get('agent_review_reason') or item['stage'] != 'draft' or item['verified']:
             return False
         previous = json.loads(record['result']) if record else {}
         if item.get('manual_report_choice') or previous.get('status') == 'manual':

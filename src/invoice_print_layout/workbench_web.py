@@ -27,6 +27,9 @@ from invoice_print_layout.expense_projects import ExpenseProjects
 from invoice_print_layout.intake_queue import IntakeQueue
 from invoice_print_layout.intake_usage import rail_payment_not_required, RAIL_PAYMENT_UNUSED_REASON
 from invoice_print_layout.glm_invoice_ai import GlmInvoiceAI
+from invoice_print_layout.invoice_ai_settings import InvoiceAISettings, KeyHostChanged
+from invoice_print_layout.workbench_settings import WorkbenchSettings, SettingsError
+from invoice_print_layout.mail163 import ImapFactory
 from invoice_print_layout.material_matching import MaterialMatching
 from invoice_print_layout.expense_review import ExpenseReview
 from invoice_print_layout.reimbursement_people import ReimbursementPeople
@@ -37,7 +40,6 @@ if TYPE_CHECKING:
     from invoice_print_layout.logistics import LogisticsStore
     from invoice_print_layout.project_todos import ProjectTodos
     from invoice_print_layout.photo_schedule import PhotoSchedules
-    from invoice_print_layout.photo_briefs import PhotoBriefs
     from invoice_print_layout.wechat_inbox import WeChatInbox
     from invoice_print_layout.site_photos import SitePhotos
     from invoice_print_layout.daily_reports import DailyReports
@@ -48,7 +50,7 @@ STARTUP_BUILD_ID = source_build_id()
 WORKBENCH_PATHS = {'/logistics', '/photos', '/logistics.js', '/logistics.css',
                    '/photos.js', '/photos.css', '/daily-reports.js'}
 WORKBENCH_PREFIXES = ('/api/logistics', '/api/photos', '/api/daily-reports',
-                      '/daily-report/', '/photo-file/', '/photo-review/', '/site-photos/')
+                      '/daily-report/', '/photo-file/', '/site-photos/')
 
 
 def workbench_only(path: str) -> bool:
@@ -148,12 +150,14 @@ def classify_intake(intake: IntakeQueue, values: dict[str, Any]) -> dict[str, An
     return {k: v for k, v in entry.items() if k != 'path'}
 
 
-def make_server(workspace: Path, port: int = 8765, *, mode: str = 'workbench') -> ThreadingHTTPServer:
+def make_server(workspace: Path, port: int = 8765, *, mode: str = 'workbench',
+                imap_factory: ImapFactory | None = None) -> ThreadingHTTPServer:
     if mode not in APP_MODES:
         raise ValueError('Unsupported application mode')
     store = ExpenseStore(workspace)
     projects = ExpenseProjects(store)
     invoice_ai = GlmInvoiceAI(store.root)
+    ai_settings = InvoiceAISettings(store.root)
     intake = IntakeQueue(store, ai=invoice_ai)
     matching = MaterialMatching(store, intake, ai=invoice_ai)
     from invoice_print_layout.synthesis_expenses import SynthesisExpenses
@@ -165,7 +169,6 @@ def make_server(workspace: Path, port: int = 8765, *, mode: str = 'workbench') -
         from invoice_print_layout.logistics import LogisticsStore
         from invoice_print_layout.project_todos import ProjectTodos
         from invoice_print_layout.photo_schedule import PhotoSchedules
-        from invoice_print_layout.photo_briefs import PhotoBriefs
         from invoice_print_layout.wechat_inbox import WeChatInbox
         from invoice_print_layout.site_photos import SitePhotos
         from invoice_print_layout.daily_reports import DailyReports
@@ -177,7 +180,6 @@ def make_server(workspace: Path, port: int = 8765, *, mode: str = 'workbench') -
         site_photos = SitePhotos(workspace, logistics)
         daily_reports = DailyReports(workspace, site_photos)
         schedules = PhotoSchedules(todos, site_photos)
-        briefs = PhotoBriefs(workspace, todos, site_photos)
     token = secrets.token_urlsafe(32)
     write_lock = threading.Lock()
     intake_run_lock = threading.Lock()
@@ -194,6 +196,7 @@ def make_server(workspace: Path, port: int = 8765, *, mode: str = 'workbench') -
     invoice_agent = AgentService(store)
     from invoice_print_layout.mail_agent import MailAgentService
     mail_agent = MailAgentService(store, invoice_agent)
+    settings_service = WorkbenchSettings(store, mail_agent, invoice_ai, imap_factory=imap_factory)
     with store.connect() as db:
         from invoice_print_layout.expense_projects import install_project_guards
         install_project_guards(db)
@@ -258,7 +261,7 @@ def make_server(workspace: Path, port: int = 8765, *, mode: str = 'workbench') -
                     self.send((assets / 'photos.html').read_bytes(), 'text/html; charset=utf-8')
                 elif path == '/api/photos':
                     pid = parse_qs(urlparse(self.path).query).get('project', [''])[0]
-                    self.respond({**site_photos.snapshot(pid), 'briefs': briefs.view(pid), 'token': token})
+                    self.respond({**site_photos.snapshot(pid), 'token': token})
                 elif path == '/api/daily-reports':
                     pid = parse_qs(urlparse(self.path).query).get('project', [''])[0]
                     self.respond({**daily_reports.view(pid), 'token': token})
@@ -272,10 +275,6 @@ def make_server(workspace: Path, port: int = 8765, *, mode: str = 'workbench') -
                     pid, key = path.removeprefix('/photo-file/').split('/')
                     file = site_photos.file(pid, key)
                     self.send(file.read_bytes(), mimetypes.guess_type(file.name)[0] or 'application/octet-stream')
-                elif path.startswith('/photo-review/'):
-                    pid, key, index = path.removeprefix('/photo-review/').split('/')
-                    file = briefs.review_file(pid, key, int(index))
-                    self.send(file.read_bytes(), 'application/pdf', filename=file.name)
                 elif path.startswith('/site-photos/'):
                     project_id, name = path.removeprefix('/site-photos/').split('/', 1)
                     if not project_id or project_id not in {p['id'] for p in logistics.snapshot()['projects']}:
@@ -298,7 +297,7 @@ def make_server(workspace: Path, port: int = 8765, *, mode: str = 'workbench') -
                     if not file.is_relative_to(folder) or file.suffix.lower() not in {'.html', '.jpg', '.jpeg', '.png', '.webp'}:
                         raise ValueError('无效照片文件')
                     self.send(file.read_bytes(), 'text/html; charset=utf-8' if name == 'index.html' else mimetypes.guess_type(file.name)[0] or 'application/octet-stream')
-                elif path in {'/phone-link.js', '/phone-link.css', '/app.js', '/workbench-theme.js', '/workbench-theme.css', '/project-menu.js', '/project-menu.css', '/review-edit.js', '/review-edit.css', '/review-batch.js', '/review-batch.css', '/amount-pairing.js', '/amount-pairing.css', '/reimbursement-people.js', '/reimbursement-people.css', '/intake.js', '/intake-progress.js', '/matching-desk.js', '/matching-desk.css', '/synthesis.js', '/receipt.js', '/report.js', '/report-preview.css', '/multi-filter.js', '/multi-filter.css', '/mail-search.js', '/expense-classifier.js', '/logistics.js', '/style.css', '/logistics.css', '/photos.js', '/photos.css'}:
+                elif path in {'/settings.js', '/settings.css', '/phone-link.js', '/phone-link.css', '/app.js', '/workbench-theme.js', '/workbench-theme.css', '/project-menu.js', '/project-menu.css', '/review-edit.js', '/review-edit.css', '/review-batch.js', '/review-batch.css', '/amount-pairing.js', '/amount-pairing.css', '/reimbursement-people.js', '/reimbursement-people.css', '/intake.js', '/intake-progress.js', '/matching-desk.js', '/matching-desk.css', '/synthesis.js', '/receipt.js', '/report.js', '/report-preview.css', '/multi-filter.js', '/multi-filter.css', '/mail-search.js', '/expense-classifier.js', '/logistics.js', '/style.css', '/logistics.css', '/photos.js', '/photos.css'}:
                     self.send((assets / path[1:]).read_bytes(), 'text/javascript' if path.endswith('.js') else 'text/css')
                 elif path == '/api/logistics':
                     self.respond({**logistics.snapshot(), 'token': token})
@@ -321,6 +320,8 @@ def make_server(workspace: Path, port: int = 8765, *, mode: str = 'workbench') -
                 elif path == '/api/reimbursement-people':
                     person_project = parse_qs(urlparse(self.path).query).get('project', [''])[0]
                     self.respond(reimbursement_people.snapshot(person_project))
+                elif path == '/api/settings':
+                    self.respond(settings_service.public())
                 elif path == '/api/invoice-ai':
                     self.respond(invoice_ai.public_status())
                 elif path == '/api/material-matching':
@@ -427,6 +428,34 @@ def make_server(workspace: Path, port: int = 8765, *, mode: str = 'workbench') -
                 body = json.loads(self.rfile.read(length))
                 if not isinstance(body, dict):
                     raise ValueError('请求格式无效')
+                if path in {'/api/settings', '/api/settings/test', '/api/settings/models',
+                            '/api/settings/organize', '/api/settings/mail', '/api/settings/mail/test'}:
+                    try:
+                        if length > 65536:
+                            raise ValueError('设置请求过大')
+                        if path == '/api/settings/organize':
+                            settings_service.organize.update(body)
+                            settings_result = settings_service.organize_status()
+                        elif path == '/api/settings/mail':
+                            settings_result = settings_service.save_mail(body)
+                        elif path == '/api/settings/mail/test':
+                            settings_result = settings_service.test_mail(body)
+                        elif path == '/api/settings/test':
+                            settings_result = ai_settings.test(body)
+                        elif path == '/api/settings/models':
+                            settings_result = ai_settings.models(body)
+                        else:
+                            ai_settings.update(body)
+                            settings_result = settings_service.public()
+                        supplied_key = body.get('api_key')
+                        if isinstance(supplied_key, str) and supplied_key:
+                            settings_result = json.loads(json.dumps(settings_result, ensure_ascii=False).replace(supplied_key, '••••'))
+                        self.respond(settings_result)
+                    except (KeyHostChanged, SettingsError) as exc:
+                        self.respond({'error': str(exc)}, 400)
+                    except (ValueError, OSError, UnicodeError, TypeError, KeyError, RecursionError):
+                        self.respond({'error': '设置或连接不可用，请检查填写内容。'}, 400)
+                    return
                 if mode == 'invoice' and workbench_only(path):
                     self.respond({'error': '操作不存在'}, 404)
                     return
@@ -453,17 +482,10 @@ def make_server(workspace: Path, port: int = 8765, *, mode: str = 'workbench') -
                     pid = str(body.get('project_id', ''))
                     action = path.removeprefix('/api/photos/')
                     photo_result: Any
-                    if action == 'brief-settings':
-                        photo_result = briefs.configure(pid, body['enabled'], body.get('include_pdf'))
-                    elif action == 'daily-match':
+                    if action == 'daily-match':
                         photo_result = daily_reports.match(pid, str(body.get('date', '')))
                     elif action == 'daily-generate':
                         photo_result = daily_reports.generate(pid, body)
-                    elif action == 'brief-preview':
-                        photo_result = {'delivery_id': briefs.preview(pid)}
-                        briefs.kick()
-                    elif action == 'brief-read':
-                        photo_result = briefs.read_and_send(pid, body)
                     elif action == 'receive':
                         photo_result = site_photos.receive(pid, body['name'], base64.b64decode(body['data'], validate=True))
                     elif action == 'settings':
@@ -543,11 +565,11 @@ def make_server(workspace: Path, port: int = 8765, *, mode: str = 'workbench') -
                             '/api/agent/refresh-question'}:
                     with write_lock:
                         if path.endswith('/start'):
-                            if body.get('use_model') and not invoice_ai.public_status()['available']:
-                                raise ValueError('模型尚未配置，可关闭模型辅助后使用本地整理')
                             job = invoice_agent.jobs.create(
                                 body.get('project_id', ''), body.get('material_ids'), body.get('idempotency_key'),
-                                use_model=body.get('use_model', False), options=body.get('options'))
+                                use_model=settings_service.organize.effective_model(
+                                    body.get('use_model', False), invoice_ai.public_status()['available']),
+                                options=body.get('options'))
                         elif path.endswith('/retry'):
                             job = invoice_agent.jobs.retry(body.get('id', ''))
                         elif path.endswith('/cancel'):
@@ -636,7 +658,14 @@ def make_server(workspace: Path, port: int = 8765, *, mode: str = 'workbench') -
                         result = synthesis_expenses.transition(body.get('id'), body.get('expected_version'),
                                                               body.get('project_id'), path.removeprefix('/api/synthesis-expense/'))
                     elif path == '/api/projects':
-                        result = projects.create(body['name'], body.get('site_name', ''))
+                        result = projects.create(body['name'], body.get('site_name', ''),
+                                                 body.get('start_date', ''), body.get('end_date', ''))
+                        if result['start_date']:
+                            mail_agent.reroute_unassigned()
+                    elif path == '/api/projects/period':
+                        result = projects.set_period(body.get('project_id', ''), body.get('start_date', ''),
+                                                     body.get('end_date', ''), body.get('expected_revision'))
+                        result['rerouted'] = mail_agent.reroute_unassigned()
                     elif path == '/api/projects/rename':
                         result = projects.rename(body.get('id', ''), body.get('name'), body.get('expected_revision'))
                     elif path == '/api/projects/pin':
@@ -787,8 +816,6 @@ def make_server(workspace: Path, port: int = 8765, *, mode: str = 'workbench') -
                             result = save_receipt(store, body['name'], payload, body['fields'], body['role'])
                     elif path == '/api/role':
                         store.set_role(body['attachment_id'], body['role'])
-                    elif path == '/api/import':
-                        result = store.import_history()
                     elif path == '/api/mail/search':
                         from invoice_print_layout.mail_search import search_invoices
                         result = search_invoices(store, body['id'], body['start'], body['end'])
@@ -846,7 +873,6 @@ def make_server(workspace: Path, port: int = 8765, *, mode: str = 'workbench') -
                 try:
                     with write_lock:
                         schedules.tick()
-                    briefs.kick()
                 except (OSError, sqlite3.Error):
                     # A transient store error leaves durable occurrences for the next tick.
                     pass

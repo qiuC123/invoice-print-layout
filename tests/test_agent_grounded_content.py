@@ -6,6 +6,7 @@ from typing import Any
 
 import pytest
 
+from tests.legacy_agent_fixture import LegacyQuestionFixture, review_question
 from invoice_print_layout import agent_content, expense_classifier as classifier
 from invoice_print_layout.agent_jobs import AgentLoop
 from invoice_print_layout.agent_content import ContentTools
@@ -37,7 +38,7 @@ def test_complete_food_or_service_cannot_be_released_as_materials_even_by_model(
     monkeypatch.setattr(classifier, 'api_key', lambda: 'synthetic-test-key')
     monkeypatch.setattr(classifier, 'ask_jev', wrong_model)
     done = AgentLoop(jobs).run(start(environment, pair(environment, goods), use_model=True)['id'], tools)
-    assert done['state'] == 'needs_input' and not done.get('preview')
+    assert done['state'] == 'ready' and not done.get('preview')
     assert len(sent) == done['models'] == 1 and goods in sent[0]['goods']
     item = tools.store.get(done['item_ids'][0])
     assert item['agent_content']['decision']['category'] is None
@@ -92,10 +93,10 @@ def test_mixed_or_unknown_baskets_are_not_overruled_by_one_familiar_good(
     jobs, tools, _ = environment
     monkeypatch.setattr(classifier, 'ask_jev', lambda _: pytest.fail('No model authorized'))
     done = AgentLoop(jobs).run(start(environment, pair(environment, goods))['id'], tools)
-    assert done['state'] == 'needs_input' and done['models'] == 0 and not done.get('preview')
+    assert done['state'] == 'ready' and done['models'] == 0 and not done.get('preview')
     item = tools.store.get(done['item_ids'][0])
     assert item['agent_content']['decision']['category'] is None
-    assert done['question']['type'] == 'expense_content' and not item['verified']
+    assert review_question(done)['type'] == 'expense_content' and not item['verified']
 
 
 @pytest.mark.parametrize('goods', ['茶饮料\n量杯', '奶茶机租赁服务', '住宿服务会议室租赁'])
@@ -104,7 +105,7 @@ def test_nonmaterial_canonical_name_never_exempts_the_full_source(
     jobs, tools, _ = environment
     monkeypatch.setattr(classifier, 'ask_jev', lambda _: pytest.fail('No model authorized'))
     done = AgentLoop(jobs).run(start(environment, pair(environment, goods))['id'], tools)
-    assert done['state'] == 'needs_input' and not done.get('preview') and done['models'] == 0
+    assert done['state'] == 'ready' and not done.get('preview') and done['models'] == 0
     item = tools.store.get(done['item_ids'][0])
     assert item['agent_content']['decision']['category'] is None
     assert not item['verified'] and item['stage'] == 'draft'
@@ -146,7 +147,7 @@ def test_old_low_confidence_job_rechecks_new_rules_once_without_new_budget(envir
             'goods_text': '鼠标\n亚克力导视牌', 'products': [], 'rules_version': 'synthetic-old-product-rules'})
         old.setattr(classifier, 'api_key', lambda: 'synthetic-test-key')
         old.setattr(classifier, 'ask_jev', lambda _: {'choice': 'materials', 'confidence': .78, 'model': classifier.MODEL})
-        waiting = AgentLoop(jobs).run(start(environment, entries, use_model=True)['id'], tools)
+        waiting = LegacyQuestionFixture(jobs).run(start(environment, entries, use_model=True)['id'], tools)
     assert waiting['state'] == 'needs_input' and waiting['models'] == 1
     before_item = tools.store.get(waiting['item_ids'][0])
     with tools.store.connect() as db:
@@ -155,7 +156,7 @@ def test_old_low_confidence_job_rechecks_new_rules_once_without_new_budget(envir
     assert queued['state'] == 'queued'
     assert queued['models'] == waiting['models'] and queued['tools'] == waiting['tools']
     monkeypatch.setattr(classifier, 'ask_jev', lambda _: pytest.fail('New exact rules require no model'))
-    done = AgentLoop(jobs).run(queued['id'], tools)
+    done = LegacyQuestionFixture(jobs).run(queued['id'], tools)
     assert done['state'] == 'ready' and done['id'] == waiting['id']
     assert done['models'] == 1 and done['tools'] > waiting['tools'] and done['elapsed'] >= waiting['elapsed']
     assert done['item_ids'] == waiting['item_ids'] and len(tools.store.list_items()) == 1

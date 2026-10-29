@@ -192,7 +192,7 @@
   }
   function openCreate(suggestion) {
     if (busy) return;
-    const keys = suggestion ? [...suggestion.voucher_keys, ...suggestion.payment_ids.map(id => 'q:' + id)] : [...selected];
+    const keys = suggestion ? [...suggestion.voucher_keys, ...[...suggestion.payment_ids, ...(suggestion.support_ids || [])].map(id => 'q:' + id)] : [...selected];
     const chosen = keys.map(key => cards().find(card => card.key === key));
     if (!keys.length || chosen.some(card => !card)) {notice('请先选择属于同一笔费用的材料。', true); return;}
     const vouchers = chosen.filter(card => (board.vouchers || []).some(value => value.key === card.key));

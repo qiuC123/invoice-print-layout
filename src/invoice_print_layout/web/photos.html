@@ -22,14 +22,6 @@
 </form></details>
 <section id="job" hidden aria-live="polite"><strong id="jobMessage"></strong><button id="closeJob" class="feedback-close" type="button" aria-label="收起处理结果" hidden></button><progress id="jobProgress" max="1" value="0"></progress><p id="jobCounts"></p><details id="jobIssues" hidden><summary>查看未完成项</summary><ul></ul></details></section>
 <details id="jobHistory" hidden><summary id="jobHistoryLabel">最近处理记录</summary><div id="jobHistoryList"></div></details>
-<details id="briefSettings"><summary>飞书简报</summary>
- <form id="briefForm"><label><input id="briefEnabled" type="checkbox"> 整理完成后发送到我已绑定的飞书账号</label><label><input id="briefPDF" type="checkbox"> 附三列照片审阅 PDF（将项目已归档照片发送到本人飞书）</label><button type="submit">保存简报设置</button></form>
- <p class="help">按本项目定时任务执行；简报说明新增、重复及未完成情况。PDF包含本轮实际读取的已归档照片，待归属照片不上传，源文件保留在电脑。关闭浏览器不影响，电脑与工作台服务须保持运行。</p>
- <p id="briefStatus" role="status"></p><div id="reviewFiles"></div><button type="button" id="sendBriefPreview">发送现有照片试用汇总</button>
- <form id="readBriefForm"><label>补读日期<input id="briefReadDate" type="date" required></label><button type="submit" id="readBrief" data-job>读取全部来源群并发送审阅</button></form>
- <p class="help">补读使用本项目所有已配置照片来源群，只读取所选日期；完成后发送简报及已启用的 PDF。</p>
- <p class="help">试用简报汇总当前项目已有照片，不会重新读取微信群。相同内容重复点击不会重复发送。</p>
-</details>
 <details id="dailyReports"><summary>生成卸货日报</summary>
  <p id="dailyInfo" class="help">使用已确认模板，按运输日期匹配同车工厂与现场车头照。</p>
  <form id="dailyForm" hidden>

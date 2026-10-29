@@ -5,6 +5,7 @@ from pathlib import Path
 import time
 from typing import Any
 
+from tests.legacy_agent_fixture import LegacyQuestionFixture
 from invoice_print_layout.agent_jobs import AgentLoop
 from invoice_print_layout.agent_transport import MailOrigin
 from tests.test_invoice_agent_relations import relation_env  # noqa: F401
@@ -32,7 +33,7 @@ def test_normal_denial_blocks_later_trusted_same_mail_automatic_proposal(
     jobs, tools, project = relation_env
     rows = pair(relation_env, tmp_path)
     job = jobs.create(project, [e['id'] for e in rows], 'denial-' + str(time.time_ns()))
-    waiting = AgentLoop(jobs).run(job['id'], tools)
+    waiting = LegacyQuestionFixture(jobs).run(job['id'], tools)
     assert waiting['state'] == 'needs_input' and waiting['question']['type'] == 'material_relation'
     decline = next(c for c in waiting['question']['choices'] if c['action'] == 'not_same_expense')
     jobs.answer(job['id'], decline['id'], waiting['question']['id'])
@@ -48,7 +49,7 @@ def test_normal_denial_blocks_later_trusted_same_mail_automatic_proposal(
     scan = tools._scan(again)
     assert not scan['proposals'] and not scan['choices'] and not scan['relations']['candidates']
     done = AgentLoop(jobs).run(again['id'], tools)
-    assert done['state'] == 'needs_input' and not done['item_ids'] and not tools.store.list_items()
+    assert done['state'] == 'ready' and not done['item_ids'] and not tools.store.list_items()
 
 
 def test_current_answer_receipt_does_not_change_its_own_source_snapshot(relation_env: Any) -> None:
@@ -56,7 +57,7 @@ def test_current_answer_receipt_does_not_change_its_own_source_snapshot(relation
     jobs, tools, project = relation_env
     rows = weak_pair(relation_env)
     job = jobs.create(project, [e['id'] for e in rows], 'snapshot-' + str(time.time_ns()))
-    waiting = AgentLoop(jobs).run(job['id'], tools)
+    waiting = LegacyQuestionFixture(jobs).run(job['id'], tools)
     before = tools.fingerprint(waiting)
     choice = next(c for c in waiting['question']['choices'] if c['action'] == 'confirm_relation')
     queued = jobs.answer(job['id'], choice['id'], waiting['question']['id'])

@@ -125,7 +125,11 @@ def _transport_support(item: Mapping[str, Any], facts: Sequence[Mapping[str, Any
             return None
     invoices = [f for f in facts if f.get('role') == 'invoice']
     supports = [f for f in facts if f.get('role') in {'trip', 'detail'}]
-    if len(invoices) != 1 or len(supports) != 1 or supports[0].get('goods'):
+    if len(invoices) != 1 or len(supports) != 1:
+        return None
+    # Dedicated trip service labels repeat the invoice's passenger service.
+    if supports[0].get('goods') and not (supports[0].get('role') == 'trip' and all(
+            g.get('name') in {'网约车客运', '出租汽车客运'} for g in supports[0]['goods'])):
         return None
     invoice, support = invoices[0], supports[0]
     if goods[0].get('material_id') != invoice['id'] or goods[0].get('sha256') != invoice['sha256']:

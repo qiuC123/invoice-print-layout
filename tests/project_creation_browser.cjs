@@ -8,7 +8,7 @@ async function run(pw) {
   const page = await browser.newPage({viewport: {width: 1500, height: 1000}});
   page.setDefaultTimeout(10000);
   const origin = 'http://127.0.0.1:18788';
-  const evidence = path.resolve(__dirname, '../workspace/invoice-operations/project-create-entry-20261013');
+  const evidence = process.env.INVOICE_BROWSER_EVIDENCE ? path.resolve(process.env.INVOICE_BROWSER_EVIDENCE) : path.resolve(__dirname, '../workspace/invoice-operations/project-create-entry-20261013');
   const clone = value => JSON.parse(JSON.stringify(value));
   const projects = [
     {id: 'old-unpaid', name: '合成未报销甲', reimbursement_status: 'unreimbursed', reimbursement_revision: 4},
@@ -33,11 +33,11 @@ async function run(pw) {
       const data = req.postDataJSON(); writes.push({path: url.pathname, data: clone(data)});
       assert.equal(url.pathname, '/api/projects', 'creating a project never calls expense, intake, or reimbursement APIs');
       assert.equal(req.headers()['x-workbench-token'], state.token);
-      assert.deepEqual(Object.keys(data), ['name'], 'current project scope is never copied into the new-project payload');
+      assert.deepEqual(Object.keys(data).sort(), ['end_date','name','start_date'], 'current project scope is never copied into the new-project payload');
       assert.ok(data.name.trim());
       if (failNext) {failNext = false; return json({error: '合成创建暂时失败，请重试'}, 503);}
       if (holdNext) {holdNext = false; await new Promise(resolve => {releasePending = resolve;});}
-      const created = {id: `server-generated-${projects.length + 10}`, name: data.name, status: 'draft'};
+      const created = {id: `server-generated-${projects.length + 10}`, name: data.name, start_date:data.start_date,end_date:data.end_date,status: 'draft'};
       projects.push(created);
       if (missingIdNext) {missingIdNext = false; return json({name: created.name});}
       return json(created);

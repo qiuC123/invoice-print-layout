@@ -118,7 +118,7 @@ def test_confirmed_receipt_does_not_apply_after_actual_source_or_manual_amount_c
             tools.matching._write_queue(db, receipt)
     job = jobs.create(project, [e['id'] for e in rows], 'blocked-confirmed-flow-' + str(time.time_ns()))
     done = AgentLoop(jobs).run(job['id'], tools)
-    assert done['state'] != 'ready', diagnostic(done)
+    assert not done['item_ids'], diagnostic(done)
     assert not calls and not tools.store.list_items()
     receipt = tools.intake.get(rows[0]['id'])
     assert not receipt.get('confirmed_content')

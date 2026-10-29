@@ -103,6 +103,10 @@ def _read_result(directory: Path, limit: int) -> dict[str, Any]:
                 or len(message['issues']) > 100
                 or not isinstance(message.get('files'), list) or len(message['files']) > 20):
             raise ValueError('invalid message metadata')
+        sent_date = message.get('sent_date', '')
+        if (not isinstance(sent_date, str) or
+                sent_date and date.fromisoformat(sent_date).isoformat() != sent_date):
+            raise ValueError('invalid sent date')
         last_uid = message['uid']
         files = []
         for original in message['files']:

@@ -7,6 +7,7 @@ from typing import Any
 
 import pytest
 
+from tests.legacy_agent_fixture import LegacyQuestionFixture
 from invoice_print_layout.agent_jobs import AgentLoop, Jobs
 from invoice_print_layout.agent_tools import InvoiceTools, TOOL_GUIDE
 from tests.test_invoice_agent import environment  # noqa: F401
@@ -106,14 +107,15 @@ def test_http_refresh_is_guarded_and_does_not_kick_or_answer(environment: Any, m
         assert client.json('POST', '/api/agent/refresh-question', {**body, 'expected_updated_at': 0})[0] == 400
         before_kicks = len(calls)
         code, result = client.json('POST', '/api/agent/refresh-question', body)
-        assert code == 200 and result['job']['question'] == fresh
-        assert result['job']['state'] == 'needs_input' and result['job']['confirmations'] == []
-        assert set(calls[before_kicks:]) <= {'needs_input'}
+        assert code == 400
+        completed = jobs.get(waiting['id'])
+        assert completed['state'] == 'ready' and completed['question'] is None
+        assert completed['confirmations'] == [] and completed['remaining_material_count'] == 2
+        assert set(calls[before_kicks:]) <= {'ready'}
         assert client.json('POST', '/api/agent/refresh-question', body)[0] == 400
         code, result = client.json('POST', '/api/agent/answer', {
             'id': waiting['id'], 'choice': fresh['choices'][0]['id'], 'question_id': fresh['id']})
-        assert code == 200 and result['job']['state'] == 'queued' and 'queued' in calls[before_kicks:]
-        assert result['job']['approval']['choice_data']['proposal']['type'] == 'complete_partial_expense'
+        assert code == 400 and jobs.get(waiting['id'])['confirmations'] == []
 
 
 @pytest.mark.parametrize('decision', ['reject', 'needs_fact'])
@@ -126,13 +128,13 @@ def test_model_cannot_preempt_complete_hotel_candidate_with_invoice_subset(
                 for amount in [100, 200]]
     monkeypatch.setattr(tools.relations.ai, '_request', lambda rules, payload, **kw: model_answer(payload, status=decision))
     job = jobs.create(project, [e['id'] for e in [invoice, *payments]], 'hotel-model-' + decision, use_model=True)
-    waiting = AgentLoop(jobs).run(job['id'], tools)
+    waiting = LegacyQuestionFixture(jobs).run(job['id'], tools)
     assert waiting['state'] == 'needs_input' and waiting['models'] == 1
     assert not tools.store.list_items() and waiting['item_ids'] == []
     assert len([c for c in waiting['question']['choices'] if c['action'] == 'confirm_relation']) == 1
     q = waiting['question']
     resumed = jobs.answer(job['id'], q['choices'][0]['id'], q['id'])
-    done = AgentLoop(jobs).run(resumed['id'], tools)
+    done = LegacyQuestionFixture(jobs).run(resumed['id'], tools)
     assert done['state'] == 'ready' and done['models'] == waiting['models']
     assert done['preview']['total_cents'] == 30000
     assert len(tools.store.list_items()[0]['attachments']) == 3
@@ -170,25 +172,21 @@ def test_real_helper_http_refresh_then_answer_completes_same_job(environment: An
         started = time.monotonic()
         code, result = client.json('POST', '/api/agent/refresh-question', {
             'id': waiting['id'], 'expected_updated_at': waiting['updated_at']})
-        assert code == 200, result
+        assert code == 400, result
         assert time.monotonic() - started < 10, 'Read-only helper must not wait on a nested business write lock'
-        refreshed = result['job']
-        assert refreshed['state'] == 'needs_input' and refreshed['confirmations'] == []
+        refreshed = jobs.get(waiting['id'])
+        assert refreshed['state'] == 'ready' and refreshed['confirmations'] == []
         assert {k: refreshed[k] for k in budget} == budget
-        q = refreshed['question']
-        choice = q['choices'][0]
-        assert choice['proposal']['type'] == 'complete_partial_expense'
-        assert len(q['material_refs']) == 4 and len(choice['payment_ids']) == 3
+        assert refreshed['question'] is None and refreshed['remaining_material_count'] == 3
         assert tools.store.get(item['id'])['attachments'] == item['attachments']
         code, result = client.json('POST', '/api/agent/answer', {
-            'id': job['id'], 'choice': choice['id'], 'question_id': q['id']})
-        assert code == 200 and result['job']['state'] == 'queued'
-        assert {k: result['job'][k] for k in budget} == budget
+            'id': job['id'], 'choice': 'old-choice', 'question_id': 'old-question'})
+        assert code == 400
     done = AgentLoop(jobs).run(job['id'], tools)
     assert done['state'] == 'ready', (done['message'], done['tools'], done['last_results'])
-    assert done['item_ids'] == [item['id']] and done['preview']['total_cents'] == 30000
-    assert done['models'] == budget['models'] and done['tools'] > budget['tools']
+    assert done['item_ids'] == [item['id']] and done['question'] is None
+    assert done['models'] == budget['models'] and done['tools'] == budget['tools']
     finished = tools.store.get(item['id'])
-    assert len(tools.store.list_items()) == 1 and len(finished['attachments']) == 4
+    assert len(tools.store.list_items()) == 1 and len(finished['attachments']) == 1
     assert not finished['verified'] and finished['stage'] == 'draft'
-    assert finished['agent_relation']['confirmation_id'] == q['id']
+    assert done['confirmations'] == []

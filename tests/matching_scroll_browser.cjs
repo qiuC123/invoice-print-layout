@@ -35,6 +35,7 @@ async function run(pw) {
     const req = route.request(), url = new URL(req.url());
     const json = body => route.fulfill({contentType: 'application/json', body: JSON.stringify(body)});
     if (req.method() === 'POST') {writes.push(url.pathname); throw Error('Scroll/focus checks must not write materials or expenses');}
+    if (url.pathname === '/api/runtime') return json({started_at:'synthetic-start',build_id:'synthetic-build'});
     if (url.pathname === '/api/state') return json(state);
     if (url.pathname === '/api/material-matching') return json(board);
     if (url.pathname === '/api/intake') return json({queue: []});

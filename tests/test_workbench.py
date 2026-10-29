@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import date, timedelta
 from pathlib import Path
 import json
+import sqlite3
 import threading
 from urllib.request import Request, urlopen
 from urllib.error import HTTPError
@@ -14,8 +15,6 @@ from invoice_print_layout.workbench import ExpenseStore, evaluate, amount_cents
 from invoice_print_layout.workbench_web import make_server, sync_mail
 from invoice_print_layout.workbench_export import export_items
 from invoice_print_layout.storage import append_history, ensure_workspace
-from invoice_print_layout.bot import BotController, BotError, FeishuBotSettings, DownloadedResource
-from tests.test_bot import FakeGateway, message
 from tests.helpers import make_invoice_pdf, make_trip_pdf
 
 
@@ -192,6 +191,21 @@ def test_http_requires_loopback_host_token_and_origin(tmp_path: Path) -> None:
         assert item['missing']==['12306发票']
         with urlopen(url+'/') as response:
             assert '发票助手' in response.read().decode()
+        from invoice_print_layout.logistics import LogisticsStore
+        project = LogisticsStore(tmp_path / '后勤' / 'tasks.sqlite3').create_project('Synthetic photos')
+        with urlopen(url + '/api/photos?project=' + project['id']) as response:
+            assert 'briefs' not in json.load(response)
+        with pytest.raises(HTTPError) as removed:
+            urlopen(url + '/photo-review/' + project['id'] + '/key/0')
+        assert removed.value.code == 404
+        for action in ('brief-settings', 'brief-preview', 'brief-read'):
+            body = json.dumps({'project_id': project['id']}).encode()
+            with pytest.raises(HTTPError) as removed:
+                urlopen(Request(url + '/api/photos/' + action, data=body,
+                                headers={'Content-Type': 'application/json', 'X-Workbench-Token': token}))
+            assert removed.value.code == 400
+        with sqlite3.connect(tmp_path / '后勤' / 'tasks.sqlite3') as db:
+            assert not db.execute("SELECT name FROM sqlite_master WHERE name LIKE 'photo_brief%'").fetchall()
         exported=tmp_path/'工作台'/'导出'
         exported.mkdir(exist_ok=True)
         (exported/'中文.md').write_text('测试清单',encoding='utf-8')
@@ -201,28 +215,6 @@ def test_http_requires_loopback_host_token_and_origin(tmp_path: Path) -> None:
         server.shutdown();server.server_close();thread.join()
 
 
-def test_feishu_register_retry_and_late_attach(tmp_path: Path) -> None:
-    gateway=FakeGateway()
-    controller=BotController(tmp_path,tmp_path/'bot.toml',FeishuBotSettings('cli_abcdefgh1234','ou_owner'),None,gateway)
-    incoming=message('register',text='登记 酒店 500 测试住宿')
-    controller.handle(incoming)
-    controller.handle(incoming)
-    store=ExpenseStore(tmp_path)
-    assert len(store.list_items())==1
-    item=store.list_items()[0]
-    controller.handle(message('end',text='结束登记'))
-    assert store.selected('ou_owner') is None
-    controller.handle(message('link',text='关联 '+item['id']))
-    gateway.resources['file']=DownloadedResource('invoice.pdf',make_invoice_pdf(tmp_path/'source.pdf').read_bytes())
-    controller.handle(message('upload',message_type='file',resource_key='file'))
-    item=store.get(item['id'])
-    assert len(item['attachments'])==1 and not item['complete']
-    store.set_role(item['attachments'][0]['id'],'invoice')
-    assert store.get(item['id'])['complete']
-    controller.handle(message('ride',text='打车'))
-    assert store.selected('ou_owner') is None
-    with pytest.raises(BotError):
-        controller.handle(message('conflict',text='登记 材料采购 20 测试'))
 
 
 def test_mail_cursor_advanced_only_after_success(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

@@ -22,6 +22,12 @@ def test_theme_assets_are_served_and_linked(tmp_path: Path, mode: str,
         with urlopen(base + '/') as response:
             page = response.read().decode('utf-8')
         assert f'/{asset}' in page and 'id="themeSelect"' in page
+        if mode == 'invoice':
+            assert 'id="settingsDialog"' in page
+            assert page.index('id="themeSelect"') > page.index('id="settingsAppearance"')
+            assert '/settings.js' in page and '/settings.css' in page
+            assert 'data-settings-theme="light"' in page and 'data-settings-theme="dark"' in page
+            assert 'id="settingsProviderList"' in page and 'id="settingsDangerZone"' in page
         with urlopen(base + '/' + asset) as response:
             assert response.status == 200
             assert response.headers['Content-Type'].startswith(content_type)

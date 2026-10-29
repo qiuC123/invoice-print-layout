@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import builtins
+from datetime import date
 import sqlite3
 from typing import Any
 
@@ -23,6 +24,8 @@ def project_views(store: ExpenseStore, *, db: sqlite3.Connection | None = None) 
     return [{**project, 'name': meta.get(project['id'], {}).get('display_name') or project['name'],
              'pinned': bool(meta.get(project['id'], {}).get('pinned', False)),
              'project_revision': meta.get(project['id'], {}).get('revision', 0),
+             'start_date': meta.get(project['id'], {}).get('start_date', ''),
+             'end_date': meta.get(project['id'], {}).get('end_date', ''),
              'reimbursement_status': labels.get(project['id'], {}).get('status', 'unreimbursed'),
              'reimbursement_revision': labels.get(project['id'], {}).get('revision', 0)}
             for project in projects if not meta.get(project['id'], {}).get('permanently_deleted')]
@@ -116,6 +119,13 @@ class ExpenseProjects:
                        'pinned INTEGER NOT NULL DEFAULT 0, revision INTEGER NOT NULL DEFAULT 0, '
                        'permanently_deleted INTEGER NOT NULL DEFAULT 0, updated_at TEXT NOT NULL, '
                        'deleted_data TEXT NOT NULL DEFAULT \'{}\')')
+            columns = {row['name'] for row in db.execute('PRAGMA table_info(expense_project_metadata)')}
+            if not {'start_date', 'end_date'}.issubset(columns):
+                db.execute('BEGIN IMMEDIATE')
+                columns = {row['name'] for row in db.execute('PRAGMA table_info(expense_project_metadata)')}
+                for column in ('start_date', 'end_date'):
+                    if column not in columns:
+                        db.execute(f"ALTER TABLE expense_project_metadata ADD COLUMN {column} TEXT NOT NULL DEFAULT ''")
             db.execute('CREATE TABLE IF NOT EXISTS expense_project_deleted_materials ('
                        'digest TEXT PRIMARY KEY, project_id TEXT NOT NULL)')
             install_project_guards(db)
@@ -123,9 +133,10 @@ class ExpenseProjects:
     def list(self) -> list[dict[str, Any]]:
         return project_views(self.store)
 
-    def create(self, name: str, site_name: str = '') -> dict[str, Any]:
+    def create(self, name: str, site_name: str = '', start_date: str = '', end_date: str = '') -> dict[str, Any]:
         if not isinstance(name, str) or not name.strip() or len(name) > 200:
             raise ValueError('请填写200字以内的项目名称')
+        self._validate_period(start_date, end_date)
         with self.store.connect() as db:
             db.execute('BEGIN IMMEDIATE')
             projects = project_views(self.store, db=db)
@@ -137,6 +148,8 @@ class ExpenseProjects:
                     raise ValueError('同名项目仍保留在后勤目录，请使用不同名称创建；原发票项目已永久删除')
                 raise ValueError('该名称已用于后勤项目目录，请使用不同名称创建发票项目')
             project = self.registry.create_project(name, site_name)
+            db.execute('INSERT INTO expense_project_metadata (project_id,updated_at,start_date,end_date) VALUES (?,?,?,?)',
+                       (project['id'], now(), start_date, end_date))
         return next(row for row in self.list() if row['id'] == project['id'])
 
     def _active(self, db: sqlite3.Connection, project_id: str) -> dict[str, Any]:
@@ -156,14 +169,50 @@ class ExpenseProjects:
             raise ValueError('发票项目已变化，请刷新后重试')
 
     @staticmethod
+    def _validate_period(start_date: Any, end_date: Any) -> None:
+        for value in (start_date, end_date):
+            if not isinstance(value, str):
+                raise ValueError('项目日期须为YYYY-MM-DD格式，或留空')
+            if value:
+                try:
+                    if date.fromisoformat(value).isoformat() != value:
+                        raise ValueError
+                except ValueError:
+                    raise ValueError('项目日期须为有效的YYYY-MM-DD格式') from None
+        if end_date and not start_date:
+            raise ValueError('请先填写项目开始日期')
+        if start_date and end_date and start_date > end_date:
+            raise ValueError('项目结束日期不能早于开始日期')
+
+    @staticmethod
     def _write_meta(db: sqlite3.Connection, project: dict[str, Any], *, deleted: bool = False,
                     deleted_data: dict[str, Any] | None = None) -> None:
-        db.execute('INSERT INTO expense_project_metadata VALUES (?,?,?,?,?,?,?) '
+        db.execute('INSERT INTO expense_project_metadata '
+                   '(project_id,display_name,pinned,revision,permanently_deleted,updated_at,deleted_data,start_date,end_date) '
+                   'VALUES (?,?,?,?,?,?,?,?,?) '
                    'ON CONFLICT(project_id) DO UPDATE SET display_name=excluded.display_name,pinned=excluded.pinned,'
                    'revision=excluded.revision,permanently_deleted=excluded.permanently_deleted,'
-                   'updated_at=excluded.updated_at,deleted_data=excluded.deleted_data',
+                   'updated_at=excluded.updated_at,deleted_data=excluded.deleted_data,'
+                   'start_date=excluded.start_date,end_date=excluded.end_date',
                    (project['id'], project['name'], int(project['pinned']), project['project_revision'] + 1,
-                    int(deleted), now(), json.dumps(deleted_data or {}, ensure_ascii=False)))
+                    int(deleted), now(), json.dumps(deleted_data or {}, ensure_ascii=False),
+                    project['start_date'], project['end_date']))
+
+    def set_period(self, project_id: str, start_date: str, end_date: str, expected_revision: Any) -> dict[str, Any]:
+        self._validate_period(start_date, end_date)
+        with self.store.connect() as db:
+            db.execute('BEGIN IMMEDIATE')
+            project = self._active(db, project_id)
+            self._check_revision(project, expected_revision)
+            project.update(start_date=start_date, end_date=end_date)
+            self._write_meta(db, project)
+            projects = project_views(self.store, db=db)
+            saved = next(row for row in projects if row['id'] == project_id)
+            overlaps = [row['name'] for row in projects if start_date and row['id'] != project_id
+                        and row['reimbursement_status'] == 'unreimbursed' and row['start_date']
+                        and (not end_date or row['start_date'] <= end_date)
+                        and (not row['end_date'] or start_date <= row['end_date'])]
+        return {**saved, 'overlaps': overlaps}
 
     def rename(self, project_id: str, name: Any, expected_revision: Any) -> dict[str, Any]:
         if not isinstance(name, str) or not name.strip() or len(name) > 200:

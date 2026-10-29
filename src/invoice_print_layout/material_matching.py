@@ -540,6 +540,7 @@ class MaterialMatching:
                                   if entry.get('status') == 'unused' or rail_payment_not_required(entry) else ''),
                 'revision': entry['revision'], 'item_id': '',
                 'issues': issues, 'recognition_notes': notes, 'field_conflicts': field_conflicts,
+                'agent_review_reason': entry.get('agent_review_reason', ''),
                 'transaction_identifiers': identifiers_for_record(entry),
                 **archive_capabilities(entry),
                 'status': entry['status'], 'thumbnail': '/intake-file/' + key if image else
@@ -921,11 +922,12 @@ class MaterialMatching:
             if suggestion is None or suggestion['snapshot_token'] != suggestion_token:
                 raise ValueError('待合成候选或材料池已变化，请刷新后重新选择')
             if (set(voucher_keys) != set(suggestion['voucher_keys']) or
-                    set(payment_keys) != set(suggestion['payment_ids'])):
+                    set(payment_keys) != set(suggestion['payment_ids']) or
+                    set(support_keys) != set(suggestion.get('support_ids', []))):
                 raise ValueError('材料选择已变化，请重新选择候选或按手工材料创建')
             expected_pool = self._rules_pool_snapshot(board, project_id)
-            selected = set(voucher_keys).union('q:' + key for key in payment_keys)
-            suggested_cards = [card for card in [*board['vouchers'], *board['payments']] if card['key'] in selected]
+            selected = set(voucher_keys).union('q:' + key for key in [*payment_keys, *support_keys])
+            suggested_cards = [card for card in [*board['vouchers'], *board['payments'], *board['other']] if card['key'] in selected]
         group_id = uuid.uuid4().hex
         with self.store.connect() if _db is None else nullcontext(_db) as db:
             if _db is None:
@@ -1152,7 +1154,7 @@ class MaterialMatching:
                 any(not isinstance(row, dict) for row in groups)):
             raise ValueError('请选择当前项目及待合成候选，并提供有效批量确认编号')
         self._project(project_id)
-        allowed = {'suggestion_id', 'snapshot_token', 'voucher_keys', 'payment_ids',
+        allowed = {'suggestion_id', 'snapshot_token', 'voucher_keys', 'payment_ids', 'support_ids',
                    'revisions', 'expected_versions', 'fields'}
         for row in groups:
             if (set(row) - allowed or not isinstance(row.get('suggestion_id'), str) or
@@ -1184,17 +1186,17 @@ class MaterialMatching:
                 board = self.board(project_id)
                 available = {candidate['id']: candidate for candidate in board['suggestions']}
                 expected_pool = self._rules_pool_snapshot(board, project_id)
-                cards = {card['key']: card for card in [*board['vouchers'], *board['payments']]}
+                cards = {card['key']: card for card in [*board['vouchers'], *board['payments'], *board['other']]}
                 selected: set[str] = set()
                 rows = []
                 for row in groups:
                     candidate = available.get(row['suggestion_id'])
                     if candidate is None or candidate['snapshot_token'] != row['snapshot_token']:
                         raise ValueError('待合成候选或材料池已变化，请刷新后重新选择')
-                    for field in ('voucher_keys', 'payment_ids', 'revisions', 'expected_versions'):
-                        if field in row and row[field] != candidate[field]:
+                    for field in ('voucher_keys', 'payment_ids', 'support_ids', 'revisions', 'expected_versions'):
+                        if field in row and row[field] != candidate.get(field, []):
                             raise ValueError('候选材料选择或版本已变化，请刷新后重新选择')
-                    keys = {*candidate['voucher_keys'], *('q:' + key for key in candidate['payment_ids'])}
+                    keys = {*candidate['voucher_keys'], *('q:' + key for key in [*candidate['payment_ids'], *candidate.get('support_ids', [])])}
                     if selected.intersection(keys):
                         raise ValueError('所选候选共用材料，请只保留其中一种组合后再批量确认')
                     selected.update(keys)
@@ -1214,7 +1216,7 @@ class MaterialMatching:
                     self._rules_material_state(cards[key], project_id, db=db, allow_name_review=True)
                 refs = [self.create_expense(candidate['voucher_keys'], candidate['payment_ids'], project_id,
                             revisions=candidate['revisions'], expected_versions=candidate['expected_versions'],
-                            fields=fields, _db=db) for candidate, fields in rows]
+                            support_ids=candidate.get('support_ids', []), fields=fields, _db=db) for candidate, fields in rows]
                 record = {'item_ids': [result['item_id'] for result in refs],
                           'match_ids': [result['match_id'] for result in refs],
                           'new_expenses': sum(bool(result['created']) for result in refs), 'created_at': now()}
@@ -2219,8 +2221,9 @@ class MaterialMatching:
     @staticmethod
     def _rules_pool_snapshot(board: dict[str, Any], project_id: str) -> dict[str, Any]:
         return {card['key']: card['version'] if card['key'].startswith('e:') else card['revision']
-                for card in [*board['vouchers'], *board['payments']]
+                for card in [*board['vouchers'], *board['payments'], *board['other']]
                 if card['project_id'] == project_id and card['amount_cents'] and
+                card['role'] in {'invoice', 'receipt', 'payment', 'trip', 'trip_sheet', 'detail'} and
                 not card.get('payment_not_required') and
                 (card['key'].startswith('e:') or card['status'] in {'received', 'review'})}
 
@@ -2231,7 +2234,7 @@ class MaterialMatching:
             entry = _data(row['data'])
             if (entry.get('project_id') == project_id and entry.get('status') in {'received', 'review'} and
                     not entry.get('item_id') and entry.get('qr_status') not in {'manual', 'converted'} and
-                    entry['digest'] not in attached and _material_role(entry) in {'invoice', 'receipt', 'payment'} and
+                    entry['digest'] not in attached and _material_role(entry) in {'invoice', 'receipt', 'payment', 'trip', 'trip_sheet', 'detail'} and
                     _identified_amount(entry) and not rail_payment_not_required(entry) and not _rail_invoice(entry)):
                 result['q:' + entry['id']] = entry['revision']
         # Revalidate against the caller's current read/guard transaction rather than
@@ -2388,6 +2391,9 @@ class MaterialMatching:
                 if len(ranked) > 100:
                     ranked.pop()
         result['suggestions'] = [suggestion for _, _, suggestion in ranked]
+        transport = self._ride_suggestions(board, project_id, pool)
+        result['suggestions'].extend(transport)
+        result['suggestion_count'] += len(transport)
         # A concurrent intake/edit must not yield an apparently current choice.
         with self.store.connect() as db:
             if self._rules_current_pool_snapshot(db, project_id) != pool:
@@ -2397,6 +2403,38 @@ class MaterialMatching:
         result['suggestions_truncated'] = result['suggestion_count'] > len(result['suggestions'])
         if result['suggestions_truncated']:
             conflicts.append({'reason': f'共有{result["suggestion_count"]}个候选，仅展示前100个；竞争判断包含全部组合，请分批人工选择'})
+        return result
+
+    def _ride_suggestions(self, board: dict[str, Any], project_id: str,
+                          pool: dict[str, Any]) -> list[dict[str, Any]]:
+        from invoice_print_layout.agent_combinations import extended_candidates
+        cards = {c['id']: c for c in [*board['vouchers'], *board['payments'], *board['other']]
+                 if c['project_id'] == project_id and c['key'].startswith('q:')}
+        if not any(c['role'] in {'trip', 'trip_sheet'} for c in cards.values()):
+            return []
+        entries = [self.intake.get(key) for key in cards]
+        states = {}
+        for key, card in cards.items():
+            try:
+                states[key] = self._rules_material_state(card, project_id, allow_name_review=True)
+            except ValueError:
+                continue
+        result = []
+        for proposal in extended_candidates(entries, states, scope=set(cards)):
+            if proposal['category'] != '打车' or not proposal.get('support_ids'):
+                continue
+            keys = [*proposal['voucher_keys'], *('q:' + key for key in proposal['support_ids'])]
+            members = [cards[key[2:]] for key in keys]
+            identity = {key: proposal[key] for key in ('voucher_keys', 'payment_ids', 'support_ids')}
+            ident = 's:' + hashlib.sha256(json.dumps(identity, sort_keys=True).encode()).hexdigest()[:24]
+            token = hashlib.sha256(json.dumps([pool, members], sort_keys=True).encode()).hexdigest()
+            result.append({**identity, 'id': ident, 'snapshot_token': token, 'project_id': project_id,
+                           'amount_cents': proposal['amount_cents'], 'title': '打车费用', 'status': 'suggested',
+                           'voucher_count': 1, 'payment_count': 0, 'support_count': len(proposal['support_ids']),
+                           'reason': '同一出行服务方的发票与行程单，金额一致', 'warnings': [],
+                           'ambiguous': False, 'needs_name_review': False, 'competing_count': 0,
+                           'revisions': {c['id']: c['revision'] for c in members}, 'expected_versions': {},
+                           **common_person(members)})
         return result
 
     def suggest(self, project_id: str) -> dict[str, Any]:

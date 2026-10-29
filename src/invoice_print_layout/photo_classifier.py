@@ -8,7 +8,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from invoice_print_layout.expense_classifier import MODEL, api_key
-from invoice_print_layout.lodging_remote import NoRedirect
+from invoice_print_layout.http_utils import NoRedirect
 
 CHOICES = {
     'project': {

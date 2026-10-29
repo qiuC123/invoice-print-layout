@@ -157,7 +157,11 @@ def test_remote_request_contract(monkeypatch):
         payload = json.loads(request.data)
         assert payload['state'] == {'ocr_text': 'test'} and set(payload['questions']) == {'project', 'kind', 'place'}
         return io.BytesIO(json.dumps(decision()).encode())
-    monkeypatch.setattr(classifier.urllib.request, 'build_opener', lambda *a: SimpleNamespace(open=send))
+    def build_opener(handler):
+        assert isinstance(handler, classifier.NoRedirect)
+        assert handler.redirect_request(None, None, 302, 'redirect', None, 'https://elsewhere') is None
+        return SimpleNamespace(open=send)
+    monkeypatch.setattr(classifier.urllib.request, 'build_opener', build_opener)
     assert classifier.classify({'ocr_text': 'test'})['model'] == classifier.MODEL
 
 

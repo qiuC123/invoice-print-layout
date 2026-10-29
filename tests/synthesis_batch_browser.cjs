@@ -39,6 +39,7 @@ async function run(pw) {
   await page.route(origin + '/**', async route => {
     const req = route.request(), url = new URL(req.url());
     const json = (body, status = 200) => route.fulfill({status, contentType: 'application/json', body: JSON.stringify(body)});
+    if (url.pathname === '/api/runtime') return json({started_at:'synthetic-start',build_id:'synthetic-build'});
     if (url.pathname === '/api/state') return json(state);
     if (url.pathname === '/api/intake') return json({queue: []});
     if (url.pathname === '/api/reimbursement-people') {

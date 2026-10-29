@@ -53,8 +53,9 @@
     try{
       const mail=await agentApi('/api/agent/mail');
       if(!host)return;
-      host.textContent=mail.address?'收件邮箱：'+mail.address+' · '+(mail.enabled?'自动收件已开启':'自动收件已暂停，可在材料合成台手动补收'):'';
-      host.hidden=!mail.address;
+      const text=document.createElement('span');text.textContent=mail.address?'收件邮箱：'+mail.address+' · '+(mail.enabled?'自动收件已开启':'自动收件已暂停，可在材料合成台手动补收'):'未设置收件邮箱';
+      const settings=document.createElement('button');settings.type='button';settings.className='manual-mail-settings';settings.textContent='设置';settings.onclick=()=>window.invoiceSettings?.open('mail');
+      host.replaceChildren(text,document.createTextNode(' · '),settings);host.hidden=false;
     }catch(_){if(host)host.hidden=true;}
   }
   function mount(){
@@ -63,6 +64,7 @@
     window.manualInvoiceAgent.mount({host,api:agentApi,getProject:()=>currentInvoiceProjectId(),
       onChanged:payload=>{if(scoped(payload)){pending.set(payload.jobId,payload);scheduleRefresh();}},
       onOpenExpense:openExpense,
+      onOpenMaterials:payload=>{if(scoped(payload))return window.openMaterialMatching();},
       onPreview:payload=>{
         if(!scoped(payload))throw Error('项目已变化，请重新打开报销预览');
         if(typeof window.openAgentReportPreview!=='function')throw Error('报销预览尚未加载，请稍后重试');
@@ -70,6 +72,7 @@
       }});
     document.addEventListener('focusout',scheduleRefresh);
     document.addEventListener('close',scheduleRefresh,true);
+    window.addEventListener('invoice-settings-changed',()=>{void mailStatus();});
     void mailStatus();
   }
   if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',mount,{once:true});else mount();

@@ -1,12 +1,11 @@
 from concurrent.futures import ThreadPoolExecutor
-from decimal import Decimal
 import hashlib
 from pathlib import Path
 import sqlite3
 
 import pytest
 
-from invoice_print_layout import receipt_intake as receipt, takeout
+from invoice_print_layout import receipt_intake as receipt
 from invoice_print_layout.ocr_cache import ReceiptOcrCache
 from invoice_print_layout.takeout import OcrLine, TakeoutError
 
@@ -96,18 +95,3 @@ def test_memory_is_bounded_and_bad_database_is_optional(tmp_path):
         cache.put(str(number), 'signature', lines)
     assert len(cache.memory) == 2 and cache.get('0', 'signature') is None
     assert cache.get('2', 'signature') == lines
-
-
-def test_takeout_inspection_uses_shared_engine_across_batches(engine, tmp_path, monkeypatch):
-    source = tmp_path / 'order.png'
-    source.write_bytes(b'synthetic-image')
-    monkeypatch.setattr(takeout, '_parse_order', lambda path, lines: takeout.OrderReceipt(
-        path, '12345678901234567890', '合成餐厅', Decimal('17.00'),
-        hashlib.sha256(path.read_bytes()).hexdigest(), (0, 0, 100, 100)))
-    receipt.read_receipt(source.read_bytes(), source.suffix)
-    for number in range(2):
-        staging = tmp_path / str(number)
-        staging.mkdir()
-        orders, invoices = takeout.inspect_takeout_files([source], staging)
-        assert len(orders) == 1 and not invoices
-    assert len(engine) == 1

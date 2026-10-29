@@ -1,4 +1,4 @@
-"""Isolated synthetic intent evaluation. Never imports production code or writes Feishu."""
+"""Isolated synthetic intent evaluation. Never imports production code or writes records."""
 from __future__ import annotations
 
 import argparse

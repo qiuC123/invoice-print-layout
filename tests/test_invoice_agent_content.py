@@ -10,6 +10,7 @@ from typing import Any
 import pymupdf
 import pytest
 
+from tests.legacy_agent_fixture import review_question
 from invoice_print_layout import expense_classifier as classifier
 from invoice_print_layout.agent_content import goods_from_text
 from invoice_print_layout.agent_jobs import AgentLoop
@@ -189,7 +190,7 @@ def test_generic_or_instructional_goods_do_not_get_a_guessed_specific_name(
     jobs, tools, _ = environment
     monkeypatch.setattr(classifier, 'ask_jev', lambda _: pytest.fail('must not guess purpose'))
     done = AgentLoop(jobs).run(start(environment, pair(environment, goods), use_model=True)['id'], tools)
-    assert done['state'] == 'needs_input' and done['preview'] is None and done['models'] == 0
+    assert done['state'] == 'ready' and done['preview'] is None and done['models'] == 0
     item = tools.store.list_items()[0]
     assert item['title'] != '胶带采购' and not item['verified']
 
@@ -230,9 +231,9 @@ def test_unknown_mixed_or_instructional_content_waits_without_inventing_name(
     monkeypatch.setattr(classifier, 'ask_jev', lambda _: pytest.fail('model was not enabled'))
     job = start(environment, pair(environment, goods))
     done = AgentLoop(jobs).run(job['id'], tools)
-    assert done['state'] == 'needs_input' and done['preview'] is None and done['models'] == 0
+    assert done['state'] == 'ready' and done['preview'] is None and done['models'] == 0
     assert len(tools.store.list_items()) == 1 and not tools.store.list_items()[0]['verified']
-    assert done['question']['material_ids']
+    assert review_question(done)['material_ids']
 
 
 def test_manual_expense_edit_before_first_content_step_is_preserved(environment: Any) -> None:

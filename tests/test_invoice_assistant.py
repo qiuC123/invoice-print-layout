@@ -94,7 +94,7 @@ finally:
     assert result.returncode == 0, result.stderr
     loaded = set(json.loads(result.stdout))
     for module in ('logistics', 'project_todos', 'site_photos', 'daily_reports',
-                   'photo_schedule', 'photo_briefs', 'wechat_inbox', 'photo_wechat_bridge'):
+                   'photo_schedule', 'wechat_inbox', 'photo_wechat_bridge'):
         assert f'invoice_print_layout.{module}' not in loaded
     assert tables(tmp_path / '后勤' / 'tasks.sqlite3') == {'projects'}
     assert not (tmp_path / '现场进度').exists()
@@ -143,7 +143,8 @@ def test_invoice_startup_and_read_do_not_migrate_or_reorganize_existing_expenses
             assert status == 200 and state['items'] == before
             assert state['projects'] == [{**project, 'reimbursement_status': 'unreimbursed',
                                           'reimbursement_revision': 0, 'pinned': False,
-                                          'project_revision': 0} for project in before_projects]
+                                          'project_revision': 0, 'start_date': '', 'end_date': ''}
+                                         for project in before_projects]
             assert state['app_mode'] == 'invoice' and state['logistics_available'] is False
         assert client.json('GET', '/api/intake')[0] == 200
     assert store.list_items() == before
@@ -163,13 +164,15 @@ def test_invoice_project_creation_is_shared_and_does_not_create_logistics_tables
         assert project['name'] == 'Synthetic project' and project['site_name'] == 'Synthetic site'
         # The invoice facade adds view-only menu metadata to its response; the
         # shared directory retains exactly its original project payload shape.
-        invoice_fields = {'pinned', 'project_revision', 'reimbursement_status', 'reimbursement_revision'}
+        invoice_fields = {'pinned', 'project_revision', 'reimbursement_status', 'reimbursement_revision',
+                          'start_date', 'end_date'}
         listed_project = {key: value for key, value in project.items() if key not in invoice_fields}
         assert project == {**listed_project, 'pinned': False, 'project_revision': 0,
-                           'reimbursement_status': 'unreimbursed', 'reimbursement_revision': 0}
+                           'reimbursement_status': 'unreimbursed', 'reimbursement_revision': 0,
+                           'start_date': '', 'end_date': ''}
         assert client.json('GET', '/api/state')[1]['projects'] == [
             {**listed_project, 'reimbursement_status': 'unreimbursed', 'reimbursement_revision': 0,
-             'pinned': False, 'project_revision': 0}]
+             'pinned': False, 'project_revision': 0, 'start_date': '', 'end_date': ''}]
         assert client.json('POST', '/api/projects', {'name': 'Synthetic project'})[0] == 400
         assert client.json('POST', '/api/projects', {'name': 'Other', 'site_name': ['invalid']})[0] == 400
         status, expense = client.json('POST', '/api/create', {
@@ -278,7 +281,7 @@ def test_invoice_mode_rejects_logistics_routes_and_assets(tmp_path: Path) -> Non
     unavailable = ('/logistics', '/photos', '/api/logistics', '/api/logistics/inbox',
                    '/api/logistics/todos', '/api/photos', '/api/photos/settings',
                    '/api/daily-reports', '/daily-report/p/key/file.pdf',
-                   '/photo-file/p/key', '/photo-review/p/key/0', '/site-photos/p/index.html',
+                   '/photo-file/p/key', '/site-photos/p/index.html',
                    '/logistics.js', '/logistics.css', '/photos.js', '/photos.css',
                    '/daily-reports.js', '/%61pi/logistics')
     with invoice_server(tmp_path) as client:

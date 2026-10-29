@@ -175,7 +175,7 @@ def read_mail_settings(path: Path) -> Mail163Settings:
     return Mail163Settings(validate_163_address(address), _validate_folder(folder))
 
 
-def save_auth_code(address: str, auth_code: str) -> None:
+def validate_auth_code(auth_code: str) -> str:
     normalized = auth_code.strip()
     if (
         len(normalized) < 6
@@ -183,6 +183,11 @@ def save_auth_code(address: str, auth_code: str) -> None:
         or any(character.isspace() for character in normalized)
     ):
         raise MailImportError("客户端授权码格式异常，请只粘贴网易生成的授权密码")
+    return normalized
+
+
+def save_auth_code(address: str, auth_code: str) -> None:
+    normalized = validate_auth_code(auth_code)
     try:
         keyring.set_password(KEYRING_SERVICE, address, normalized)
     except keyring.errors.KeyringError as exc:
@@ -540,6 +545,20 @@ def _connect(
             except (imaplib.IMAP4.error, OSError):
                 pass
         raise MailImportError(f"无法连接 163 邮箱：{exc}") from exc
+
+
+def test_connection(settings: Mail163Settings, auth_code: str, *,
+                    imap_factory: ImapFactory | None = None) -> dict[str, Any]:
+    """Only login, identify and select read-only; never fetch or mark a message."""
+    try:
+        client = _connect(settings, auth_code, imap_factory or cast(ImapFactory, imaplib.IMAP4_SSL))
+    except Exception:
+        return {'ok': False, 'message': '连接失败，请检查163邮箱、文件夹和客户端授权码。'}
+    try:
+        client.logout()
+    except Exception:
+        pass
+    return {'ok': True, 'message': '连接成功，已只读打开邮箱文件夹。'}
 
 
 def import_pdf_attachments(

@@ -249,6 +249,7 @@ async function run(pw) {
       }
       throw Error(`Unexpected ledger operation: ${url.pathname}`);
     }
+    if (url.pathname === '/api/runtime') return json({started_at:'synthetic-start',build_id:'synthetic-build'});
     if (url.pathname === '/api/state') {stateReads++; return json(state);}
     if (url.pathname === '/api/material-matching') {
       boardReads++;
@@ -299,9 +300,9 @@ async function run(pw) {
     await page.waitForFunction(() => typeof window.openMaterialMatching === 'function' && !document.getElementById('materialMatching').disabled);
     // This regression exercises explicit manual preparation and composition.
     // The default automatic path has its own upload/Agent integration coverage.
-    await page.waitForFunction(() => !!document.querySelector('#manualAgent input[type="checkbox"]'));
+    await page.waitForFunction(() => !!document.querySelector('#manualAgent .mia-settings'));
     await page.locator('#manualAgent summary').click();
-    await page.getByLabel('上传后自动整理', {exact: true}).uncheck();
+    await page.evaluate(()=>window.dispatchEvent(new CustomEvent('invoice-settings-changed',{detail:{organize:{auto_after_upload:false,use_model:true,model_available:false}}})));
     assert.equal(await page.getByRole('button', {name: '确认当前费用金额／分笔付款', exact: true}).count(), 0, 'old split-payment button must be removed');
     assert.equal(await page.locator('#newItem').count(), 0, 'the old separate manual-entry button should not duplicate this creation flow');
     await page.locator('#materialMatching').click(); await page.locator('#matchingDeskDialog[open]').waitFor();

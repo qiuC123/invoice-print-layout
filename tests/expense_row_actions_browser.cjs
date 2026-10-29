@@ -89,7 +89,9 @@ async function run(pw) {
       throw Error(`Unexpected write from row controls: ${url.pathname}`);
     }
     if (url.pathname === '/api/agent/mail') return json({enabled:false});
+    if (url.pathname === '/api/settings') return json({version:2,enabled:false,providers:[],organize:{},mail:{projects:[]}});
     if (url.pathname === '/api/agent/jobs') return json({jobs:[]});
+    if (url.pathname === '/api/runtime') return json({started_at:'synthetic-start',build_id:'synthetic-build'});
     if (url.pathname === '/api/state') {stateReads.push(url.href); return json(state);}
     if (url.pathname === '/api/reimbursement-people') return json({project_id: url.searchParams.get('project') || 'p1', people: [], summary: {rows: []}});
     if (url.pathname === '/api/intake') return json({queue: []});

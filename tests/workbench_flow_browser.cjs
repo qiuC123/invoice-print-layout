@@ -61,12 +61,12 @@ async function run(pw){
   assert.equal(await page.locator('#projectFilter').count(),0);await page.locator('[data-item="receipt"]').click();
   assert.equal(await page.getByRole('button',{name:'确认当前费用金额／分笔付款'}).count(),0,'old split-payment button must be removed');
   assert.equal(await page.getByRole('button',{name:'材料合成台',exact:true}).count(),1,'matching desk remains the material-matching entry');
-  await page.locator('[data-check="receipt"]').check();await page.getByRole('button',{name:'移动勾选事项到项目'}).click();await page.locator('dialog[open] select').selectOption('p2');await page.getByRole('button',{name:'确认移动',exact:true}).click();
+  await page.locator('[data-check="receipt"]').check();await page.getByRole('button',{name:'移动到项目',exact:true}).click();await page.locator('dialog[open] select').selectOption('p2');await page.getByRole('button',{name:'确认移动',exact:true}).click();
   await page.goto('http://127.0.0.1:18771/?project=p2');
   // Keep this existing manual intake/relationship regression in manual mode.
-  await page.waitForFunction(()=>!!document.querySelector('#manualAgent input[type="checkbox"]'));
+  await page.waitForFunction(()=>!!document.querySelector('#manualAgent .mia-settings'));
   await page.locator('#manualAgent summary').click();
-  await page.getByLabel('上传后自动整理',{exact:true}).uncheck();
+  await page.evaluate(()=>window.dispatchEvent(new CustomEvent('invoice-settings-changed',{detail:{organize:{auto_after_upload:false,use_model:true,model_available:false}}})));
   await page.locator('#materialMatching').click();
   assert.equal(await page.locator('#matchingProject').count(),0);
   await page.locator('#matchingFiles').setInputFiles({name:'receipt.png',mimeType:'image/png',buffer:Buffer.from('synthetic')});
@@ -82,7 +82,7 @@ async function run(pw){
   await page.locator('#intakeDialog [data-close]').click();
   assert.equal(await page.getByRole('button',{name:'经验管理',exact:true}).count(),0);
   assert.equal(await page.getByRole('heading',{name:'可管理经验',exact:true}).count(),0);
-  const evidence=path.resolve(__dirname,'../workspace/invoice-operations/unified-intake-entry-20261010');
+  const evidence=process.env.INVOICE_BROWSER_EVIDENCE||path.join(require('node:os').tmpdir(),'invoice-browser-evidence');
   await fs.mkdir(evidence,{recursive:true});
   await page.screenshot({path:path.join(evidence,'synthetic-workbench-desktop.png'),fullPage:true});
   await page.setViewportSize({width:390,height:844});await page.screenshot({path:path.join(evidence,'synthetic-workbench-mobile.png'),fullPage:true});

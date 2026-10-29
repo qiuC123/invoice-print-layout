@@ -49,8 +49,8 @@ async function run(pw){
   assert.equal(await page.locator('#projectActions').isVisible(),false,'standalone desktop keeps the sidebar right-click entry');
   assert.equal(await page.locator('#projectReimbursementStatus,#requestReviewSelected,[data-view=all],[data-view=missing]').count(),0);
   await link('p1').focus();await page.keyboard.press('Shift+F10');await menu().waitFor({state:'visible'});
-  assert.deepEqual(await menu().getByRole('menuitem').allTextContents(),['重命名','置顶','永久删除','移到已报销']);
-  await page.keyboard.press('ArrowDown');assert.equal(await page.evaluate(()=>document.activeElement.textContent),'置顶');
+  assert.deepEqual(await menu().getByRole('menuitem').allTextContents(),['重命名','修改项目时间','置顶','永久删除','移到已报销']);
+  await page.keyboard.press('ArrowDown');assert.equal(await page.evaluate(()=>document.activeElement.textContent),'修改项目时间');
   await page.keyboard.press('Escape');assert.equal(await menu().isVisible(),false);assert.equal(await link('p1').evaluate(x=>x===document.activeElement),true);
   await link('p1').dispatchEvent('keydown',{key:'ContextMenu'});await menu().waitFor({state:'visible'});await page.locator('header h1').click();assert.equal(await menu().isVisible(),false);
   await action('p1','重命名');const input=dialog().locator('[name=name]'),save=dialog().getByRole('button',{name:'保存名称',exact:true});
@@ -66,7 +66,7 @@ async function run(pw){
   await action('p1','移回未报销');await idle();await counts(2,1);
   await open('p1');await link('p1').dispatchEvent('contextmenu',{clientX:1499,clientY:999});let box=await menu().boundingBox();assert.ok(box.x+box.width<=1500&&box.y+box.height<=1000);
   await page.setViewportSize({width:390,height:844});await page.locator('#projectActions').waitFor({state:'visible'});box=await menu().boundingBox();assert.ok(box.x+box.width<=390&&box.y+box.height<=844);await page.keyboard.press('Escape');assert.equal(await page.locator('#projectActions').evaluate(x=>x===document.activeElement),true);
-  await page.locator('#projectActions').click();await menu().waitFor({state:'visible'});assert.equal(await menu().getByRole('menuitem').count(),4);await page.keyboard.press('Escape');await page.setViewportSize({width:1500,height:1000});
+  await page.locator('#projectActions').click();await menu().waitFor({state:'visible'});assert.equal(await menu().getByRole('menuitem').count(),5);await page.keyboard.press('Escape');await page.setViewportSize({width:1500,height:1000});
   await page.evaluate(src=>{const frame=document.createElement('iframe');frame.id='syntheticEmbedded';frame.src=src;frame.style.cssText='width:100%;height:600px';document.body.append(frame);},origin+'/?project=p1&embedded=1');
   const embedded=page.frameLocator('#syntheticEmbedded');await embedded.locator('#projectActions').waitFor({state:'visible'});assert.equal(await embedded.locator('.rail').isVisible(),false);
   await embedded.locator('#projectActions').click();await embedded.locator('#projectMenu').getByRole('menuitem',{name:'取消置顶',exact:true}).click();

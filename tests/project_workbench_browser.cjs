@@ -22,6 +22,7 @@ async function run(pw){
    if(url.pathname==='/api/intake/receive'){const q={...queue[0],id:'new',name:data.name,project_id:data.project_id,status:'received',revision:0};queue.push(q);return json(q);}
    return json({});
   }
+  if(url.pathname==='/api/runtime')return json({started_at:'synthetic-start',build_id:'synthetic-build'});
   if(url.pathname==='/api/state'){if(failState){failState=false;return route.abort('connectionrefused');}return json(state);}
   if(url.pathname==='/api/logistics')return json({projects,tasks:[],outbox:[],token:'test'});
   if(url.pathname==='/api/logistics/inbox')return json({groups:[],messages:[],receiver:{status:'disconnected'}});
@@ -84,10 +85,16 @@ async function run(pw){
   await page.locator('#materialMatching').click();
   assert.match(await page.locator('#error').innerText(),/请先从侧栏选择一个项目/);
   assert.equal(await page.locator('#themeSelect').isVisible(),false);
-  await page.locator('#workbenchMore summary').click();assert.equal(await page.locator('#themeSelect').isVisible(),true);
-  assert.equal(await page.locator('#importHistory').isVisible(),true);
-  await page.locator('#themeSelect').selectOption('dark');assert.equal(await page.locator('html').getAttribute('data-theme'),'dark');
-  await page.locator('#workbenchMore summary').click();
+  assert.equal(await page.locator('#workbenchMore,#importHistory,.toolbar>.actions').count(),0);
+  assert.equal(await page.locator('#manualAgent').isVisible(),false,'all-project ledger has no organizer panel');
+  assert.equal(await page.locator('#selectionTools #batchProjectType + #moveProject').count(),1);
+  assert.equal(await page.locator('#moveProject').innerText(),'移动到项目');assert.equal(await page.locator('#moveProject').isDisabled(),true);
+  await page.locator('[data-check="甲费用"]').check();assert.equal(await page.locator('#moveProject').isEnabled(),true);await page.locator('[data-check="甲费用"]').uncheck();
+  await page.locator('#tabs [data-view=submitted]').click();assert.equal(await page.locator('#moveProject').isVisible(),false);
+  await page.locator('#tabs [data-view=review]').click();assert.equal(await page.locator('#moveProject').isDisabled(),true);
+  await page.locator('#settingsOpen').click();assert.equal(await page.locator('#settingsAppearance [data-settings-theme=dark]').isVisible(),true);
+  await page.locator('[data-settings-theme=dark]').click();assert.equal(await page.locator('html').getAttribute('data-theme'),'dark');
+  await page.locator('#settingsClose').click();
   failState=true;await page.evaluate(async()=>{try{await load();}catch(error){notify(error.message,true);}});
   assert.match(await page.locator('#error').innerText(),/工作台服务未响应，请确认工作台仍在运行后重试/);
   assert.doesNotMatch(await page.locator('#error').innerText(),/Failed to fetch/);

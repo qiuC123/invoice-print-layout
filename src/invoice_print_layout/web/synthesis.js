@@ -6,11 +6,12 @@
   const checkedCandidates = new Map();
   const project = () => projectScope || window.currentInvoiceProjectId?.() || '';
   const current = () => cache.projectId === project();
-  const cards = () => [...(cache.board?.vouchers || []), ...(cache.board?.payments || [])];
+  const cards = () => [...(cache.board?.vouchers || []), ...(cache.board?.payments || []), ...(cache.board?.other || [])];
   const safeUrl = value => typeof value === 'string' && value.startsWith('/') && !value.startsWith('//') ? value : '';
   const members = suggestion => ({
     vouchers: (cache.board?.vouchers || []).filter(card => suggestion.voucher_keys.includes(card.key)),
     payments: (cache.board?.payments || []).filter(card => suggestion.payment_ids.includes(card.id)),
+    supports: (cache.board?.other || []).filter(card => (suggestion.support_ids || []).includes(card.id)),
   });
   const title = suggestion => {
     const vouchers = members(suggestion).vouchers;
@@ -68,7 +69,7 @@
   const selectedCandidates = () => filtered().filter(value => checkedCandidates.get(value.id) === value.snapshot_token);
   function overlapping(groups) {
     const used = new Set();
-    for (const group of groups) for (const key of [...group.voucher_keys, ...group.payment_ids.map(id => 'q:' + id)]) {
+    for (const group of groups) for (const key of [...group.voucher_keys, ...[...group.payment_ids, ...(group.support_ids || [])].map(id => 'q:' + id)]) {
       if (used.has(key)) return '勾选的组合共用了同一份材料，请取消其中一组，再确认合成。';
       used.add(key);
     }
@@ -83,7 +84,7 @@
       type && new Set(names).size === 1 && type.names.includes(names[0]) ? names[0] : '';
     return {project_type: type && (type.editable_name || name) ? type.code : '', project_name: name,
       amount: Number.isSafeInteger(suggestion.amount_cents) ? (suggestion.amount_cents / 100).toFixed(2) : '',
-      reimbursement_person_id: window.reimbursementPeopleUI?.choice([...group.vouchers, ...group.payments]).personId || ''};
+      reimbursement_person_id: window.reimbursementPeopleUI?.choice([...group.vouchers, ...group.payments, ...group.supports]).personId || ''};
   }
   function batchNameControl(index, fields) {
     const type = batch?.types.find(value => value.code === fields.project_type);
@@ -140,11 +141,11 @@
     if (serial !== batchOpenRevision || batch || deskBusy || !$('matchingDeskDialog')?.open || project() !== openingProject || cache.board !== openingBoard ||
       JSON.stringify(selectedCandidates().map(value => [value.id, value.snapshot_token])) !== openingSelection) return;
     batch = {projectId: project(), types: cache.board?.report_types || [], busy: false, committed: false, expired: false,
-      ownerConflicts: suggestions.map(value => {const group = members(value); return window.reimbursementPeopleUI?.choice([...group.vouchers, ...group.payments]).conflict || false;}),
+      ownerConflicts: suggestions.map(value => {const group = members(value); return window.reimbursementPeopleUI?.choice([...group.vouchers, ...group.payments, ...group.supports]).conflict || false;}),
       idempotencyKey: crypto.randomUUID(), fingerprint: '', groups: suggestions.map(value => {
         const group = members(value);
         return {suggestion_id: value.id, snapshot_token: value.snapshot_token, voucher_keys: [...value.voucher_keys],
-          payment_ids: [...value.payment_ids], revisions: value.revisions || Object.fromEntries([...group.vouchers, ...group.payments]
+          payment_ids: [...value.payment_ids], ...(value.support_ids?.length ? {support_ids: [...value.support_ids]} : {}), revisions: value.revisions || Object.fromEntries([...group.vouchers, ...group.payments, ...group.supports]
             .filter(card => card.key?.startsWith('q:')).map(card => [card.id, card.revision])),
           expected_versions: value.expected_versions || Object.fromEntries(group.vouchers.filter(card => card.key?.startsWith('e:')).map(card => [card.item_id || card.id, card.version]))};
       })};
@@ -152,7 +153,7 @@
     dialog.innerHTML = `<div class="dialoghead"><h2>逐组确认报销信息 · ${suggestions.length} 组</h2><button type="button" data-batch-close aria-label="关闭合成" class="dialog-close">×</button></div><p>每组确认项目类型、金额和项目名称。点击下方确认后，整批创建并进入待核对。</p><p id="synthesisBatchStatus" role="status" hidden></p><form id="synthesisBatchForm" novalidate>${suggestions.map((suggestion, index) => {
       const group = members(suggestion), fields = batchChoice(suggestion);
       const reviewNotes = window.synthesisReviewNotes(suggestion);
-      return `<section class="synthesis-batch-group"><h3>第 ${index + 1} 组 · ${esc(title(suggestion))}</h3>${window.reimbursementPeopleUI?.groupMarkup([...group.vouchers,...group.payments])||''}${reviewNotes.length ? `<div class="rule warn">${esc(reviewNotes.join('；'))}</div>` : ''}${window.reimbursementPeopleUI?`<div class="reimbursement-person-control"><label>费用归属人<select data-batch-person="${index}">${window.reimbursementPeopleUI.options(fields.reimbursement_person_id)}</select></label><button type="button" data-new-batch-person="${index}">新增费用归属人</button></div>${batch.ownerConflicts[index]?'<p class="reimbursement-person-message">所选材料包含不同或未指定的费用归属人，请选择费用归属人；材料将按确认的费用归属人记录。</p>':''}`:''}<div class="synthesis-batch-fields"><label>项目类型<select data-batch-type="${index}" required><option value="">选择项目类型</option>${batch.types.map(type => `<option value="${esc(type.code)}" ${type.code === fields.project_type ? 'selected' : ''}>${esc(type.label)}</option>`).join('')}</select></label><label>金额（元）<input data-batch-amount="${index}" required inputmode="decimal" value="${esc(fields.amount)}" maxlength="20"></label><label class="wide">项目名称<span data-batch-name-control="${index}">${batchNameControl(index, fields)}</span></label><p data-batch-error="${index}" role="alert" hidden></p></div><details class="synthesis-batch-materials" open><summary>材料预览 · ${group.vouchers.length} 份票据 ＋ ${group.payments.length} 份付款</summary><h4>发票／收据</h4><div class="synthesis-proofs">${group.vouchers.map(proof).join('')}</div><h4>付款截图</h4><div class="synthesis-proofs synthesis-payment-proofs">${group.payments.map(proof).join('')}</div></details></section>`;
+      return `<section class="synthesis-batch-group"><h3>第 ${index + 1} 组 · ${esc(title(suggestion))}</h3>${window.reimbursementPeopleUI?.groupMarkup([...group.vouchers,...group.payments,...group.supports])||''}${reviewNotes.length ? `<div class="rule warn">${esc(reviewNotes.join('；'))}</div>` : ''}${window.reimbursementPeopleUI?`<div class="reimbursement-person-control"><label>费用归属人<select data-batch-person="${index}">${window.reimbursementPeopleUI.options(fields.reimbursement_person_id)}</select></label><button type="button" data-new-batch-person="${index}">新增费用归属人</button></div>${batch.ownerConflicts[index]?'<p class="reimbursement-person-message">所选材料包含不同或未指定的费用归属人，请选择费用归属人；材料将按确认的费用归属人记录。</p>':''}`:''}<div class="synthesis-batch-fields"><label>项目类型<select data-batch-type="${index}" required><option value="">选择项目类型</option>${batch.types.map(type => `<option value="${esc(type.code)}" ${type.code === fields.project_type ? 'selected' : ''}>${esc(type.label)}</option>`).join('')}</select></label><label>金额（元）<input data-batch-amount="${index}" required inputmode="decimal" value="${esc(fields.amount)}" maxlength="20"></label><label class="wide">项目名称<span data-batch-name-control="${index}">${batchNameControl(index, fields)}</span></label><p data-batch-error="${index}" role="alert" hidden></p></div><details class="synthesis-batch-materials" open><summary>材料预览 · ${group.vouchers.length} 份票据 ＋ ${group.payments.length} 份付款${group.supports.length ? ` ＋ ${group.supports.length} 份行程／明细` : ''}</summary><h4>发票／收据</h4><div class="synthesis-proofs">${group.vouchers.map(proof).join('')}</div><h4>付款截图</h4><div class="synthesis-proofs synthesis-payment-proofs">${group.payments.map(proof).join('')}</div>${group.supports.length ? `<h4>行程／明细</h4><div class="synthesis-proofs">${group.supports.map(proof).join('')}</div>` : ''}</details></section>`;
     }).join('')}<div class="actions synthesis-batch-actions"><button id="confirmSynthesisBatch" type="submit" class="primary" disabled>确认合成并进入待核对</button><button type="button" data-batch-close>取消</button></div></form>`;
     document.body.append(dialog);
     const close = () => {if (batch && !batch.busy) {const committed = batch.committed; dialog.close(); dialog.remove(); batch = null; if (committed) window.matchingSuggestionActions?.closeAfterCommit();}};
@@ -215,7 +216,7 @@
     list.innerHTML = suggestions.length ? suggestions.map(suggestion => {
       const group = members(suggestion);
       const reviewNotes = window.synthesisReviewNotes(suggestion);
-      return `<article class="synthesis-row synthesis-selectable-row ${selected === suggestion.id ? 'selected' : ''}" data-synthesis-id="${esc(suggestion.id)}"><input type="checkbox" data-synthesis-check="${esc(suggestion.id)}" aria-label="勾选 ${esc(title(suggestion))}" ${checkedCandidates.get(suggestion.id) === suggestion.snapshot_token ? 'checked' : ''}><button type="button" class="synthesis-row-preview"><span class="title">${esc(title(suggestion))}</span>${window.reimbursementPeopleUI?.groupMarkup([...group.vouchers,...group.payments])||''}<span class="sub">${group.vouchers.length} 份票据 ＋ ${group.payments.length} 份付款</span></button><div class="money">¥ ${money(suggestion.amount_cents)}<br><span class="badge">${suggestion.ambiguous ? '存在竞争组合' : suggestion.needs_name_review ? '名称待核对' : '建议合成'}</span></div>${reviewNotes.length ? `<div class="synthesis-row-reason sub">${esc(reviewNotes.join('；'))}</div>` : ''}</article>`;
+      return `<article class="synthesis-row synthesis-selectable-row ${selected === suggestion.id ? 'selected' : ''}" data-synthesis-id="${esc(suggestion.id)}"><input type="checkbox" data-synthesis-check="${esc(suggestion.id)}" aria-label="勾选 ${esc(title(suggestion))}" ${checkedCandidates.get(suggestion.id) === suggestion.snapshot_token ? 'checked' : ''}><button type="button" class="synthesis-row-preview"><span class="title">${esc(title(suggestion))}</span>${window.reimbursementPeopleUI?.groupMarkup([...group.vouchers,...group.payments,...group.supports])||''}<span class="sub">${group.vouchers.length} 份票据 ＋ ${group.payments.length} 份付款${group.supports.length ? ` ＋ ${group.supports.length} 份行程／明细` : ''}</span></button><div class="money">¥ ${money(suggestion.amount_cents)}<br><span class="badge">${suggestion.ambiguous ? '存在竞争组合' : suggestion.needs_name_review ? '名称待核对' : '建议合成'}</span></div>${reviewNotes.length ? `<div class="synthesis-row-reason sub">${esc(reviewNotes.join('；'))}</div>` : ''}</article>`;
     }).join('') : `<p class="matching-empty">${loading ? '正在读取建议组合…' : cache.error ? '建议暂不可用，请刷新材料重试。' : '暂未找到建议组合，可点击“寻找合成组合”，或从下方手工选择材料。'}</p>`;
     const all = $('selectSynthesisVisible'); all.indeterminate = chosen.length > 0 && chosen.length < suggestions.length;
     all.onchange = event => {selectionNotice = ''; for (const suggestion of suggestions) {

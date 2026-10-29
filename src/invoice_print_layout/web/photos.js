@@ -31,10 +31,6 @@
   function imageURL(p){return '/photo-file/'+encodeURIComponent(project)+'/'+encodeURIComponent(p.id);}
   function selectStatus(){const rows=visible();$('selectedCount').textContent=`已选${selected.size}张`;$('selectAll').checked=!!rows.length&&rows.every(p=>selected.has(p.id));$('selectAll').indeterminate=rows.some(p=>selected.has(p.id))&&!$('selectAll').checked;$('recognize').disabled=!selected.size||data?.jobs.some(j=>j.state==='running');}
   function render(){
-    const brief=data.briefs||{enabled:false,latest:null};$('sendBriefPreview').disabled=!brief.enabled;
-    $('reviewFiles').replaceChildren();for(const file of brief.latest?.files||[]){const a=el('a',file.name);a.href=file.url;a.target='_blank';a.rel='noopener';$('reviewFiles').append(a,document.createElement('br'));}
-    $('briefStatus').textContent=(brief.enabled?'已启用 · 发送至已绑定的本人飞书':'未启用飞书简报')+(brief.latest?' · '+brief.latest.label+(brief.latest.error?'：'+brief.latest.error:''):'');
-    if(brief.preparing)$('briefStatus').textContent='正在读取或准备审阅材料，完成后自动发送。';
     const saved=data.photos.filter(p=>p.state==='saved').length;$('summary').textContent=`${data.photos.length}张照片 · ${data.photos.length-saved}张待核对 · ${saved}张已保存`;
     const list=$('photoList');list.replaceChildren();const rows=visible();
     if(!rows.length)list.append(el('p',data.photos.length?'此筛选下没有照片。':'本项目尚无照片。导入文件、读取文件夹或选择微信群开始。','help'));
@@ -45,8 +41,7 @@
     }
     renderJobs();
     $('classificationStatus').textContent=data.settings.auto_classify?'已开启自动分类：新照片获取后提取文字、Jev判断并保存；不明确的列为待核对。':'当前使用手动分类；可在采集与归档设置中开启自动分类。';const active=data.jobs.some(j=>j.state==='running');document.querySelectorAll('[data-job]').forEach(b=>b.disabled=active);selectStatus();
-    $('readBrief').disabled=active||!brief.enabled;
-    clearTimeout(timer);if(active||brief.preparing||['pending','sending','retry'].includes(brief.latest?.state))timer=setTimeout(()=>load(false),active?1000:3000);
+    clearTimeout(timer);if(active)timer=setTimeout(()=>load(false),1000);
   }
   async function load(settings=false){if(loading)return;loading=true;try{data=await request();token=data.token;for(const id of selected)if(!data.photos.some(p=>p.id===id))selected.delete(id);if(settings){$('autoClassify').checked=!!data.settings.auto_classify;$('projectLocation').value=data.settings.project_location||'';$('outputRoot').value=data.settings.output_root;$('sourceFolder').value=data.settings.output_root;$('account').value=data.settings.account;$('groups').value=data.settings.groups.map(g=>g.name+' | '+g.id).join('\n');$('sourceGroup').replaceChildren();for(const group of data.settings.groups){const opt=el('option',group.name);opt.value=group.id;$('sourceGroup').append(opt);}$('readerStatus').textContent=data.reader_ready?'本机读取器已配置，点击读取时核验当前微信账号。':'本机微信读取器尚未配置；可以先读取文件夹或导入照片。';}render();}catch(e){tell(e.message,true);}finally{loading=false;}}
   function formFields(){return Object.fromEntries(new FormData($('reviewForm')));}
@@ -54,10 +49,6 @@
   function fill(fields){for(const [name,value]of Object.entries(fields)){const input=$('reviewForm').elements.namedItem(name);if(input)input.value=value??'';}toggleFields();}
   function open(id){editing=data.photos.find(p=>p.id===id);if(!editing)return;$('reviewForm').reset();fill(editing.fields);$('confirmed').checked=!!editing.reviewed&&editing.saved_by!=='automatic';$('projectPhase').textContent='项目阶段：'+(editing.phase?.name||'待判定')+' · '+(editing.phase?.reason||'按拍摄时间和项目排期计算');$('reviewError').hidden=true;$('preview').src=imageURL(editing);$('fullImage').href=imageURL(editing);$('imageQuality').textContent=editing.quality+' · '+editing.dimensions.join('×');$('imageSource').textContent=editing.sources.map(s=>[s.type,s.group_name,s.sent_at,s.relative||s.name||s.file].filter(Boolean).join(' · ')).join('\n');$('ocrText').textContent=(editing.ocr_text||'尚未识别；关闭后选中照片，点击“识别所选照片”。')+'\n'+editing.warnings.join('\n')+(editing.classification?.model?'\n分类模型：'+editing.classification.model+'\n'+Object.entries(editing.classification.answers).map(([k,v])=>k+'：'+v.choice+'（'+Math.round(v.confidence*100)+'%）').join('\n'):'');$('savedPath').textContent=editing.saved_path?'已保存：'+editing.saved_path:'保存后会写入当前项目的分类文件夹。';$('editor').showModal();}
   $('closeEditor').onclick=()=>$('editor').close();$('reviewForm').elements.namedItem('kind').onchange=toggleFields;
-  $('briefSettings').addEventListener('toggle',()=>{if($('briefSettings').open){$('briefEnabled').checked=!!data?.briefs?.enabled;$('briefPDF').checked=!!data?.briefs?.include_pdf;if(!$('briefReadDate').value)$('briefReadDate').value=$('startDate').value;}});
-  $('briefForm').onsubmit=async event=>{event.preventDefault();try{await request('brief-settings',{enabled:$('briefEnabled').checked,include_pdf:$('briefPDF').checked});$('error').hidden=true;tell('飞书简报设置已保存。');await load();}catch(e){tell(e.message,true);}};
-  $('readBriefForm').onsubmit=event=>{event.preventDefault();job('brief-read',{start:$('briefReadDate').value,end:$('briefReadDate').value,group_ids:data.settings.groups.map(g=>g.id)});};
-  $('sendBriefPreview').onclick=async()=>{$('sendBriefPreview').disabled=true;try{await request('brief-preview',{});$('error').hidden=true;tell('试用简报已加入发送队列，可在此查看送达状态。');await load();}catch(e){tell(e.message,true);$('sendBriefPreview').disabled=!data?.briefs?.enabled;}};
   $('applySuggestions').onclick=()=>{fill(editing.suggestions);$('confirmed').checked=false;};
   $('reviewForm').onsubmit=async event=>{event.preventDefault();$('savePhoto').disabled=true;try{const result=await request('save',{id:editing.id,revision:editing.revision,fields:formFields(),confirmed:$('confirmed').checked});$('editor').close();tell('已保存到：'+result.saved_path);await load();}catch(e){$('reviewError').textContent=e.message;$('reviewError').hidden=false;}finally{$('savePhoto').disabled=false;}};
   $('settingsForm').onsubmit=async event=>{event.preventDefault();try{const groups=$('groups').value.split('\n').filter(s=>s.trim()).map(line=>{const parts=line.split('|');if(parts.length!==2)throw Error('每行请填写：群名 | 稳定群ID');return{name:parts[0].trim(),id:parts[1].trim()};});await request('settings',{output_root:$('outputRoot').value,account:$('account').value,groups,auto_classify:$('autoClassify').checked,project_location:$('projectLocation').value});tell('保存目录和来源设置已保存。');await load(true);}catch(e){tell(e.message,true);}};

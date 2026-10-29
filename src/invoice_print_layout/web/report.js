@@ -80,7 +80,8 @@ function buildFinalReportPreviewHtml(pages,meta={}){
 }
 const previewButton=document.createElement('button');
 previewButton.id='previewReport';previewButton.type='button';previewButton.textContent='报销预览';
-document.getElementById('workbenchActions').insertBefore(previewButton,document.getElementById('workbenchMore')||document.getElementById('themeSelect'));
+const previewActions=document.getElementById('workbenchActions'),previewAnchor=document.getElementById('themeSelect');
+previewActions.insertBefore(previewButton,previewAnchor?.parentElement===previewActions?previewAnchor:null);
 const previewDialog=document.createElement('dialog');previewDialog.id='reportPreviewDialog';
 previewDialog.innerHTML=`<div class="dialoghead"><h2>报销打印预览</h2><button id="closePreview" aria-label="关闭报销预览" class="dialog-close" type="button">×</button></div><div class="preview-tools"><div class="preview-filter"><span class="preview-filter-label">类别</span><select id="previewCategory" aria-label="报销预览类别筛选"></select></div><div class="preview-tool-actions"><button id="downloadPreview" type="button">下载 HTML</button><button id="previewTrial" type="button">刷新打印页</button><button id="printPreview" type="button" class="primary">打印预览</button></div></div><p id="previewScope" class="muted"></p><div id="previewLoadState" hidden></div><iframe id="previewFrame" title="报销最终打印页" sandbox="allow-same-origin"></iframe>`;
 document.body.append(previewDialog);

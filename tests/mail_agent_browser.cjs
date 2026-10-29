@@ -8,7 +8,7 @@ async function run(pw){
   use_model:true,default_project_id:'',collecting:false,suspended:false,last_checked_at:null,last_error:'',next_check_at:null,
   messages:[{id:'mail-1',subject:'<img src=x onerror="throw 1"> 合成测试材料',sender:'测试发票',status:'unassigned',
    issues:['没有明确的项目名称'],material_count:2,project_id:'',job_id:''},
-   {id:'mail-attention',subject:'收件失败的合成材料',sender:'测试发票',status:'attention',issues:['原件未完整保存'],material_count:1,project_id:'',job_id:''}]};
+   {id:'mail-attention',subject:'收件失败的合成材料',sender:'测试发票',status:'attention',issues:['原件未完整保存'],material_count:1,project_id:'p2',job_id:'',route_reason:'date'}]};
  let jobs=[];
  page.on('pageerror',e=>errors.push(e.message));
  await page.route(origin+'/**',async route=>{
@@ -48,6 +48,7 @@ async function run(pw){
   await page.goto(origin+'/agent?project=p1');await page.getByText('synthetic@163.com · INBOX',{exact:true}).waitFor();
   const choose=page.locator('.mail-message select');
   assert.equal(await choose.count(),1,'Only unassigned messages may show project assignment');
+  assert.match(await page.locator('[data-mail-id="mail-attention"]').textContent(),/按项目时间分配/);
   assert.equal(await choose.inputValue(),'');assert.equal(await page.getByRole('button',{name:'确定项目，开启收件后继续',exact:true}).isDisabled(),true);
   assert.equal(await page.locator('#mail-collect').isDisabled(),true);
   await page.getByText('自动收件已暂停，确定项目后将等待重新开启。',{exact:true}).waitFor();

@@ -136,7 +136,7 @@ def test_service_normalization_cannot_hide_a_coordinated_physical_product(enviro
     jobs, tools, _ = environment
     done = AgentLoop(jobs).run(start(environment, pair(environment, '打印制作服务及鼠标'),
                                      use_model=False)['id'], tools)
-    assert done['state'] == 'needs_input' and done['preview'] is None and done['models'] == 0
+    assert done['state'] == 'ready' and done['preview'] is None and done['models'] == 0
     item = tools.store.get(done['item_ids'][0])
     assert [row['name'] for row in item['agent_content']['goods']] == ['打印制作费', '鼠标']
     assert not item['verified']
@@ -408,7 +408,7 @@ def test_script_rejects_known_mixed_categories_before_any_model(
     monkeypatch.setattr(classifier, 'ask_jev', lambda *a: pytest.fail('known mixed basket needs a split decision'))
     monkeypatch.setattr(GlmInvoiceAI, '_request', lambda *a, **k: pytest.fail('complete original text'))
     done = AgentLoop(jobs).run(start(environment, pair(environment, goods), use_model=True)['id'], tools)
-    assert done['state'] == 'needs_input' and done['models'] == 0 and done['preview'] is None
+    assert done['state'] == 'ready' and done['models'] == 0 and done['preview'] is None
     item = tools.store.get(done['item_ids'][0])
     assert len(item['agent_content']['goods']) == 2 and not item['verified']
 

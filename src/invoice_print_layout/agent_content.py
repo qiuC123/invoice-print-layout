@@ -20,7 +20,7 @@ from invoice_print_layout.intake_queue import IntakeQueue
 from invoice_print_layout.report_types import infer_report_choice, validate_report_choice
 from invoice_print_layout.workbench import now
 
-GOODS_RULES_VERSION = 'goods-v8-grounded-wraps-and-order-scene'
+GOODS_RULES_VERSION = 'goods-v9-native-ride-pairs'
 PLACEHOLDERS = {'', '待核对购买凭证', '待核对费用', '日用百货', '超市服务', '商品', '商品不明', '其他'}
 EXTRA_GOODS = ('鼠标垫', '鼠标', '键盘', '显示器', '笔记本电脑', '台式电脑', '电脑', '打印机', '测试耗材',
                '办公耗材', '工具', '雨衣', '矿泉水', '饮用水', '纯净水', '奶茶', '茶饮料', '盒饭')
@@ -207,7 +207,7 @@ def goods_from_text(text: str, fields: dict[str, Any]) -> list[dict[str, str]]:
         if label == '铁路退票费':
             quote = next(row for row in rows if '退票费' in row) + '\n' + quote
         candidates.append((label, quote))
-    if re.search(r'(?:滴滴出行|网约车|出租车).{0,6}行程单', compact):
+    if re.search(r'(?:滴滴出行|曹操出行|享道出行|网约车|出租车|打车).{0,6}行程单', compact):
         candidates.append(('网约车客运', next(row for row in rows if '行程单' in row)))
     if '顺丰电子发票' in compact and '运单明细' in compact:
         candidates.append(('顺丰快递费', next(row for row in rows if '顺丰电子发票' in row)))
@@ -425,6 +425,22 @@ class ContentTools:
             if quote:
                 product['source_quote'] = quote
         if checked['status'] == 'needs_input':
+            # A trip is a dedicated ticket, not a second invoice goods table.
+            from invoice_print_layout.agent_transport import pair_status
+            invoices = [e for e in sources if e.get('role') == 'invoice']
+            trips = [e for e in sources if e.get('role') == 'trip']
+            if len(sources) == 2 and len(invoices) == len(trips) == 1 and pair_status(invoices[0], trips[0]) == 'supported':
+                parts = []
+                for fact in facts:
+                    goods = [g for g in checked_goods if g['material_id'] == fact['id']]
+                    part = inspect_product_rules(goods, [fact], {**categories, '客运服务': '打车', '客运服务费': '打车', '出租汽车客运': '打车'})
+                    if part['status'] == 'needs_input':
+                        part = self._special_ticket_check({'goods': goods}, [fact]) or part
+                    parts.append(part)
+                if all(p['status'] == 'exact' and p['category'] == '打车' and p['coverage_complete'] for p in parts):
+                    return {**parts[0], 'products': [g for p in parts for g in p['products']],
+                            'goods_text': '\n'.join(dict.fromkeys(g['name'] for p in parts for g in p['products'])),
+                            'reason': '同一出行服务方的完整发票与行程单，客运商品按同笔费用核对'}
             special = self._special_ticket_check(state, facts)
             if special:
                 return special
@@ -492,7 +508,7 @@ class ContentTools:
             expected: set[str] = set()
             if '铁路电子客票' in compact and '电子发票' in compact:
                 expected = {'铁路退票费' if '退票费' in compact else '高铁车票'}
-            elif re.search(r'(?:滴滴出行|网约车|出租车).{0,6}行程单', compact):
+            elif re.search(r'(?:滴滴出行|曹操出行|享道出行|网约车|出租车|打车).{0,6}行程单', compact):
                 expected = {'网约车客运', '出租汽车客运'}
             elif '顺丰电子发票' in compact and '运单明细' in compact:
                 expected = {'顺丰快递费'}

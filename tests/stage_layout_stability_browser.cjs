@@ -62,9 +62,20 @@ async function run(pw) {
       assert.equal(long.outerOverflow, !stable, 'Only the old layout may scroll the entire long review page');
       const rootDelta = Math.abs(short.main.width - long.main.width);
       if (stable) {
+        await page.setViewportSize({width:2560,height:1080});
+        const wide=await page.evaluate(()=>{
+          const main=document.querySelector('main'),padding=parseFloat(getComputedStyle(main).paddingRight);
+          return {padding,edges:Object.fromEntries(['header','.metrics','.toolbar','.workspace'].map(selector=>[selector,innerWidth-document.querySelector(selector).getBoundingClientRect().right]))};
+        });
+        for(const [selector,gap] of Object.entries(wide.edges))assert.ok(gap<=wide.padding+2,selector+' leaves unused wide-screen space: '+JSON.stringify(wide));
+        await page.setViewportSize({width:1280,height:1100});
         compare(short, long); compare(short, await selectStage('submitted')); await selectStage('review');
         assert.equal(long.listOverflow, true);
         assert.deepEqual(await page.locator('#workbenchActions button:visible').allTextContents(), ['人员金额', '材料合成台', '报销预览']);
+        assert.equal(await page.locator('#workbenchMore,.toolbar>.actions').count(),0);
+        assert.equal(await page.locator('#selectionTools #moveProject').count(),1);assert.equal(await page.locator('#moveProject').isVisible(),false,'project scope hides moving to another project');
+        const centers=await page.locator('#workbenchActions button:visible').evaluateAll(nodes=>nodes.map(node=>{const r=node.getBoundingClientRect();return r.y+r.height/2;}));
+        assert.ok(centers.every(value=>Math.abs(value-centers[0])<1),'toolbar actions are vertically centered');
         assert.equal(long.boxes['#workbenchActions'].x + long.boxes['#workbenchActions'].width, long.boxes['.toolbar'].x + long.boxes['.toolbar'].width);
         assert.equal(await page.getByRole('button', {name: '合并勾选的重复费用', exact: true}).count(), 0);
         assert.equal(await page.locator('#synthesisSelectionTools,[data-view=synthesis]').count(), 0);

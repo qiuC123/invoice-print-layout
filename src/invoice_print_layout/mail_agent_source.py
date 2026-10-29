@@ -11,6 +11,7 @@ import re
 from datetime import date
 from email import policy
 from email.parser import BytesParser
+from email.utils import parsedate_to_datetime
 from pathlib import Path
 from typing import Any, cast
 
@@ -78,8 +79,14 @@ def _allowed_link(url: str) -> bool:
 def _message_files(raw: bytes, uid: int) -> dict[str, Any]:
     message = BytesParser(policy=policy.default).parsebytes(raw)
     subject = str(message.get('Subject', ''))[:500]
+    sent_date = ''
+    try:
+        sent_date = parsedate_to_datetime(str(message.get('Date', ''))).astimezone().date().isoformat()
+    except (ValueError, TypeError, OverflowError):
+        pass
     result: dict[str, Any] = {
         'uid': uid, 'subject': subject, 'sender': str(message.get('From', ''))[:500],
+        'sent_date': sent_date,
         'text': '', 'message_id': str(message.get('Message-ID', ''))[:500], 'files': [], 'issues': [],
     }
     issues: list[str] = result['issues']

@@ -9,7 +9,6 @@ import re
 import uuid
 from dataclasses import dataclass
 from functools import lru_cache
-from datetime import date
 from pathlib import Path
 from typing import Any
 
@@ -21,6 +20,7 @@ from invoice_print_layout.reliability import save_json
 from invoice_print_layout.storage import read_history
 from invoice_print_layout.workbench import ExpenseStore, now
 from invoice_print_layout.file_cache import FileSignature, file_signature
+from invoice_print_layout.mail_project_dates import trip_date_span
 
 
 @dataclass
@@ -64,13 +64,7 @@ def _parse_material(path: Path) -> Material:
     # Re-exporting a trip sheet may change its application date, not the trips.
     text = re.sub(r'申请日期[:：]?\d{4}-\d{2}-\d{2}', '', text)
     key = 'trip:' + hashlib.sha256(text.encode()).hexdigest()
-    match = re.search(r'行程起止日期[:：]?(\d{4}-\d{2}-\d{2})至(\d{4}-\d{2}-\d{2})', text)
-    start, end = match.groups() if match else ('', '')
-    if start:
-        date.fromisoformat(start)
-        date.fromisoformat(end)
-        if start > end:
-            raise PdfInspectionError('行程日期范围无效')
+    start, end = trip_date_span(text)
     return Material(document, key, start, end)
 
 

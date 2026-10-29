@@ -2,6 +2,7 @@ from dataclasses import replace
 from datetime import date, datetime, timedelta
 from pathlib import Path
 import itertools
+import json
 
 _counter = itertools.count()
 from concurrent.futures import ThreadPoolExecutor
@@ -67,7 +68,21 @@ def test_late_start_and_collector_failure_are_distinct(tmp_path):
     out = store.tick(clock(10))
     assert [a['stage'] for a in out] == ['escalate']
     assert out[0]['payload']['reason'] == 'collector_unavailable'
+    assert out[0]['payload']['channel'] == 'workbench'
     assert task(store)['quantity'] is None
+
+
+def test_new_local_reminders_preserve_existing_payloads_on_restart(tmp_path):
+    store, _ = setup(tmp_path)
+    original = store.tick(clock(10))[0]
+    payload = {**original['payload'], 'channel': 'retired-channel'}
+    with store.connect() as db:
+        db.execute('UPDATE outbox SET payload=? WHERE id=?', (json.dumps(payload), original['id']))
+    store = LogisticsStore(store.path)
+    assert store.tick(clock(10, 1))[0]['payload'] == payload
+    store.receive(message('late', '21份', occurred_at=clock(10, 5)))
+    review = next(a for a in store.snapshot()['outbox'] if a['stage'] == 'review')
+    assert review['payload']['channel'] == 'workbench'
 
 
 @pytest.mark.parametrize('offset,healthy', [(-121, True), (1, True), (0, False)])

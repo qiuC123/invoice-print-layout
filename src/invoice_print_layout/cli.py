@@ -6,13 +6,6 @@ from typing import Annotated, NoReturn
 
 import typer
 
-from invoice_print_layout.bot import (
-    BotError,
-    configure_bot,
-    new_pairing_code,
-    read_bot_secret,
-    read_bot_settings,
-)
 from invoice_print_layout.mail163 import (
     MailImportError,
     configure_mail,
@@ -33,11 +26,9 @@ app = typer.Typer(
     help="在本机接收、整理网约车票据并生成 A4 打印包。",
 )
 mail_app = typer.Typer(help="配置 163 邮箱并只读导入发票 PDF 附件。")
-bot_app = typer.Typer(help="配置并运行飞书票据机器人。")
 daily_app = typer.Typer(help="每日施工日报：限定采集、证据核验、HTML/PPT与原生检查。")
 settlement_app = typer.Typer(help="结算照片核对草稿：已确认材料、原模板表格和可追溯验收。")
 app.add_typer(mail_app, name="mail")
-app.add_typer(bot_app, name="bot")
 app.add_typer(daily_app, name="daily")
 app.add_typer(settlement_app, name="settlement")
 
@@ -348,75 +339,6 @@ def mail_import_command(
         f"邮件导入完成：新增 {summary.downloaded}，重复 {summary.duplicates}，"
         f"无相关附件 {summary.ignored}，无效 PDF {summary.invalid_pdf}"
     )
-
-
-@bot_app.command("setup")
-def bot_setup_command(
-    workspace: Annotated[
-        Path,
-        typer.Option("--workspace", "-w", help="票据工作区目录。"),
-    ] = Path("workspace"),
-) -> None:
-    """保存飞书自建应用凭据；App Secret 进入 Windows 凭据管理器。"""
-    paths = ensure_workspace(workspace)
-    app_id = typer.prompt("请输入飞书 App ID").strip()
-    app_secret = typer.prompt(
-        "请输入飞书 App Secret",
-        hide_input=True,
-        confirmation_prompt="请再次输入飞书 App Secret",
-    )
-    try:
-        settings = configure_bot(paths.root / "feishu_bot.toml", app_id, app_secret)
-    except BotError as exc:
-        _abort(str(exc))
-    binding = "已保留原有绑定" if settings.owner_open_id else "尚未绑定使用者"
-    typer.echo(f"飞书机器人已配置：{settings.app_id}；{binding}")
-
-
-@bot_app.command("run")
-def bot_run_command(
-    workspace: Annotated[
-        Path,
-        typer.Option("--workspace", "-w", help="票据工作区目录。"),
-    ] = Path("workspace"),
-    debug: Annotated[
-        bool,
-        typer.Option("--debug/--no-debug", help="显示飞书 SDK 调试日志。"),
-    ] = False,
-) -> None:
-    """通过长连接运行飞书机器人；按 Ctrl+C 停止。"""
-    paths = ensure_workspace(workspace)
-    config_path = paths.root / "feishu_bot.toml"
-    try:
-        settings = read_bot_settings(config_path)
-        app_secret = read_bot_secret(settings.app_id)
-    except BotError as exc:
-        _abort(str(exc))
-
-    pairing_code = None if settings.owner_open_id else new_pairing_code()
-    if pairing_code:
-        typer.echo(f"首次绑定码：{pairing_code}")
-        typer.echo(f"请在飞书中给机器人发送：绑定 {pairing_code}")
-    else:
-        typer.echo("机器人已绑定，仅接受已绑定使用者的单聊消息。")
-    typer.echo("飞书机器人正在连接；按 Ctrl+C 停止。")
-    try:
-        from invoice_print_layout.feishu_bot import run_feishu_bot
-
-        run_feishu_bot(
-            paths.root,
-            config_path,
-            settings,
-            app_secret,
-            pairing_code,
-            debug,
-        )
-    except ImportError as exc:
-        _abort(f"缺少飞书 SDK，请重新安装项目：{exc}")
-    except RuntimeError as exc:
-        _abort(str(exc))
-    except KeyboardInterrupt:
-        typer.echo("飞书机器人已停止。")
 
 
 @app.command("process")

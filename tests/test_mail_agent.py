@@ -93,7 +93,7 @@ def test_unique_project_originals_then_single_job_and_duplicate_poll(env: Any) -
     visible = service.status()['messages'][0]
     assert visible['project_id'] == project and visible['status'] == 'queued'
     job = agent.jobs.get(visible['job_id'])
-    assert job['use_model'] is True and len(job['material_ids']) == 1
+    assert job['use_model'] is False and len(job['material_ids']) == 1
     saved = service._message(visible['id'])
     original = Path(saved['files'][0]['path'])
     assert original.read_bytes() == remote['files'][0]['payload']
@@ -534,3 +534,23 @@ def test_async_kick_never_blocks_http_and_close_does_not_half_commit_a_message(e
     for record in service._messages():
         saved = record['files'][0]
         assert hashlib.sha256(Path(saved['path']).read_bytes()).hexdigest() == saved['digest']
+
+
+def test_legacy_waiting_mail_follows_startup_completion_without_new_expenses(env: Any) -> None:
+    from invoice_print_layout.agent_jobs import AgentService
+    service, store, agent, project, _, _, results, _ = env
+    results.append(message(1))
+    enable(service)
+    run(service)
+    original = service.status()['messages'][0]
+    assert original['job_id']
+    job = agent.jobs.get(original['job_id'])
+    agent.jobs.stop(job['id'], 'needs_input', '合成对应关系待确认')
+    agent.jobs.update(job['id'], question={'type':'material_relation', 'text':'合成对应关系待确认',
+                                         'material_ids':job['material_ids']})
+    startup = AgentService(store)
+    visible = service.status()['messages'][0]
+    assert visible['status'] == 'ready' and visible['job_id'] == original['job_id']
+    assert visible['material_ids'] == original['material_ids'] and not store.list_items()
+    assert startup.jobs.get(job['id'])['remaining_material_count'] == 1
+    startup.close()

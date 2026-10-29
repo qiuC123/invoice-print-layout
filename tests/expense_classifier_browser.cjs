@@ -28,6 +28,7 @@ const reportTypes = [{code: 'other', label: '其他', names: [], editable_name: 
       const request = route.request(), url = new URL(request.url());
       const json = value => route.fulfill({contentType: 'application/json', body: JSON.stringify(value)});
       if (request.method() === 'POST') posts.push({path: url.pathname, body: request.postDataJSON()});
+      if (url.pathname === '/api/runtime') return json({started_at:'synthetic-start',build_id:'synthetic-build'});
       if (url.pathname === '/api/state') return json({app_mode: 'invoice', logistics_available: false,
         items, projects: [{id:'p1',name:'测试项目'}], inbox: [], categories: ['材料采购', '酒店', '其他'], roles: {invoice: '发票'},
         stages: {draft: '待提交'}, token: 'synthetic', category_suggestion_ready: available,

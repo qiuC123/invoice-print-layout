@@ -20,6 +20,8 @@ from invoice_print_layout.agent_jobs import AgentService, encoded
 from invoice_print_layout.expense_projects import ExpenseProjects
 from invoice_print_layout.intake_queue import IntakeQueue
 from invoice_print_layout.mail163 import Mail163Settings, read_auth_code, read_mail_settings
+from invoice_print_layout.organize_settings import OrganizeSettings
+from invoice_print_layout.glm_invoice_ai import GlmInvoiceAI
 from invoice_print_layout.workbench import ExpenseStore
 
 Fetcher = Callable[..., dict[str, Any]]
@@ -54,6 +56,7 @@ class MailAgentService:
         self.store = store
         self.agent = agent
         self.config_path = store.root / 'mail-agent.json'
+        self.organize = OrganizeSettings(store.root)
         self.originals = store.root / '邮件Agent原件'
         self.originals.mkdir(exist_ok=True)
         self._fetcher = fetcher
@@ -79,7 +82,7 @@ class MailAgentService:
     def _config(self) -> dict[str, Any]:
         defaults: dict[str, Any] = {
             'enabled': False, 'interval_seconds': 120, 'since': _today(),
-            'approved_since': _today(), 'use_model': False, 'default_project_id': '',
+            'approved_since': _today(), 'use_model': self.organize.read()['use_model'], 'default_project_id': '',
             'default_project_account': '',
         }
         if not self.config_path.exists():
@@ -89,6 +92,7 @@ class MailAgentService:
             if not isinstance(value, dict):
                 raise ValueError('invalid config')
             defaults.update(value)
+            defaults['use_model'] = self.organize.read()['use_model']
             self._validate_config(defaults)
             return defaults
         except (OSError, ValueError, TypeError):
@@ -131,7 +135,9 @@ class MailAgentService:
             projects = ExpenseProjects(self.store).list()
             if value['default_project_id'] and not any(p['id'] == value['default_project_id'] for p in projects):
                 raise ValueError('请选择有效默认项目，或留空自动判断')
-            _atomic(self.config_path, encoded(value).encode('utf-8'))
+            if 'use_model' in body:
+                self.organize.update({'use_model': body['use_model']})
+            _atomic(self.config_path, encoded({k: v for k, v in value.items() if k != 'use_model'}).encode('utf-8'))
             self._force = bool(value['enabled'])
         self.kick()
         return self.status()
@@ -229,8 +235,9 @@ class MailAgentService:
                 except ValueError:
                     state = 'attention'
             visible.append({k: message.get(k, '') for k in (
-                'id', 'subject', 'sender', 'issues', 'project_id', 'job_id', 'received_at')} |
+                'id', 'subject', 'sender', 'issues', 'project_id', 'job_id', 'received_at', 'sent_date', 'route_reason')} |
                            {'status': state, 'material_count': len(message.get('files', [])),
+                            'route_dates': message.get('route_dates', []),
                             'material_ids': message.get('material_ids', [])})
         unresolved = {'unassigned', 'attention', 'waiting_agent', 'queued', 'running', 'needs_input', 'failed', 'stopped'}
         unresolved_count = sum(m['status'] in unresolved for m in visible)
@@ -239,7 +246,7 @@ class MailAgentService:
         visible.sort(key=lambda m: m['status'] not in unresolved)
         has_more = len(visible) > 30
         visible = visible[:30]
-        return {k: config[k] for k in ('enabled', 'interval_seconds', 'since', 'use_model', 'default_project_id')} | {
+        return {k: config[k] for k in ('enabled', 'interval_seconds', 'since', 'approved_since', 'use_model', 'default_project_id')} | {
             'address': address, 'folder': folder,
             'last_checked_at': account.get('last_checked_at'),
             'last_error': error or account.get('last_error', ''),
@@ -338,12 +345,21 @@ class MailAgentService:
                 # Each message has its own durable retry counter; no raw transport/model exception is exposed.
                 pass
 
-    def _route(self, text: str, config: dict[str, Any]) -> str:
+    def _route_details(self, text: str, config: dict[str, Any], dates: list[str]) -> tuple[str, str]:
         projects = ExpenseProjects(self.store).list()
-        if config['default_project_id']:
-            return next((p['id'] for p in projects if p['id'] == config['default_project_id']), '')
         found = [p['id'] for p in projects if p['name'] and p['name'] in text]
-        return found[0] if len(found) == 1 else ''
+        if len(found) == 1:
+            return found[0], 'name'
+        candidates = [p['id'] for p in projects if dates and p.get('start_date') and
+                      p.get('reimbursement_status') != 'reimbursed' and
+                      all(p['start_date'] <= day and (not p.get('end_date') or day <= p['end_date']) for day in dates)]
+        if len(candidates) == 1:
+            return candidates[0], 'date'
+        default = next((p['id'] for p in projects if p['id'] == config.get('default_project_id')), '')
+        return default, 'default' if default else ''
+
+    def _route(self, text: str, config: dict[str, Any], dates: list[str] | None = None) -> str:
+        return self._route_details(text, config, dates or [])[0]
 
     def _persist_message(self, account: dict[str, Any], remote: dict[str, Any], config: dict[str, Any]) -> None:
         key = _hash([account['id'], account['uidvalidity'], remote['uid']])
@@ -372,11 +388,21 @@ class MailAgentService:
                               'source': str(attachment.get('source', 'attachment'))[:1000]})
         subject = str(remote.get('subject', ''))[:500]
         text = str(remote.get('text', ''))[:24000]
-        project = self._route(subject + '\n' + text, config)
+        from invoice_print_layout.mail_project_dates import attachment_dates
+        sent_date = str(remote.get('sent_date') or '')
+        try:
+            if date.fromisoformat(sent_date).isoformat() != sent_date:
+                sent_date = ''
+        except ValueError:
+            sent_date = ''
+        dates = sorted({day for file in files for day in attachment_dates(Path(file['path']))})
+        dates = dates or ([sent_date] if sent_date else [])
+        project, reason = self._route_details(subject + '\n' + text, config, dates)
         message = {'id': key, 'account_id': account['id'], 'uidvalidity': account['uidvalidity'],
                    'uid': remote['uid'], 'subject': subject, 'sender': str(remote.get('sender', ''))[:500],
                    'text': text, 'message_id': str(remote.get('message_id', ''))[:1000],
                    'received_at': time.time(), 'files': files, 'issues': [str(i)[:500] for i in remote.get('issues', [])],
+                   'sent_date': sent_date, 'route_dates': dates, 'route_reason': reason,
                    'source_issues': [str(i)[:500] for i in remote.get('issues', [])],
                    'project_id': project, 'job_id': '', 'material_ids': [], 'dispatch_attempts': 0,
                    'retry_at': 0.0, 'status': ('attention' if remote.get('issues') else
@@ -385,6 +411,16 @@ class MailAgentService:
             db.execute('INSERT OR IGNORE INTO mail_agent_messages VALUES (?,?,?,?,?)',
                        (key, account['id'], account['uidvalidity'], remote['uid'], encoded(message)))
 
+    def _assign_message(self, message: dict[str, Any], project_id: str, **changes: Any) -> None:
+        if message['account_id'] != self._account_key(self._settings()):
+            raise ValueError('邮件属于另一邮箱，请切回对应邮箱操作')
+        if (message.get('job_id') or message.get('material_ids') or message['status'] != 'unassigned' or
+                message.get('project_id')):
+            raise ValueError('邮件已开始整理，不能直接变更项目')
+        self._message_update(message['id'], project_id=project_id, status='waiting_agent',
+                             dispatch_attempts=0, retry_at=0.0, **changes)
+        self._dispatch_at = 0.0
+
     def assign(self, message_key: str, project_id: str) -> dict[str, Any]:
         if not isinstance(message_key, str) or not isinstance(project_id, str):
             raise ValueError('邮件或项目无效')
@@ -392,15 +428,32 @@ class MailAgentService:
             raise ValueError('请选择有效项目')
         with self._lock:
             message = self._message(message_key)
-            if message['account_id'] != self._account_key(self._settings()):
-                raise ValueError('邮件属于另一邮箱，请切回对应邮箱操作')
-            if (message.get('job_id') or message.get('material_ids') or message['status'] != 'unassigned' or
-                    message.get('project_id')):
-                raise ValueError('邮件已开始整理，不能直接变更项目')
-            self._message_update(message_key, project_id=project_id, status='waiting_agent', dispatch_attempts=0, retry_at=0.0)
-            self._dispatch_at = 0.0
+            self._assign_message(message, project_id)
         self.kick()
         return self.status()
+
+    def reroute_unassigned(self) -> int:
+        count = 0
+        with self._lock:
+            try:
+                settings = self._settings()
+            except Exception:
+                return 0
+            config = self._scoped_config(self._config(), settings)
+            for message in self._messages(self._account_key(settings)):
+                if (message['status'] != 'unassigned' or message.get('job_id') or
+                        message.get('material_ids') or message.get('project_id')):
+                    continue
+                dates = message.get('route_dates') or ([message['sent_date']] if message.get('sent_date') else [])
+                if not dates:
+                    continue
+                project, reason = self._route_details('', config, dates)
+                if project:
+                    self._assign_message(message, project, route_reason=reason)
+                    count += 1
+        if count:
+            self.kick()
+        return count
 
     def _dispatch_pending(self, account_key: str, config: dict[str, Any]) -> None:
         for message in self._messages(account_key):
@@ -473,7 +526,8 @@ class MailAgentService:
             else:
                 return  # Wait for the existing project task; never spin up a competing model task.
         else:
-            job = self.agent.jobs.create(message['project_id'], ids, request, use_model=config['use_model'])
+            job = self.agent.jobs.create(message['project_id'], ids, request, use_model=self.organize.effective_model(
+                True, GlmInvoiceAI(self.store.root).public_status()['available']))
         self._message_update(message['id'], job_id=job['id'], status='processing')
         self.agent.kick()
 

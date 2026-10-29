@@ -38,7 +38,7 @@ def test_automatic_cache_cannot_release_food_as_materials(environment: Any, monk
     remember(environment, '鼠标蛋糕', '材料采购')
     no_model(monkeypatch)
     done = AgentLoop(jobs).run(start(environment, pair(environment, '鼠标蛋糕'))['id'], tools)
-    assert done['state'] == 'needs_input' and done['models'] == 0 and not done.get('preview')
+    assert done['state'] == 'ready' and done['models'] == 0 and not done.get('preview')
     item = tools.store.get(done['item_ids'][0])
     assert item['agent_content']['decision']['category'] is None
     assert item['agent_content']['decision']['source'] != 'experience'
@@ -84,7 +84,7 @@ def test_a_cache_cannot_supply_an_uncovered_source_product(environment: Any, mon
     remember(environment, '鼠标', '材料采购')
     no_model(monkeypatch)
     done = AgentLoop(jobs).run(start(environment, pair(environment, '鼠标\n午餐'))['id'], tools)
-    assert done['state'] == 'needs_input' and done['models'] == 0 and not done.get('preview')
+    assert done['state'] == 'ready' and done['models'] == 0 and not done.get('preview')
     item = tools.store.get(done['item_ids'][0])
     assert not item['agent_content']['product_check']['coverage_complete']
     assert item['agent_content']['decision']['category'] is None
@@ -107,5 +107,5 @@ def test_unread_pdf_pages_cannot_be_classified_from_only_the_first_ten(environme
     payment = material(tools, project, 'payment', '17', 'eleven-pages-payment')
     no_model(monkeypatch)
     done = AgentLoop(jobs).run(start(environment, [receipt, payment])['id'], tools)
-    assert done['state'] == 'needs_input' and done['models'] == 0 and not done.get('preview')
+    assert done['state'] == 'ready' and done['models'] == 0 and not done.get('preview')
     assert all(not tools.store.get(ident)['verified'] for ident in done['item_ids'])

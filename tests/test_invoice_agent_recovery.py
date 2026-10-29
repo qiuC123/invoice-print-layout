@@ -3,6 +3,7 @@ from typing import Any
 
 import pytest
 
+from tests.legacy_agent_fixture import review_question
 from invoice_print_layout.agent_jobs import AgentLoop, Jobs
 from tests.test_invoice_agent import Scripted, call, environment, material, start
 
@@ -29,7 +30,7 @@ def test_rejected_investigation_can_reach_real_handoff(recovery_environment: Any
     job = start(recovery_environment, [entry], use_model=True)
     planner = Scripted({'tool': tool, 'arguments': args}, call('ask_user'))
     result = AgentLoop(jobs).run(job['id'], tools, planner)
-    assert result['state'] == 'needs_input' and result['question']['text']
+    assert result['state'] == 'ready' and review_question(result)['text']
     assert result['models'] == 2 and result['tools'] <= 5
     assert any(step['result'].get('tool_error') for step in result['last_results'])
     assert not tools.store.list_items()
@@ -55,10 +56,10 @@ def test_exhausted_model_budget_keeps_specific_question_without_another_model(re
                 limits={'models': 1, 'tools': 8, 'seconds': 30, 'stalls': 2})
     planner = Scripted(call('read_material', id=entry['id']))
     result = AgentLoop(jobs).run(job['id'], tools, planner)
-    assert result['state'] == 'stopped' and result['models'] == planner.calls == 1
+    assert result['state'] == 'ready' and result['models'] == planner.calls == 1
     assert result['tools'] <= result['limits']['tools']
-    assert result['question']['budget_exhausted'] and result['question']['choices'] == []
-    assert '付款' in result['question']['text'] and '人工工作台' in result['message']
+    assert result['model_budget_exhausted'] and result['question'] is None
+    assert '付款' in review_question(result)['text'] and result['remaining_material_count'] == 1
     assert not tools.store.list_items()
     with pytest.raises(ValueError):
         jobs.answer(job['id'], 'cannot-reset-the-budget')

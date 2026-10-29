@@ -318,6 +318,7 @@
       ${pool === 'voucher' && card.key?.startsWith('e:') ? '<small>已有费用 · 补入／合并</small>' : ''}
       ${card.payment_not_required ? '<small>高铁发票无需支付截图，可直接确认创建。</small>' : ''}
       ${recognitionMarkup(card)}
+      ${card.agent_review_reason ? `<small class="matching-card-issues">自动整理未能确定组合：${escape(card.agent_review_reason)}</small>` : ''}
       ${card.ai_analysis?.status === 'failed' && card.ai_analysis?.message ? `<small class="matching-card-issues">${escape(card.ai_analysis.message)}</small>` : ''}</button>${candidate ? `<div class="matching-candidate"><p>对应已有费用：${escape(candidate.title || '已有费用')}</p><small>${escape(candidate.reason || '补充材料不计金额')}</small><button type="button" data-supplement-candidate="${escape(queueId(card))}">补入已有组合</button></div>` : ''}${card.key?.startsWith('q:') && !isQr(card) ? `<button type="button" class="matching-edit-card" data-classify-id="${escape(queueId(card))}">${pool === 'support' ? '确认用途' : '确认金额／用途'}</button>${card.ai_analysis?.status === 'failed' ? `<button type="button" class="matching-edit-card" data-prepare-id="${escape(queueId(card))}">重新识别</button>` : ''}` : ''}${card.key?.startsWith('e:') && card.can_edit === true ? `<button type="button" class="matching-edit-card" data-edit-expense="${escape(card.key)}">确认金额／用途</button>` : ''}${archiveButton(card)}</article>`;
   }
   function drawPools() {
@@ -636,7 +637,7 @@
     if (fresh.voucher_keys.some(key => !board.vouchers.some(card => card.key === key)) || fresh.payment_ids.some(id => !board.payments.some(card => card.id === id))) {
       message('这组建议的材料已变化，请刷新后重新选择。', true); return false;
     }
-    sourceSuggestion = fresh; voucherKeys = new Set(fresh.voucher_keys); paymentIds = new Set(fresh.payment_ids); supportIds.clear();
+    sourceSuggestion = fresh; voucherKeys = new Set(fresh.voucher_keys); paymentIds = new Set(fresh.payment_ids); supportIds = new Set(fresh.support_ids || []);
     savedItem = null; needsSelectionConfirmation = false;
     updatePoolSelection(); renderSelection();
     dialog.querySelector('.matching-preview').scrollTop = 0;

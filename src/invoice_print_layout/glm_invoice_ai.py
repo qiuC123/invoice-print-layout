@@ -7,6 +7,7 @@ response, credential or cloud copy is written by this adapter.
 from __future__ import annotations
 
 import base64
+from contextlib import nullcontext
 from datetime import date, time
 from decimal import Decimal, InvalidOperation
 import io
@@ -14,7 +15,7 @@ import json
 import os
 from pathlib import Path
 import re
-import shlex
+import threading
 from typing import Any, NoReturn
 import urllib.request
 from urllib.parse import urlsplit
@@ -203,70 +204,79 @@ def _usable_key(value: str) -> bool:
     return bool(re.fullmatch(r'[A-Za-z0-9_.-]{8,4096}', value))
 
 
+class AIResponse(dict[str, Any]):
+    """Keep request metadata with its result without changing the JSON schema."""
+
+    def __init__(self, answer: dict[str, Any], model: str, served_model: str) -> None:
+        super().__init__(answer)
+        self.model = model
+        self.served_model = served_model
+
+
 class GlmInvoiceAI:
     def __init__(self, root: Path) -> None:
+        self._root: Path | None = root
+        self._stamp: Any = object()
+        self._lock = threading.RLock()
+        self._refresh()
+
+    def _refresh(self) -> None:
+        root = getattr(self, '_root', None)
+        if root is None:
+            return
+        with self._lock:
+            try:
+                stamp = tuple((p.stat().st_mtime_ns, p.stat().st_size) if p.exists() else None
+                              for p in (root / 'invoice-ai.json', root / 'invoice-ai-keys.json'))
+            except OSError:
+                stamp = None
+            if stamp != self._stamp:
+                self._reload()
+                self._stamp = stamp
+
+    @property
+    def enabled(self) -> bool:
+        with getattr(self, '_lock', nullcontext()):
+            self._refresh()
+            return self._enabled
+
+    @enabled.setter
+    def enabled(self, value: bool) -> None:
+        self._enabled = value
+
+    @property
+    def model(self) -> str:
+        with getattr(self, '_lock', nullcontext()):
+            self._refresh()
+            # Disabled clients do not resolve credentials to validate display metadata.
+            return self._model if self._enabled else ''
+
+    @model.setter
+    def model(self, value: str) -> None:
+        self._model = value
+
+    def _reload(self) -> None:
+        from invoice_print_layout.invoice_ai_settings import read_config, resolve_key, endpoint
         self.enabled = False
         self.provider = 'glm'
+        self.kind = 'openai'
         self.model = MODEL
         self._endpoint = ENDPOINT
         self._key = ''
         self._message = 'AI模型未启用，继续本地识别和手动处理。'
-        path = root / 'invoice-ai.json'
         try:
-            if not path.is_file():
-                return
-            if path.stat().st_size > MAX_TEXT_CHARS:
-                raise ValueError
-            config = _json_object(path.read_text(encoding='utf-8-sig'))
-            if type(config.get('enabled')) is not bool:
-                raise ValueError
+            assert self._root is not None
+            config = read_config(self._root)
             self.enabled = config['enabled']
-            provider = config.get('provider', 'glm')
-            if provider not in ('glm', 'workbuddy'):
-                raise ValueError
-            model = config.get('model', MODEL if provider == 'glm' else '')
-            if (not isinstance(model, str) or not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_./:-]{0,127}', model)
-                    or (provider == 'workbuddy' and not re.fullmatch(r'workbuddy/[A-Za-z0-9][A-Za-z0-9_.:-]*', model))):
-                raise ValueError
-            self.provider, self.model = provider, model
-            if provider == 'workbuddy':
-                base = config.get('base_url', 'http://127.0.0.1:3425/v1')
-                if (not isinstance(base, str) or not re.fullmatch(
-                        r'http://(?:127\.0\.0\.1|localhost)(?::[0-9]{1,5})?(?:/v1)?/?', base)):
-                    raise ValueError
-                if urlsplit(base).port == 0:
-                    raise ValueError
-                self._endpoint = base.rstrip('/') + ('' if urlsplit(base).path.rstrip('/') == '/v1' else '/v1') + '/chat/completions'
-            if not self.enabled:
+            row = next(r for r in config['providers'] if r['id'] == config['active'])
+            self.provider, self.kind, self.model = row['id'], row['kind'], row['model']
+            self._endpoint = endpoint(row)
+            if not self._enabled:
                 return
-            if provider == 'workbuddy':
-                self._key = 'magpie'
-                self._message = 'AI模型已启用，识别与配对结果仍需人工核对。'
-                return
-            key = os.environ.get('GLM_API_KEY', '').strip()
-            if key and not _usable_key(key):
+            key, _ = resolve_key(self._root, row)
+            if key and key in self._model:
+                self.model = MODEL
                 raise ValueError
-            if not key:
-                filename = config.get('secret_env_file', '')
-                if not isinstance(filename, str):
-                    raise ValueError
-                if filename:
-                    secret_path = Path(filename)
-                    if not secret_path.is_absolute():
-                        secret_path = root / secret_path
-                    if secret_path.stat().st_size > 1024 * 1024:
-                        raise ValueError
-                    keys = set()
-                    for line in secret_path.read_text(encoding='utf-8-sig').splitlines():
-                        match = re.fullmatch(r'\s*(?:export\s+)?GLM_API_KEY\s*=\s*(.*?)\s*', line)
-                        if match:
-                            tokens = shlex.split(match[1], comments=True, posix=True)
-                            if len(tokens) != 1 or not _usable_key(tokens[0]):
-                                raise ValueError
-                            keys.add(tokens[0])
-                    if len(keys) > 1:
-                        raise ValueError
-                    key = next(iter(keys), '')
             self._key = key
             self._message = ('AI模型已启用，识别与配对结果仍需人工核对。' if key else
                              'AI模型已启用但凭据未配置，材料保留供手动处理。')
@@ -275,46 +285,29 @@ class GlmInvoiceAI:
             self._message = 'AI模型配置不可用，材料保留供手动处理。'
 
     def public_status(self) -> dict[str, Any]:
-        return {'enabled': self.enabled, 'available': bool(self.enabled and self._key),
-                'model': self.model, 'message': self._message}
+        with getattr(self, '_lock', nullcontext()):
+            self._refresh()
+            return {'enabled': self._enabled, 'available': bool(self._enabled and self._key),
+                    'model': self._model if self._enabled else '', 'message': self._message}
 
     def _request(self, rules: str, content: str | list[dict[str, Any]], *, max_tokens: int) -> dict[str, Any]:
-        if not self.enabled or not self._key:
+        with self._lock:
+            self._refresh()
+            enabled, key, model, kind, endpoint = self._enabled, self._key, self._model, self.kind, self._endpoint
+        if not enabled or not key:
             _fail('config_unavailable')
-        payload = {'model': self.model, 'messages': [{'role': 'system', 'content': rules},
+        payload = {'model': model, 'messages': [{'role': 'system', 'content': rules},
                                                {'role': 'user', 'content': content}],
                    'reasoning_effort': 'high',
                    'max_tokens': max_tokens, 'response_format': {'type': 'json_object'},
                    'stream': False}
-        if self.provider == 'glm':
+        if urlsplit(endpoint).hostname == 'open.bigmodel.cn':
             payload['thinking'] = {'type': 'enabled'}
-        request = urllib.request.Request(self._endpoint,
-            data=json.dumps(payload, ensure_ascii=False, allow_nan=False).encode('utf-8'),
-            headers={'Content-Type': 'application/json', 'Authorization': 'Bearer ' + self._key},
-            method='POST')
-        try:
-            # One attempt only. Redirects must not forward the credential.
-            handlers: list[Any] = [_NoRedirect()]
-            if self.provider == 'workbuddy':
-                handlers.insert(0, urllib.request.ProxyHandler({}))
-            with urllib.request.build_opener(*handlers).open(request, timeout=TIMEOUT_SECONDS) as response:
-                if response.status != 200:
-                    _fail('network_error')
-                raw = response.read(MAX_RESPONSE_BYTES + 1)
-        except GlmAIError:
-            raise
-        except Exception:
-            # Never expose HTTP bodies, transport errors, headers or model text.
-            raise GlmAIError('', failure_code='network_error') from None
-        if len(raw) > MAX_RESPONSE_BYTES:
-            _fail('response_schema')
-        try:
-            envelope = _json_object(raw.decode('utf-8'))
-        except UnicodeError:
-            raise GlmAIError('', failure_code='json_invalid') from None
+        envelope = self._network(endpoint, payload, timeout=TIMEOUT_SECONDS, key=key)
         served_model = envelope.get('model')
-        if (served_model != self.model and
-                (self.provider != 'workbuddy' or served_model != self.model.removeprefix('workbuddy/'))):
+        if not isinstance(served_model, str) or key in served_model or not (
+                served_model == model or served_model == model.removeprefix('workbuddy/') or
+                (kind == 'openai' and re.fullmatch(re.escape(model) + r'[-.:][A-Za-z0-9_.:-]+', served_model))):
             _fail('response_schema')
         choices = envelope.get('choices')
         if not isinstance(choices, list) or len(choices) != 1:
@@ -326,9 +319,37 @@ class GlmInvoiceAI:
         if not isinstance(message, dict) or message.get('tool_calls'):
             _fail('response_schema')
         answer = message.get('content')
-        if not isinstance(answer, str) or not answer.strip() or self._key in answer:
+        if not isinstance(answer, str) or not answer.strip() or key in answer:
             _fail('response_schema')
-        return _json_object(answer)
+        return AIResponse(_json_object(answer), model, served_model)
+
+    def _network(self, url: str, payload: dict[str, Any] | None, *, timeout: int,
+                 key: str | None = None) -> dict[str, Any]:
+        key = self._key if key is None else key
+        request = urllib.request.Request(url,
+            data=json.dumps(payload, ensure_ascii=False, allow_nan=False).encode('utf-8') if payload is not None else None,
+            headers={'Content-Type': 'application/json', 'Authorization': 'Bearer ' + key},
+            method='POST' if payload is not None else 'GET')
+        try:
+            # One attempt only. Redirects must not forward the credential.
+            handlers: list[Any] = [_NoRedirect()]
+            if urlsplit(url).hostname in {'127.0.0.1', 'localhost', '::1'}:
+                handlers.insert(0, urllib.request.ProxyHandler({}))
+            with urllib.request.build_opener(*handlers).open(request, timeout=timeout) as response:
+                if response.status != 200:
+                    _fail('network_error')
+                raw = response.read(MAX_RESPONSE_BYTES + 1)
+        except GlmAIError:
+            raise
+        except Exception:
+            # Never expose HTTP bodies, transport errors, headers or model text.
+            raise GlmAIError('', failure_code='network_error') from None
+        if len(raw) > MAX_RESPONSE_BYTES:
+            _fail('response_schema')
+        try:
+            return _json_object(raw.decode('utf-8'))
+        except UnicodeError:
+            raise GlmAIError('', failure_code='json_invalid') from None
 
     def extract(self, text: str, images: list[bytes] | None = None) -> dict[str, Any]:
         if not isinstance(text, str) or len(text) > MAX_TEXT_CHARS:
@@ -357,7 +378,7 @@ class GlmInvoiceAI:
                       '不再提取invoice_number，不在fields或evidence重复返回该字段。')
         result = self._request(rules, content, max_tokens=16_384)
         try:
-            return self._validate_extraction(result, text, bool(pictures), self.model)
+            return self._validate_extraction(result, text, bool(pictures), getattr(result, 'model', self.model))
         except GlmAIError:
             raise
         except (ValueError, TypeError, KeyError, InvalidOperation, OverflowError):
@@ -587,13 +608,15 @@ class GlmInvoiceAI:
         if (set(result) != {'option_id'} or not isinstance(option_id, str) or
                 option_id not in identifiers | {'review'}):
             _fail('response_schema')
-        return {'option_id': option_id, 'model': self.model}
+        return {'option_id': option_id, 'model': getattr(result, 'model', self.model)}
 
 
 class LocalOnlyInvoiceAI(GlmInvoiceAI):
     """Explicit local-only adapter; does not load keys or network configuration."""
 
     def __init__(self) -> None:
+        self._root = None
+        self._lock = threading.RLock()
         self.enabled = False
         self.provider = 'glm'
         self.model = MODEL

@@ -2,12 +2,13 @@
   'use strict';
   const PREFIX = 'invoice-manual-agent-v1:';
   const TERMINAL = new Set(['ready', 'needs_input', 'stopped', 'failed', 'cancelled']);
-  const STATES = {queued:'等待整理', running:'正在整理', ready:'预览已准备', needs_input:'需要你补充', stopped:'已停止尝试', failed:'处理未完成', cancelled:'已取消'};
+  const STATES = {queued:'等待整理', running:'正在整理', ready:'整理完成', needs_input:'需要你补充', stopped:'已停止尝试', failed:'处理未完成', cancelled:'已取消'};
   let active = null;
+  let organizeSettings = {auto_after_upload:true, use_model:true}, settingsModelAvailable = null;
 
   function stored(key) { try { return localStorage.getItem(PREFIX + key); } catch (_) { return null; } }
   function remember(key, value) { try { localStorage.setItem(PREFIX + key, value); } catch (_) { /* Session state still works when browser storage is unavailable. */ } }
-  function automatic(projectId) { return !!projectId && stored('automatic:' + projectId) !== 'false'; }
+  function automatic(projectId) { return !!projectId && organizeSettings.auto_after_upload; }
   function node(tag, text, className) {
     const element = document.createElement(tag);
     if (text !== undefined) element.textContent = text;
@@ -21,22 +22,18 @@
     if (!host || typeof api !== 'function' || typeof getProject !== 'function') throw new Error('自动整理缺少工作台接口');
     if (active) active.destroy();
     let project = '', generation = 0, revision = 0, jobs = [], rendered = '', reading = null;
-    let modelKnown = false, modelAvailable = false, destroyed = false, refreshError = '', actionError = '';
+    let modelKnown = false, modelAvailable = false, destroyed = false, refreshError = '', actionError = '', settingsReading = null;
     const watched = new Set(), notified = new Map(), jobLocks = new Set(), startLocks = new Map(), requests = new Map();
     const panel = node('details', undefined, 'manual-invoice-agent');
     const summary = node('summary', undefined, 'mia-summary');
     const heading = node('strong', '自动整理'), badge = node('span', '', 'mia-summary-status');
     summary.append(heading, badge); panel.append(summary);
     const body = node('div', undefined, 'mia-body'), controls = node('div', undefined, 'mia-controls');
-    const automaticLabel = node('label', undefined, 'mia-check');
-    const automaticInput = node('input'); automaticInput.type = 'checkbox';
-    automaticLabel.append(automaticInput, node('span', '上传后自动整理'));
     const organize = node('button', '整理未处理材料'); organize.type = 'button';
-    const modelLabel = node('label', undefined, 'mia-check mia-model');
-    const modelInput = node('input'); modelInput.type = 'checkbox'; modelInput.disabled = true;
-    modelLabel.append(modelInput, node('span', '使用已配置模型处理复杂问题'));
-    controls.append(automaticLabel, organize, modelLabel);
-    const hint = node('p', '整理结果进入待核对，原件保留。缺少依据时在这里补充事实。', 'mia-hint');
+    const settingsButton = node('button', '整理设置', 'mia-settings'); settingsButton.type = 'button';
+    settingsButton.onclick = () => window.invoiceSettings?.open('organize');
+    controls.append(organize, settingsButton);
+    const hint = node('p', '整理结果进入待核对，原件保留。费用疑问已标记；未能组合的材料留在材料合成台。', 'mia-hint');
     const error = node('p', '', 'mia-error'); error.setAttribute('role', 'alert'); error.hidden = true;
     const pending = node('div', undefined, 'mia-pending-starts');
     const list = node('div', undefined, 'mia-jobs'); list.setAttribute('aria-live', 'polite');
@@ -63,18 +60,33 @@
       remember('requests:' + projectId, JSON.stringify(rows.map(({result, ...row}) => row)));
     }
     function updateControls() {
-      automaticInput.checked = automatic(project);
-      automaticInput.disabled = !project;
-      modelInput.checked = !!project && modelAvailable && stored('model:' + project) !== 'false';
-      modelInput.disabled = !project || !modelKnown || !modelAvailable;
+      host.hidden = !project;
       organize.disabled = !project || startLocks.has(project);
-      if (!project) badge.textContent = '选择项目后可用';
+      if (!project) badge.textContent = '';
       else {
         const waiting = jobs.filter(job => job.state === 'needs_input').length;
         const working = jobs.some(job => ['queued', 'running'].includes(job.state));
-        badge.textContent = waiting ? waiting + ' 项待确认' : working ? '正在整理' : automatic(project) ? '上传后自动整理已开启' : '上传后由你手动整理';
+        badge.textContent = waiting ? waiting + ' 项待确认' : working ? '正在整理' : automatic(project) ? '上传后自动整理已开启' : '上传后需手动整理';
       }
     }
+    function applySettings(data) {
+      const value = data?.organize || data;
+      if (!value || typeof value.auto_after_upload !== 'boolean' || typeof value.use_model !== 'boolean') return false;
+      organizeSettings = {auto_after_upload:value.auto_after_upload, use_model:value.use_model};
+      settingsModelAvailable = typeof value.model_available === 'boolean' ? value.model_available : null;
+      updateControls(); return true;
+    }
+    function readSettings() {
+      if (settingsReading) return settingsReading;
+      settingsReading = Promise.resolve().then(() => api('/api/settings')).then(data => {
+        if (!destroyed && !applySettings(data)) throw new Error('整理设置不可用');
+      }).catch(() => {
+        if (!destroyed) { organizeSettings = {auto_after_upload:true,use_model:true}; settingsModelAvailable = null; updateControls(); }
+      }).finally(() => { settingsReading = null; });
+      return settingsReading;
+    }
+    function settingsChanged(event) { if (!applySettings(event.detail)) void readSettings(); }
+    window.addEventListener('invoice-settings-changed', settingsChanged);
     function setProject() {
       const next = current();
       if (next === project) return false;
@@ -89,7 +101,7 @@
       });
     }
     function resultSignature(job) {
-      return JSON.stringify([(job.item_ids || []).slice().sort(), job.expenses || [], job.preview ? [job.preview.pdf, job.preview.xlsx] : null]);
+      return JSON.stringify([(job.item_ids || []).slice().sort(), job.expenses || [], job.preview ? [job.preview.pdf, job.preview.xlsx] : null, job.remaining_material_ids || []]);
     }
     function watchExisting(job) {
       if (watched.has(job.id)) return;
@@ -101,7 +113,7 @@
     function resultChanged(job) {
       if (destroyed || !watched.has(job.id) || !TERMINAL.has(job.state) || job.project_id !== project || current() !== project) return;
       const itemIds = Array.isArray(job.item_ids) ? job.item_ids : [];
-      if (!itemIds.length && !job.preview) return;
+      if (!itemIds.length && !job.preview && !job.remaining_material_count) return;
       const signature = resultSignature(job);
       if (notified.get(job.id) === signature) return;
       notified.set(job.id, signature);
@@ -236,6 +248,7 @@
           if (!(question.choices || []).length) card.append(node('p', '请补充所缺依据，或继续使用材料合成台、费用编辑。', 'mia-hint'));
         }
         const actions = node('div', undefined, 'mia-actions');
+        if (job.remaining_material_count > 0 && typeof options.onOpenMaterials === 'function') actions.append(makeButton('打开材料合成台', () => callback('onOpenMaterials', {projectId:job.project_id, jobId:job.id})));
         if (['queued', 'running'].includes(job.state)) actions.append(makeButton('停止本次整理', () => jobAction(job, '/api/agent/cancel', {id:job.id})));
         if (['failed', 'stopped'].includes(job.state)) actions.append(makeButton('按剩余额度重试', () => jobAction(job, '/api/agent/retry', {id:job.id})));
         if (job.state === 'needs_input' && !(job.question?.choices || []).length && (job.item_ids || []).length) {
@@ -284,12 +297,13 @@
       lock.promise = Promise.resolve().then(async () => {
         try {
           if (!record.body) {
-            if (!modelKnown) {
+            if (settingsReading) await settingsReading;
+            if (!modelKnown && settingsModelAvailable === null) {
               const status = await api('/api/agent/jobs?project=' + encodeURIComponent(record.projectId));
               if (status.model && typeof status.model.available === 'boolean') { modelKnown = true; modelAvailable = status.model.available; }
               if (current() === record.projectId) { setProject(); updateControls(); }
             }
-            record.body = {project_id:record.projectId, material_ids:record.ids.slice(), use_model:modelAvailable && stored('model:' + record.projectId) !== 'false', idempotency_key:record.key, options:{}};
+            record.body = {project_id:record.projectId, material_ids:record.ids.slice(), use_model:organizeSettings.use_model && (settingsModelAvailable === null ? modelAvailable : settingsModelAvailable), idempotency_key:record.key, options:{}};
             saveRequests(record.projectId);
           }
           revision += 1;
@@ -326,12 +340,6 @@
       if (!record) { record = {projectId, signature, ids, key:'manual_' + crypto.randomUUID(), body:null, accepted:false, failed:false}; records.push(record); saveRequests(projectId); }
       return startRecord(record);
     }
-    automaticInput.addEventListener('change', () => {
-      setProject(); remember('automatic:' + project, String(automaticInput.checked)); updateControls();
-    });
-    modelInput.addEventListener('change', () => {
-      if (project && modelAvailable) remember('model:' + project, String(modelInput.checked));
-    });
     organize.addEventListener('click', async () => {
       setProject(); const requestedProject = project;
       if (!requestedProject || organize.disabled) return;
@@ -347,9 +355,10 @@
     const timer = setInterval(() => { if (!document.hidden) void refresh(); }, 1500);
     const controller = {open, shouldAutoOrganize:automatic, startReceived, refresh, destroy() {
       destroyed = true; clearInterval(timer); generation += 1; host.replaceChildren();
+      window.removeEventListener('invoice-settings-changed', settingsChanged);
       if (active === controller) active = null;
     }};
-    active = controller; setProject(); updateControls(); render(); void refresh();
+    active = controller; setProject(); updateControls(); render(); void readSettings(); void refresh();
     return controller;
   }
   window.manualInvoiceAgent = {mount, shouldAutoOrganize:automatic,

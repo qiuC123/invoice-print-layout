@@ -8,6 +8,7 @@ from typing import Any
 
 import pytest
 
+from tests.legacy_agent_fixture import LegacyQuestionFixture
 from invoice_print_layout.agent_jobs import AgentLoop, Jobs
 from tests.test_invoice_agent import environment, material, start  # noqa: F401
 
@@ -175,8 +176,9 @@ def test_http_answer_forwards_question_identity(tmp_path: Path) -> None:
     store = ExpenseStore(tmp_path)
     project = ProjectRegistry(tmp_path / '后勤' / 'tasks.sqlite3').create_project('Synthetic confirmation HTTP')['id']
     jobs = Jobs(store)
-    waiting, q = question((jobs, InvoiceTools(jobs), project))
     with invoice_server(tmp_path) as client:
+        # Seed an old question after startup's migration has completed.
+        waiting, q = question((jobs, InvoiceTools(jobs), project))
         body = {'id': waiting['id'], 'choice': 'same-expense'}
         assert client.json('POST', '/api/agent/answer', body)[0] == 400
         assert client.json('POST', '/api/agent/answer', {**body, 'question_id': 'stale'})[0] == 400
@@ -199,7 +201,7 @@ def test_rejected_relation_investigation_is_an_observation(environment: Any, mon
         return execute(name, args, current)
     monkeypatch.setattr(tools, 'execute', rejecting)
     done = AgentLoop(jobs).run(job['id'], tools, Scripted(call('investigate_relations'), call('ask_user')))
-    assert done['state'] == 'needs_input'
+    assert done['state'] == 'ready'
     observations = [r for r in done['last_results'] if r['tool'] == 'investigate_relations']
     # Until an investigation obtains new facts, its rejection remains bounded.
     assert observations and done['models'] <= job['limits']['models']
@@ -238,7 +240,7 @@ def test_inspection_cache_reads_new_model_observation_without_changing_sources(e
     done = AgentLoop(jobs).run(job['id'], observations, Scripted(call('investigate_relations')))
     inspected = [r['result'] for r in done['last_results'] if r['tool'] == 'inspect_materials']
     assert observations.inspections == 2 and inspected == [{'assessment': 'before-model'}, {'assessment': 'after-model'}]
-    assert done['models'] == 1 and done['state'] == 'needs_input'
+    assert done['models'] == 1 and done['state'] == 'ready'
     assert tools.intake.get(entry['id'])['revision'] == entry['revision']
 
 
@@ -268,12 +270,12 @@ def test_answer_changes_validation_cache_but_identical_observations_are_reused(e
                 return {'valid': bool(current.get('approval'))}
             return {'question': q}
     validation = Validation()
-    first = AgentLoop(jobs).run(waiting['id'], validation)
+    first = LegacyQuestionFixture(jobs).run(waiting['id'], validation)
     assert validation.validations == 1 and first['state'] == 'needs_input'
     resumed = jobs.answer(waiting['id'], 'same-expense', q['id'])
     validation.actions = [call('validate_group', voucher_keys=q['choices'][0]['voucher_keys'],
                                payment_ids=q['choices'][0]['payment_ids']), call('ask_user')]
-    done = AgentLoop(jobs).run(waiting['id'], validation)
+    done = LegacyQuestionFixture(jobs).run(waiting['id'], validation)
     assert validation.validations == 2
     validations = [r['result'] for r in done['last_results'] if r['tool'] == 'validate_group']
     assert validations[-1]['valid'] and not validations[0]['valid']

@@ -8,6 +8,7 @@ from typing import Any
 
 import pytest
 
+from tests.legacy_agent_fixture import LegacyQuestionFixture, review_question
 from invoice_print_layout.agent_jobs import AgentLoop, Jobs
 from invoice_print_layout.agent_tools import InvoiceTools
 from invoice_print_layout.agent_relations import candidates, similar_views
@@ -70,11 +71,11 @@ def test_generic_platform_payment_asks_missing_fact_without_calling_model(
     monkeypatch.setattr(tools.relations.ai,'_request',request)
     job=jobs.create(project,[e['id'] for e in rows],'weak-platform',use_model=True)
     waiting=AgentLoop(jobs).run(job['id'],tools)
-    assert waiting['state']=='needs_input' and waiting['models']==0 and len(calls)==0
+    assert waiting['state']=='ready' and waiting['models']==0 and len(calls)==0
     assert not tools.store.list_items()
-    assert waiting['question']['type']=='material_relation'
-    assert {r['digest'] for r in waiting['question']['material_refs']}=={e['digest'] for e in rows}
-    assert len([c for c in waiting['question']['choices'] if c['action']=='confirm_relation'])==1
+    assert review_question(waiting)['type']=='material_relation'
+    assert {r['digest'] for r in review_question(waiting)['material_refs']}=={e['digest'] for e in rows}
+    assert len([c for c in review_question(waiting)['choices'] if c['action']=='confirm_relation'])==1
 
 
 def test_user_relation_fact_continues_to_preview_without_model_or_budget_reset(
@@ -83,7 +84,7 @@ def test_user_relation_fact_continues_to_preview_without_model_or_budget_reset(
     rows=weak_pair(relation_env)
     monkeypatch.setattr(tools.relations.ai,'_request',lambda rules,payload,**kw:model_answer(payload))
     job=jobs.create(project,[e['id'] for e in rows],'user-relation',use_model=True)
-    waiting=AgentLoop(jobs).run(job['id'],tools)
+    waiting=LegacyQuestionFixture(jobs).run(job['id'],tools)
     assert waiting['models']==0
     choice=next(c for c in waiting['question']['choices'] if c['action']=='confirm_relation')
     resumed=jobs.answer(job['id'],choice['id'],waiting['question']['id'])
@@ -91,7 +92,7 @@ def test_user_relation_fact_continues_to_preview_without_model_or_budget_reset(
     assert resumed['elapsed']>=waiting['elapsed']
     assert resumed['limits']==waiting['limits']
     monkeypatch.setattr(tools.relations.ai,'_request',lambda *args,**kwargs:pytest.fail('Answer must not need another model call'))
-    done=AgentLoop(jobs).run(job['id'],tools)
+    done=LegacyQuestionFixture(jobs).run(job['id'],tools)
     assert done['state']=='ready' and done['models']==waiting['models']
     assert done['preview']['total_cents']==2960
     item=tools.store.list_items()[0]
@@ -104,7 +105,7 @@ def test_declining_relation_stops_without_writes_or_repeat_question(relation_env
     jobs,tools,project=relation_env
     rows=weak_pair(relation_env)
     job=jobs.create(project,[e['id'] for e in rows],'decline-relation')
-    waiting=AgentLoop(jobs).run(job['id'],tools)
+    waiting=LegacyQuestionFixture(jobs).run(job['id'],tools)
     decline=next(c for c in waiting['question']['choices'] if c['action']=='not_same_expense')
     done=jobs.answer(job['id'],decline['id'],waiting['question']['id'])
     assert done['state']=='stopped' and done['question'] is None and done['models']==0
@@ -221,8 +222,8 @@ def test_two_distinct_concrete_orders_remain_competing_even_when_model_supports_
     monkeypatch.setattr(tools.relations.ai,'_request',lambda rules,payload,**kw:model_answer(payload))
     job=jobs.create(project,[e['id'] for e in [invoice,*orders]],'competing-semantic',use_model=True)
     done=AgentLoop(jobs).run(job['id'],tools)
-    assert done['state']=='needs_input' and not tools.store.list_items()
-    assert len([c for c in done['question']['choices'] if c['action']=='confirm_relation'])==2
+    assert done['state']=='ready' and not tools.store.list_items()
+    assert len([c for c in review_question(done)['choices'] if c['action']=='confirm_relation'])==2
 
 
 def test_explicit_payment_product_conflict_has_no_confirmation_option(relation_env: Any) -> None:
@@ -231,8 +232,8 @@ def test_explicit_payment_product_conflict_has_no_confirmation_option(relation_e
     payment=entry(relation_env,'payment','29.60','支付成功\n商品名称：奶茶',category='餐饮',shop='合成饮品商家')
     job=jobs.create(project,[invoice['id'],payment['id']],'different-food')
     waiting=AgentLoop(jobs).run(job['id'],tools)
-    assert waiting['state']=='needs_input' and not tools.store.list_items()
-    assert not waiting['question']['choices']
+    assert waiting['state']=='ready' and not tools.store.list_items()
+    assert not review_question(waiting)['choices']
 
 
 def test_unreadable_native_page_limit_cannot_be_overridden_by_relation_answer(
@@ -252,8 +253,8 @@ def test_unreadable_native_page_limit_cannot_be_overridden_by_relation_answer(
         tools.matching._write_queue(db,invoice)
     job=jobs.create(project,[e['id'] for e in rows],'unreadable-pages')
     waiting=AgentLoop(jobs).run(job['id'],tools)
-    assert waiting['state']=='needs_input' and not tools.store.list_items()
-    assert not waiting['question']['choices']
+    assert waiting['state']=='ready' and not tools.store.list_items()
+    assert not review_question(waiting)['choices']
 
 
 def test_bad_model_evidence_asks_fact_once_instead_of_stalling(
@@ -269,7 +270,7 @@ def test_bad_model_evidence_asks_fact_once_instead_of_stalling(
     monkeypatch.setattr(tools.relations.ai,'_request',request)
     job=jobs.create(project,[e['id'] for e in rows],'bad-evidence-loop',use_model=True)
     waiting=AgentLoop(jobs).run(job['id'],tools)
-    assert waiting['state']=='needs_input' and waiting['question']['type']=='material_relation'
+    assert waiting['state']=='ready' and review_question(waiting)['type']=='material_relation'
     assert waiting['models']==1 and len(count)==1
     assert len([r for r in waiting['last_results'] if r['tool']=='investigate_relations'])==1
     assert not tools.store.list_items()
@@ -285,7 +286,7 @@ def test_invalid_json_from_relation_model_keeps_answerable_question(
     monkeypatch.setattr(tools.relations.ai,'_request',broken)
     job=jobs.create(project,[e['id'] for e in rows],'invalid-json-relation',use_model=True)
     waiting=AgentLoop(jobs).run(job['id'],tools)
-    assert waiting['state']=='needs_input' and waiting['question']['choices']
+    assert waiting['state']=='ready' and review_question(waiting)['choices']
     assert waiting['models']==1 and not tools.store.list_items()
 
 
@@ -312,9 +313,9 @@ def test_invalid_planner_protocol_asks_missing_fact_once(
     monkeypatch.setattr(planner.ai,'_request',choose)
     job=jobs.create(project,[invoice['id'],payment['id']],'bad-planner-protocol',use_model=True)
     waiting=AgentLoop(jobs).run(job['id'],tools,planner)
-    assert waiting['state']=='needs_input' and waiting['models']==1 and len(calls)==1
-    assert waiting['question']['choices']==[] and not tools.store.list_items()
-    assert '商品' in waiting['question']['text'] or '购买' in waiting['question']['text']
+    assert waiting['state']=='ready' and waiting['models']==1 and len(calls)==1
+    assert review_question(waiting)['choices']==[] and not tools.store.list_items()
+    assert '商品' in review_question(waiting)['text'] or '购买' in review_question(waiting)['text']
 
 
 def test_old_relation_approval_cannot_fill_unknown_supermarket_goods(relation_env: Any) -> None:

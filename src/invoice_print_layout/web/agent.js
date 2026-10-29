@@ -123,7 +123,8 @@
       const card=el('article',undefined,'mail-message');card.dataset.mailId=message.id;
       card.append(el('h3',message.subject||'无主题邮件'));
       if(message.sender)card.append(el('p','来自：'+message.sender,'muted'));
-      card.append(el('p',(labels[message.status]||'等待处理')+' · '+(Number.isInteger(message.material_count)?message.material_count:0)+' 份材料'));
+      const routeReason={name:'按项目名称分配',date:'按项目时间分配',default:'按归入项目分配'}[message.route_reason]||'';
+      card.append(el('p',(labels[message.status]||'等待处理')+' · '+(Number.isInteger(message.material_count)?message.material_count:0)+' 份材料'+(routeReason?' · '+routeReason:'')));
       for(const issue of Array.isArray(message.issues)?message.issues:[])if(typeof issue==='string')card.append(el('p',issue,'muted'));
       const assigned=projects.find(p=>p.id===message.project_id);
       if(assigned)card.append(el('p','所属项目：'+assigned.name));

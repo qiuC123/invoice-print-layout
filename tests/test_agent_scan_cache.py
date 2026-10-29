@@ -9,6 +9,7 @@ from typing import Any
 
 import pytest
 
+from tests.legacy_agent_fixture import review_question
 from invoice_print_layout.agent_jobs import digest
 from invoice_print_layout.material_matching import MaterialMatching
 from invoice_print_layout.agent_tools import ModelPlanner
@@ -136,6 +137,6 @@ def test_explicitly_missing_original_requests_source_without_model(environment: 
     payment = material(tools, project, 'payment', '17', 'payment-without-purchase')
     job = jobs.create(project, [payment['id']], 'missing-source', use_model=True)
     result = AgentLoop(jobs).run(job['id'], tools, ModelPlanner(tools.store.root))
-    assert result['state'] == 'needs_input' and result['models'] == 0
+    assert result['state'] == 'ready' and result['models'] == 0
     assert not tools.store.list_items()
-    assert '购买' in result['question']['text']
+    assert '购买' in review_question(result)['text']

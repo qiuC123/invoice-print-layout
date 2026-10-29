@@ -64,7 +64,11 @@ def test_payload_is_bounded_choice(monkeypatch):
         def open(self, request, timeout):
             captured.append(json.loads(request.data))
             return io.BytesIO(json.dumps({'answers':{'category':{'type':'choice','choice':'materials','confidence':.94}}}).encode())
-    monkeypatch.setattr(classifier.urllib.request,'build_opener',lambda *args:Opener())
+    def build_opener(handler):
+        assert isinstance(handler, classifier.NoRedirect)
+        assert handler.redirect_request(None, None, 302, 'redirect', None, 'https://elsewhere') is None
+        return Opener()
+    monkeypatch.setattr(classifier.urllib.request,'build_opener',build_opener)
     data=evidence('尼龙扎带')
     assert classifier.ask_jev(data)['choice']=='materials'
     assert captured[0]['state']==data and 'unknown' in captured[0]['questions']['category']['criteria']

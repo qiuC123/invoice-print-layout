@@ -8,7 +8,7 @@ async function run(pw) {
   const browser = await pw.chromium.launch({headless:true});
   const page = await browser.newPage({viewport:{width:1040,height:900}});
   const origin = 'http://127.0.0.1:18996', errors = [], posts = [], answers = [];
-  const state = {jobs:{alpha:[],beta:[]}, queue:[], available:true, failGet:0, failStart:false};
+  const state = {jobs:{alpha:[],beta:[]}, queue:[], available:true, failGet:0, failStart:false, organize:{auto_after_upload:true,use_model:true,model_available:true},failSettings:false};
   const cache = new Map();
   let delayedGet = null, startGate = null, answerGate = null, refreshGate = null, sequence = 0;
   const gate = () => { let release; const promise = new Promise(resolve => {release=resolve;}); return {promise,release}; };
@@ -21,13 +21,17 @@ async function run(pw) {
     const request = route.request(), url = new URL(request.url());
     const json = value => route.fulfill({contentType:'application/json',body:JSON.stringify(value)});
     if (url.pathname === '/') return route.fulfill({contentType:'text/html',body:`<!doctype html><html lang="zh-CN" class="invoice-assistant"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="stylesheet" href="/style.css"><link rel="stylesheet" href="/workbench-theme.css"><link rel="stylesheet" href="/manual-agent.css"></head><body><main style="width:100%;margin:0;padding:12px;min-width:0"><label>原费用名称<input id="manualEdit" value="人工修改尚未保存"></label><div id="agentHost"></div><button id="originalControl">原工作台操作</button></main><script src="/manual-agent.js"></script><script>
-      window.selectedProject='alpha';window.callbacks=[];window.parentLoads=0;window.deferredChanges=[];window.manualEditing=false;
+      window.selectedProject='alpha';window.callbacks=[];window.parentLoads=0;window.deferredChanges=[];window.manualEditing=false;window.settingsOpened=[];window.invoiceSettings={open:tab=>settingsOpened.push(tab)};
       window.injectedApi=async(path,body)=>{const response=await fetch(path,body===undefined?{cache:'no-store'}:{method:'POST',headers:{'Content-Type':'application/json','X-Workbench-Token':'synthetic'},body:JSON.stringify(body)});const data=await response.json();if(!response.ok)throw new Error(data.error||'处理未完成');return data;};
       window.mountTest=()=>window.controller=window.manualInvoiceAgent.mount({host:document.getElementById('agentHost'),api:window.injectedApi,getProject:()=>window.selectedProject,
         onChanged:data=>{window.callbacks.push(['changed',data]);if(window.manualEditing)window.deferredChanges.push(data);else window.parentLoads++;},
         onOpenMaterial:data=>window.callbacks.push(['material',data]),onOpenExpense:data=>window.callbacks.push(['expense',data]),onPreview:data=>window.callbacks.push(['preview',data])});
       window.mountTest();
     </script></body></html>`});
+    if (url.pathname === '/api/settings') {
+      if(state.failSettings)return route.fulfill({status:503,contentType:'application/json',body:'{"error":"temporary"}'});
+      return json({organize:state.organize});
+    }
     if (url.pathname === '/api/agent/jobs') {
       const project = url.searchParams.get('project');
       const result = {jobs:clone(state.jobs[project] || []),model:{available:state.available},token:'synthetic'};
@@ -83,6 +87,7 @@ async function run(pw) {
   function windowProject(id) { return Object.keys(state.jobs).find(project=>state.jobs[project].some(job=>job.id===id)); }
   async function refresh() { await page.evaluate(()=>window.controller.refresh()); }
   async function select(project) { await page.evaluate(project=>{window.selectedProject=project;return window.controller.refresh();},project); }
+  async function settingsChange(values) { Object.assign(state.organize,values);await page.evaluate(organize=>window.dispatchEvent(new CustomEvent('invoice-settings-changed',{detail:{organize}})),state.organize); }
   async function refreshAndWait(text) { await refresh(); await page.getByText(text,{exact:true}).waitFor(); }
   try {
     state.jobs.alpha=[base('alpha','old-ready',{state:'ready',item_ids:['old-item'],preview:{pdf:'old.pdf',xlsx:'old.xlsx',total_cents:800}})];
@@ -91,17 +96,16 @@ async function run(pw) {
     assert.equal(await page.evaluate(()=>window.parentLoads),0,'initial historical ready cannot reload the parent');
     assert.equal(await page.evaluate(()=>window.manualInvoiceAgent.shouldAutoOrganize('alpha')),true);
     await page.evaluate(()=>window.controller.open());
-    const auto=page.getByLabel('上传后自动整理',{exact:true});
-    await auto.uncheck(); assert.equal(await page.evaluate(()=>window.controller.shouldAutoOrganize('alpha')),false);
-    await select('beta'); assert.equal(await auto.isChecked(),true,'preferences must be scoped by project');
-    await select('alpha'); assert.equal(await auto.isChecked(),false);
+    assert.equal(await page.locator('.mia-check input').count(),0,'organizer preferences live only in settings');
+    await page.getByRole('button',{name:'整理设置',exact:true}).click();assert.deepEqual(await page.evaluate(()=>window.settingsOpened),['organize']);
+    await settingsChange({auto_after_upload:false});assert.equal(await page.evaluate(()=>window.controller.shouldAutoOrganize('alpha')),false);
+    await select('beta'); assert.equal(await page.evaluate(()=>window.controller.shouldAutoOrganize('beta')),false,'preferences are global');
+    await select('alpha'); assert.equal(await page.evaluate(()=>window.controller.shouldAutoOrganize('alpha')),false);
     await page.evaluate(()=>{window.mountTest();window.controller.open();}); await refresh();
-    assert.equal(await auto.isChecked(),false,'remount retains the manual-mode preference');
-    await auto.check();
-    const model=page.getByLabel('使用已配置模型处理复杂问题',{exact:true});
-    assert.equal(await model.isChecked(),true,'configured model defaults on');
-    await model.uncheck(); await select('beta'); assert.equal(await model.isChecked(),true);
-    await select('alpha'); assert.equal(await model.isChecked(),false);
+    assert.equal(await page.evaluate(()=>window.controller.shouldAutoOrganize('alpha')),false,'remount reads global manual-mode preference');
+    await settingsChange({auto_after_upload:true,use_model:false});
+    await select('');assert.equal(await page.locator('#agentHost').isVisible(),false);assert.equal(await page.evaluate(()=>window.controller.shouldAutoOrganize('')),false);
+    await select('alpha');assert.equal(await page.locator('#agentHost').isVisible(),true);
 
     const request={projectId:'alpha',entryIds:['new-b','new-a','new-a'],batch:'upload-one'};
     startGate={gate:gate(),entered:false}; const starting=startGate;
@@ -223,7 +227,7 @@ async function run(pw) {
     state.queue=[{id:'beta-eligible',project_id:'beta',status:'received'}, {id:'beta-review',project_id:'beta',status:'review'},
       {id:'beta-linked',project_id:'beta',status:'linked',item_id:'existing'}, {id:'alpha-not-selected',project_id:'alpha',status:'received'},
       {id:'unknown-project',status:'received'},{id:'beta-removed',project_id:'beta',status:'removed'}];
-    state.available=false; await refresh(); assert.equal(await model.isDisabled(),true); assert.equal(await model.isChecked(),false);
+    state.available=false; await settingsChange({use_model:true,model_available:false});await refresh();
     await page.getByRole('button',{name:'整理未处理材料',exact:true}).click();
     await page.locator('[data-job-id="created-3"]').waitFor({state:'attached'});
     const explicit=posts.filter(row=>row.path==='/api/agent/start').at(-1).body;
@@ -243,13 +247,15 @@ async function run(pw) {
     await page.setViewportSize({width:390,height:844});
     await select('alpha'); await page.evaluate(()=>window.controller.open());
     assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1),true,'390px workbench module cannot overflow');
-    assert.equal(await page.locator('.mia-check input').first().evaluate(element=>getComputedStyle(element).width),'16px','original global form styles cannot stretch checkboxes');
+    assert.equal(await page.locator('.mia-check input').count(),0);
+    state.failSettings=true;await page.evaluate(()=>{window.mountTest();window.controller.open();});await refresh();await page.waitForTimeout(50);
+    assert.equal(await page.evaluate(()=>window.controller.shouldAutoOrganize('alpha')),true,'settings read failures retain default automatic mode');
     await page.getByRole('button',{name:'查看报销预览',exact:true}).first().click();
-    await select(''); assert.equal(await page.getByRole('button',{name:'整理未处理材料',exact:true}).isDisabled(),true);
+    await select(''); assert.equal(await page.locator('#agentHost').isVisible(),false);
     assert.equal(await page.evaluate(()=>window.controller.shouldAutoOrganize('')),false);
     assert.equal(await page.locator('#originalControl').count(),1,'manual workbench remains in place');
     assert.deepEqual(errors,[]);
-    return {passed:true,projectPreferences:true,configuredModelOnly:true,oneBatchOneStart:true,networkRetryKeepsIdentity:true,
+    return {passed:true,globalPreferences:true,settingsFailureDefaults:true,noProjectPanelHidden:true,configuredModelOnly:true,oneBatchOneStart:true,networkRetryKeepsIdentity:true,
       pollingNeverPosts:true,pollingKeepsManualInput:true,parentControlsManualEditRefresh:true,sourceBoundAnswer:true,sameJobRemainingBudget:true,
       exactPreviewCallbacks:true,projectLateResponseFence:true,missingEvidenceNeedsManual:true,guardedLegacyRefresh:true,unlinkedCurrentProjectOnly:true,cancelRetry:true,mobile390:true,pageErrors:errors};
   } finally { await browser.close(); }

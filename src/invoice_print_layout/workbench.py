@@ -445,6 +445,8 @@ class ExpenseStore:
         data.update(evaluate('顺丰' if data['courier_waybill_required'] else data['category'], roles, legacy=bool(data.get('legacy')),
                              material_basis=data['material_basis'], amount_pending=data['amount_pending']))
         data['amount'] = '' if data['amount_pending'] else f"{data['amount_cents'] / 100:.2f}"
+        if data.get('agent_review_reason'):
+            data['missing'].append('类别或商品明细待核对：' + data['agent_review_reason'])
         data['overdue'] = bool(data['followup_date'] and data['followup_date'] <= date.today().isoformat()
                                and data['stage'] == 'draft' and not data['complete'])
         data['missing_acknowledgement_allowed'] = can_acknowledge_missing(data)
@@ -600,6 +602,8 @@ class ExpenseStore:
                 merged.update(choice)
             changes = {**self._validate(merged), **choice}
             data = {**old, **changes, 'updated_at': now()}
+            if any(key in values for key in ('category', 'title', 'project_type', 'project_name')):
+                data.pop('agent_review_reason', None)
             if any(old.get(key, False if key == 'amount_pending' else None) != value for key, value in changes.items()):
                 if old['stage'] != 'draft':
                     raise ValueError('请先退回待提交，再修改已提交的事项')

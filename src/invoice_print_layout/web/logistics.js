@@ -103,6 +103,12 @@
   }
   function renderTodos() {
     const cards=$('logisticsTasks');cards.replaceChildren();if(todoProject!==selected)return;
+    for(const action of snapshot.outbox||[]){
+      const task=snapshot.tasks.find(t=>t.id===action.task_id&&t.project_id===selected&&t.revision===action.revision);
+      if(!task||!['review','escalated','clarify'].includes(task.state)||!['escalate','review'].includes(action.stage)||action.state==='cancelled')continue;
+      const row=node('article','','card logistics-task');row.dataset.reminderId=action.id;
+      row.append(node('strong',action.stage==='escalate'?'需人工跟进':'待确认'),node('p',action.payload.text));cards.append(row);
+    }
     for(const kind of ['temporary','scheduled'])$(kind+'Tasks').setAttribute('aria-pressed',String(todoKind===kind));
     $('todoFilter').disabled=todoKind==='scheduled';$('todoFilter').closest('label').hidden=todoKind==='scheduled';
     const categoryItems=todos.filter(t=>(t.kind||'temporary')===todoKind);

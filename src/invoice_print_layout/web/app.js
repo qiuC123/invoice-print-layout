@@ -1,4 +1,5 @@
 'use strict';
+const workbenchOfflineMessage='工作台服务未响应，请确认工作台仍在运行后重试';
 // Normalize transport failures once for all workbench API consumers, without retrying writes.
 const nativeWorkbenchFetch=window.fetch.bind(window);
 window.fetch=async(...args)=>{
@@ -6,7 +7,7 @@ window.fetch=async(...args)=>{
  catch(error){
   const target=args[0] instanceof Request?args[0].url:String(args[0]);
   const url=new URL(target,location.href);
-  if(url.origin===location.origin&&url.pathname.startsWith('/api/')&&/failed to fetch|networkerror|load failed/i.test(error.message))throw Error('工作台服务未响应，请确认工作台仍在运行后重试');
+  if(url.origin===location.origin&&url.pathname.startsWith('/api/')&&/failed to fetch|networkerror|load failed/i.test(error.message))throw Error(workbenchOfflineMessage);
   throw error;
  }
 };
@@ -38,6 +39,13 @@ function renderProjectContext(){
  document.documentElement.classList.toggle('invoice-assistant',invoiceAssistant);
  document.querySelector('h1').textContent=project?`${project.name} · 发票助手`:'全部项目台账';
  document.title=project?`${project.name} · 发票助手`:'发票助手 · 全部项目';
+ let period=$('projectPeriod');
+ if(!period){period=document.createElement('p');period.id='projectPeriod';period.className='project-period';document.querySelector('h1').parentElement.append(period);}
+ period.hidden=!project;period.replaceChildren();
+ if(project){
+  if(project.start_date)period.textContent=project.end_date?`项目时间：${project.start_date} 至 ${project.end_date}`:`项目时间：${project.start_date} 起，进行中`;
+  else{period.append(document.createTextNode('未设置项目时间 · '));const configure=document.createElement('button');configure.type='button';configure.className='project-period-link';configure.dataset.setProjectPeriod='';configure.textContent='设置';configure.onclick=()=>window.openProjectPeriod?.(project);period.append(configure);}
+ }
  $('logisticsNav').hidden=!state.logistics_available;
  document.querySelector('.rail [data-view="inbox"]').hidden=invoiceAssistant||!!projectScope;
  const peopleButton=$('reimbursementPeople');if(peopleButton){peopleButton.hidden=!project;peopleButton.disabled=!project;}
@@ -45,7 +53,7 @@ function renderProjectContext(){
  window.refreshProjectMenuTrigger?.();
  if(!projectScope)return;
  $('logisticsNav').href='/logistics?project='+encodeURIComponent(projectScope);$('logisticsNav').textContent='返回本项目';
- $('importHistory').hidden=true;$('moveProject').hidden=true;
+ $('moveProject').hidden=true;
  if(embeddedWorkbench){
   // Keep the existing actions and handlers, but place them inside the project panel.
   for(const button of document.querySelectorAll('.rail>button:not([data-view])')){button.classList.remove('nav');document.querySelector('.toolbar').append(button);}
@@ -75,9 +83,51 @@ async function api(route,body){
  }
  const res=await fetch('/api/'+route,{method:'POST',headers:{'Content-Type':'application/json','X-Workbench-Token':state.token},body:JSON.stringify(body||{})});const result=await res.json();if(!res.ok){const error=Error(result.error||'操作未完成');error.status=res.status;throw error;}return result;}
 async function act(fn){try{await fn();}catch(e){notify(e.message,true);}}
+let loadRetryTimer=null,loadDisconnected=false;
+let loadedRuntime=null,loadCompleted=false,runtimeChecking=false,reloadPending=false;
+async function readRuntime(){
+ const response=await fetch('/api/runtime',{cache:'no-store'});
+ if(!response.ok)throw Error('无法读取服务状态');
+ const value=await response.json();
+ return typeof value.started_at==='string'&&typeof value.build_id==='string'?{started_at:value.started_at,build_id:value.build_id}:null;
+}
+function runtimeChanged(value){return loadedRuntime&&value&&(value.started_at!==loadedRuntime.started_at||value.build_id!==loadedRuntime.build_id);}
+function refreshWorkbench(){
+ if(reloadPending)return;
+ const target=document.activeElement;
+ if(document.querySelector('dialog[open]')||target?.matches('input:not([type=button]):not([type=checkbox]):not([type=radio]),textarea,select,[contenteditable=true]')){
+  notify('工作台已更新，请刷新页面');
+  const button=document.createElement('button');button.type='button';button.textContent='刷新';button.onclick=()=>location.reload();$('notice').append(' ',button);
+  return;
+ }
+ reloadPending=true;location.reload();
+}
+async function checkRuntime(){
+ if(document.hidden||runtimeChecking||!loadCompleted||reloadPending)return;
+ runtimeChecking=true;
+ try{const runtime=await readRuntime();if(runtimeChanged(runtime))refreshWorkbench();else if(!loadedRuntime)loadedRuntime=runtime;}catch(_){}finally{runtimeChecking=false;}
+}
+function scheduleLoadRetry(){
+ if(loadRetryTimer!==null||!loadDisconnected||document.hidden)return;
+ loadRetryTimer=setTimeout(()=>{loadRetryTimer=null;if(!document.hidden&&loadDisconnected)void load().catch(error=>notify(error.message,true));},3000);
+}
+document.addEventListener('visibilitychange',()=>{clearTimeout(loadRetryTimer);loadRetryTimer=null;scheduleLoadRetry();if(!document.hidden)void checkRuntime();});
+window.addEventListener('focus',()=>{void checkRuntime();});
+setInterval(()=>{void checkRuntime();},30000);
 async function load({beforeRender,skipClassification=false}={}){
-  const res=await fetch('/api/state');if(!res.ok)throw Error('无法读取工作台');
-  state=scopeData(await res.json());expensePreviewRequests.clear();
+  clearTimeout(loadRetryTimer);loadRetryTimer=null;
+  try{
+   const res=await fetch('/api/state');if(!res.ok)throw Error('无法读取工作台');
+   const data=scopeData(await res.json());
+   const runtime=await readRuntime();
+   if(loadDisconnected&&(!loadCompleted||runtimeChanged(runtime))){loadDisconnected=false;refreshWorkbench();return;}
+   if(runtimeChanged(runtime)){refreshWorkbench();return;}
+   loadedRuntime=runtime;state=data;
+  }catch(error){
+   if(error.message===workbenchOfflineMessage){loadDisconnected=true;scheduleLoadRetry();}
+   throw error;
+  }
+  expensePreviewRequests.clear();
   if(initialExpenseView){const item=state.items.find(x=>x.id===active);if(item){view=expenseViewFor(item);if(returnedToSynthesis(item)){pendingMaterialDeskOpen=true;active=null;}}initialExpenseView=false;}
   checked=new Set([...checked].filter(id=>state.items.some(x=>x.id===id&&!x.deleted&&!returnedToSynthesis(x))));
   const categories=expenseFilterValues('categoryFilter');
@@ -87,6 +137,8 @@ async function load({beforeRender,skipClassification=false}={}){
   beforeRender?.();
   renderProjectContext();render();if(!skipClassification)window.expenseClassifier?.schedule();openPendingMaterialDesk();
   void Promise.resolve(window.manualInvoiceAgent?.refresh?.()).catch(()=>{});
+  loadCompleted=true;
+  if(loadDisconnected){loadDisconnected=false;clearTimeout(loadRetryTimer);loadRetryTimer=null;if($('error').textContent.includes(workbenchOfflineMessage))$('error').hidden=true;}
 }
 function openPendingMaterialDesk(){
  if(!pendingMaterialDeskOpen||!state.token||typeof window.openMaterialMatching!=='function')return;
@@ -173,6 +225,7 @@ function renderSelection(){
    assign.textContent='修改归属'+(chosen.length?` · ${chosen.length} 笔`:'');
    assign.title=invalid?'当前勾选含不可修改归属的费用，整批不能修改；请取消这些费用的勾选。':`只修改当前列表勾选的 ${chosen.length} 笔，隐藏的 ${checked.size-chosen.length} 笔不参与。`;
   }
+  const move=$('moveProject');if(move){move.hidden=!!projectScope||view!=='review';move.disabled=!chosen.length;}
   window.updateReviewBatchTypeControls?.(chosen);
   if(view!=='inbox')$('listSummary').textContent=`${visible.length} 笔 · 已勾选 ${checked.size} 笔`+(checked.size>selected?`（其中 ${checked.size-selected} 笔不在当前列表）`:'');
 }
@@ -320,7 +373,7 @@ function render(){view=normalizeExpenseView(view);const items=base(),filtered=ex
  return `<button class="metric ${cls}" data-view="${v}"><small>${label}</small><b>¥ ${money(a.reduce((t,x)=>t+x.amount_cents,0))}</b><em>${a.length} 笔事项${v==='submitted'?' · 查看最终打印页':''}</em></button>`;
 }).join('');document.querySelectorAll('[data-view]').forEach(b=>b.classList.toggle('active',b.dataset.view===view));$('tabs').hidden=view==='inbox';$('exportSelected').hidden=view==='inbox';
 if(view==='inbox'){$('listSummary').textContent=`${state.inbox.length} 份需处理邮件附件（打车材料已自动整理）`;$('list').innerHTML=state.inbox.length?state.inbox.map(f=>`<div class="mailrow"><a href="/inbox/${f.id}" target="_blank" rel="noopener">${esc(f.name)}</a><div class="actions"><select id="target-${f.id}" aria-label="关联事项"><option value="">选择所属事项</option>${state.items.filter(x=>!x.deleted&&x.stage==='draft').map(x=>`<option value="${x.id}">${esc(x.title)}</option>`).join('')}</select><select id="role-${f.id}" aria-label="材料用途">${Object.entries(state.roles).filter(([k])=>k!=="package").map(([k,v])=>`<option value="${k}" ${k==="other"?"selected":""}>${esc(v)}</option>`).join("")}</select><button data-assign="${f.id}">手动归档</button></div><small class="muted">${esc(f.reason||"非打车材料或无法确定归属，请核对后归档。")}</small></div>`).join(''):'<div class="empty">没有需处理的邮件附件。已配对的打车费用请到“事项台账”查看；补收邮件后会自动整理。</div>';}
-else{const visible=items.filter(x=>matches(x,view));if(view==='submitted')visible.sort((a,b)=>Number(pendingSubmission(b))-Number(pendingSubmission(a)));$('listSummary').textContent=`${visible.length} 笔 · 已勾选 ${checked.size} 笔`;$('list').innerHTML=visible.length?visible.map(x=>`<div class="row ${active===x.id?'selected':''}" data-item="${x.id}">${x.deleted?'<span class="row-select-spacer" aria-hidden="true"></span>':`<input type="checkbox" aria-label="选择 ${esc(x.title)}" data-check="${x.id}" ${checked.has(x.id)?'checked':''}>`}<div><div class="title">${esc(x.title)}</div>${window.reimbursementPeopleUI?.markup(x)||''}<div class="sub">${esc(x.project)} · ${esc(x.category)}<br>${esc(x.expense_date)} · ${esc(x.merchant||'未填商家')}</div>${!x.complete?`<div class="missing">缺：${esc(x.missing.join('、'))}${x.overdue?' · 已到跟进日':''}</div>`:''}${x.alternative?'<div class="missing">无发票替代：扣费记录</div>':''}</div><div class="money">${expenseMoney(x)}<br><span class="badge ${x.ready?'good':x.stage!=='draft'?'neutral':''}">${badge(x)}</span>${expenseRowActions(x)}</div></div>`).join(''):emptyExpenseView();}
+else{const visible=items.filter(x=>matches(x,view));if(view==='submitted')visible.sort((a,b)=>Number(pendingSubmission(b))-Number(pendingSubmission(a)));$('listSummary').textContent=`${visible.length} 笔 · 已勾选 ${checked.size} 笔`;$('list').innerHTML=visible.length?visible.map(x=>`<div class="row ${active===x.id?'selected':''}" data-item="${x.id}">${x.deleted?'<span class="row-select-spacer" aria-hidden="true"></span>':`<input type="checkbox" aria-label="选择 ${esc(x.title)}" data-check="${x.id}" ${checked.has(x.id)?'checked':''}>`}<div><div class="title">${esc(x.title)}</div>${window.reimbursementPeopleUI?.markup(x)||''}<div class="sub">${esc(x.project)} · ${esc(x.category)}<br>${esc(x.expense_date)} · ${esc(x.merchant||'未填商家')}</div>${!x.complete||x.agent_review_reason?`<div class="missing">缺：${esc(x.missing.join('、'))}${x.overdue?' · 已到跟进日':''}</div>`:''}${x.alternative?'<div class="missing">无发票替代：扣费记录</div>':''}</div><div class="money">${expenseMoney(x)}<br><span class="badge ${x.ready?'good':x.stage!=='draft'?'neutral':''}">${badge(x)}</span>${expenseRowActions(x)}</div></div>`).join(''):emptyExpenseView();}
 renderSelection();renderDetail();
 for(const row of document.querySelectorAll('[data-item]')){
  const item=state.items.find(x=>x.id===row.dataset.item);
@@ -617,15 +670,11 @@ $('verifySelected').onclick=()=>act(async()=>{
   }finally{batchVerifyBusy=false;renderSelection();}
 });
 window.addEventListener('beforeunload',e=>{if(batchVerifyBusy||singleVerifyBusy||batchReturnBusy){e.preventDefault();e.returnValue='';}});
-$('importHistory').onclick=()=>act(async()=>{const result=await api('import');await load();notify(`同步完成：新增 ${result.added} 笔，缺少文件或字段 ${result.skipped} 笔。历史记录未自动标记已报销。`);});
 $('exportSelected').onclick=()=>act(async()=>{const result=await api('export',{ids:reportSelectionIds()});notify('导出完成（未改变报销状态）。');const area=$('notice');for(const [key,label] of [['pdf','下载总 PDF'],['md','下载 MD 清单']]){const link=document.createElement('a');link.href='/export/'+encodeURIComponent(result[key]);link.textContent='　'+label;link.target='_blank';link.rel='noopener';area.append(link);} });
 act(async()=>{await load();if(state.history_import?.skipped)notify(`历史记录有 ${state.history_import.skipped} 笔缺少文件或字段，未纳入台账，请核对原工作区。`,true);});
-const projectActions=document.createElement('div');
-projectActions.className='actions';
-projectActions.hidden=!!projectScope;
-projectActions.innerHTML='<button id="moveProject">移动勾选事项到项目</button>';
-document.querySelector('.toolbar').append(projectActions);
 let projectCreationBusy=false;
+function projectPeriodFields(project={}){return `<fieldset class="project-period-fields"><legend>项目时间</legend><div class="formgrid"><label>开始日期<input name="start_date" type="date" value="${esc(project.start_date||'')}"></label><label>结束日期<input name="end_date" type="date" value="${esc(project.end_date||'')}"></label></div><p class="muted">填写后，自动收件会把这段时间内的发票分到这个项目；结束日期不填表示进行中。</p></fieldset>`;}
+function bindProjectPeriodFields(container){const start=container.querySelector('[name="start_date"]'),end=container.querySelector('[name="end_date"]');const update=()=>{start.required=!!end.value;end.min=start.value;};start.addEventListener('input',update);end.addEventListener('input',update);update();return {start,end};}
 const createProjectButton=$('createProject')||document.createElement('button');
 createProjectButton.id='createProject';createProjectButton.type='button';
 createProjectButton.classList.add('project-create-button');
@@ -647,20 +696,22 @@ createProjectButton.onclick=()=>{
  const dialog=document.createElement('dialog');
  dialog.id='project-create';dialog.className='expense-action-dialog';
  dialog.setAttribute('aria-labelledby','project-create-title');
- dialog.innerHTML='<div class="dialoghead"><h2 id="project-create-title">新建项目</h2><button class="dialog-close" type="button" data-dismiss aria-label="关闭">×</button></div><form><label>项目名称<input name="name" required maxlength="120" autocomplete="off"></label><p data-create-error role="alert" hidden></p><div class="actions"><button type="button" data-cancel>取消</button><button type="submit" disabled>创建项目</button></div></form>';
+ dialog.innerHTML='<div class="dialoghead"><h2 id="project-create-title">新建项目</h2><button class="dialog-close" type="button" data-dismiss aria-label="关闭">×</button></div><form><label>项目名称<input name="name" required maxlength="120" autocomplete="off"></label>'+projectPeriodFields()+'<p data-create-error role="alert" hidden></p><div class="actions"><button type="button" data-cancel>取消</button><button type="submit" disabled>创建项目</button></div></form>';
  document.body.append(dialog);dialog.showModal();
  const input=dialog.querySelector('[name="name"]'),submit=dialog.querySelector('[type="submit"]'),cancel=dialog.querySelector('[data-cancel]'),errorArea=dialog.querySelector('[data-create-error]');
+ const dates=bindProjectPeriodFields(dialog);
  let committed=false;
  input.oninput=()=>{submit.disabled=committed||projectCreationBusy||!input.value.trim();};
  const dismiss=()=>{if(!projectCreationBusy)dialog.remove();};cancel.onclick=dismiss;dialog.querySelector('[data-dismiss]').onclick=dismiss;
  dialog.oncancel=e=>{e.preventDefault();if(!projectCreationBusy)dialog.remove();};
  dialog.querySelector('form').onsubmit=async e=>{
   e.preventDefault();const name=input.value.trim();
-  if(committed||projectCreationBusy||!name||!input.checkValidity())return;
-  projectCreationBusy=true;createProjectButton.disabled=true;submit.disabled=true;cancel.disabled=true;dialog.querySelector('[data-dismiss]').disabled=true;input.disabled=true;
+  if(committed||projectCreationBusy||!name||!dialog.querySelector('form').checkValidity())return;
+  const start_date=dates.start.value,end_date=dates.end.value;
+  projectCreationBusy=true;createProjectButton.disabled=true;submit.disabled=true;cancel.disabled=true;dialog.querySelector('[data-dismiss]').disabled=true;dialog.querySelectorAll('input').forEach(field=>field.disabled=true);
   submit.textContent='正在创建…';errorArea.hidden=true;errorArea.textContent='';
   try{
-   const project=await api('projects',{name});
+   const project=await api('projects',{name,start_date,end_date});
    committed=true;
    if(typeof project?.id!=='string'||!project.id.trim())throw Error('项目创建结果缺少编号，请关闭窗口并刷新项目列表核对。');
    const target=new URL('/',location.href);target.searchParams.set('project',project.id);
@@ -671,7 +722,7 @@ createProjectButton.onclick=()=>{
    if(committed){projectCreationBusy=false;createProjectButton.disabled=false;cancel.disabled=false;dialog.querySelector('[data-dismiss]').disabled=false;submit.textContent='已请求创建';}
   }
   finally{
-   if(!committed){projectCreationBusy=false;createProjectButton.disabled=false;cancel.disabled=false;dialog.querySelector('[data-dismiss]').disabled=false;input.disabled=false;submit.disabled=!input.value.trim();submit.textContent='创建项目';input.focus();}
+   if(!committed){projectCreationBusy=false;createProjectButton.disabled=false;cancel.disabled=false;dialog.querySelector('[data-dismiss]').disabled=false;dialog.querySelectorAll('input').forEach(field=>field.disabled=false);submit.disabled=!input.value.trim();submit.textContent='创建项目';input.focus();}
   }
  };
  input.focus();

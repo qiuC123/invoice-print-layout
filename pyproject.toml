@@ -10,7 +10,6 @@ readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
   "keyring>=25,<26",
-  "lark-oapi>=1.7.3,<2",
   "Pillow>=10,<12",
   "qrcode>=8,<9",
   "PyMuPDF>=1.24,<2",
@@ -49,19 +48,13 @@ module = ["rapidocr_onnxruntime", "rapidocr_onnxruntime.*", "qrcode", "qrcode.*"
 ignore_missing_imports = true
 
 [[tool.mypy.overrides]]
-module = ["lark_oapi", "lark_oapi.*"]
-ignore_missing_imports = true
-
-[[tool.mypy.overrides]]
 module = [
   "invoice_print_layout.documents",
   "invoice_print_layout.courier",
   "invoice_print_layout.workbench_export",
   "invoice_print_layout.reimbursement",
   "invoice_print_layout.payment_layout",
-  "invoice_print_layout.delivery",
   "invoice_print_layout.layout",
-  "invoice_print_layout.photo_review_pdf",
   "tests.helpers",
   "tests.test_layout",
 ]

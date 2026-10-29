@@ -42,7 +42,7 @@ def test_default_unreimbursed_without_deriving_from_expense_stage_and_round_trip
     raw = projects.registry.list()
     listed = projects.list()
     assert listed == [{**project, 'reimbursement_status': 'unreimbursed', 'reimbursement_revision': 0,
-                      'pinned': False, 'project_revision': 0} for project in raw]
+                      'pinned': False, 'project_revision': 0, 'start_date': '', 'end_date': ''} for project in raw]
     first = raw[0]
     item = projects.store.create({'title': 'Closed expense', 'amount': '12.34', 'project_id': first['id'],
                                   'material_basis': 'payment_only'})
@@ -55,13 +55,13 @@ def test_default_unreimbursed_without_deriving_from_expense_stage_and_round_trip
     business = unchanged_business(projects)
     saved = projects.set_reimbursement_status(first['id'], 'reimbursed', 0)
     assert saved == {**first, 'reimbursement_status': 'reimbursed', 'reimbursement_revision': 1,
-                     'pinned': False, 'project_revision': 1}
+                     'pinned': False, 'project_revision': 1, 'start_date': '', 'end_date': ''}
     assert unchanged_business(projects) == business and projects.store.get(item['id']) == item
     restarted = ExpenseProjects(ExpenseStore(projects.store.workspace))
     assert restarted.list()[0] == saved
     returned = restarted.set_reimbursement_status(first['id'], 'unreimbursed', 1)
     assert returned == {**first, 'reimbursement_status': 'unreimbursed', 'reimbursement_revision': 2,
-                        'pinned': False, 'project_revision': 2}
+                        'pinned': False, 'project_revision': 2, 'start_date': '', 'end_date': ''}
     assert projects.list()[1] == listed[1]
     assert unchanged_business(projects) == business and projects.store.get(item['id']) == item
 

@@ -16,7 +16,7 @@ async function run(pw){
  messages[0].issues=['sender_identity_missing','unexpected_internal_code'];
  const categories={site:'现场沟通',meals:'订餐',lodging:'住宿',invoices:'票据',other:'其他'};
  const messageCategories={meals:'餐饮',lodging:'住宿',invoices:'票据',materials:'进出场资料',other:'其他',unclassified:'待分类'};
- const tasks=projects.map((p,i)=>({id:'t'+i,project_id:p.id,kind:'breakfast',business_day:'2026-09-24',state:'review',quantity:i,revision:2,ask_at:'2026-09-23T20:00:00+08:00',direct_at:'2026-09-23T20:30:00+08:00',deadline:'2026-09-23T21:00:00+08:00'}));
+ const tasks=projects.map((p,i)=>({id:'t'+i,project_id:p.id,kind:'breakfast',business_day:'2026-09-24',state:i?'review':'escalated',quantity:i,revision:2,ask_at:'2026-09-23T20:00:00+08:00',direct_at:'2026-09-23T20:30:00+08:00',deadline:'2026-09-23T21:00:00+08:00'}));
  page.on('pageerror',e=>errors.push(e.message));
  await page.route(base+'/**',async route=>{
   const url=new URL(route.request().url()),json=(data,status=200)=>route.fulfill({status,contentType:'application/json',body:JSON.stringify(data)});
@@ -30,7 +30,10 @@ async function run(pw){
    if(url.pathname==='/api/logistics/messages/assign'){Object.assign(messages.find(m=>m.key===body.key),{project_id:body.project_id,category:body.category});return json({ok:true});}
    throw Error('unexpected mutation '+url.pathname);
   }
-  if(url.pathname==='/api/logistics')return json({token:'synthetic-token',transport_enabled:false,projects,tasks,outbox:tasks.map((t,i)=>({task_id:t.id,stage:'supplier',state:'uncertain',payload:{text:'项目'+(i+1)+'发送进度'}}))},fail?500:200);
+  if(url.pathname==='/api/logistics')return json({token:'synthetic-token',transport_enabled:false,projects,tasks,outbox:tasks.flatMap((t,i)=>[
+   {id:'reminder'+i,task_id:t.id,revision:t.revision,stage:i?'review':'escalate',state:'pending',payload:{channel:'workbench',text:'项目'+(i+1)+'本地提醒 <script>bad()</script>'}},
+   {id:'cancelled'+i,task_id:t.id,revision:t.revision,stage:'escalate',state:'cancelled',payload:{text:'已取消提醒'}},
+   {id:'outdated'+i,task_id:t.id,revision:t.revision-1,stage:'review',state:'pending',payload:{text:'旧版本提醒'}}])},fail?500:200);
   if(url.pathname==='/api/logistics/todos')return json({items:todos.filter(t=>t.project_id===url.searchParams.get('project_id')&&!t.deleted_at),photo_groups:[{id:'photo-source',name:'照片来源群'}]});
   if(url.pathname==='/api/logistics/inbox'){
    assert.equal(url.searchParams.get('scope'),'support');
@@ -58,6 +61,11 @@ async function run(pw){
   await page.locator('#groupFilter').selectOption('');await page.locator('#messageFilter').selectOption('');assert.match(await inboxText(),/项目一消息/);assert.equal(await page.locator('#groupFilter').inputValue(),'');assert.equal(await page.locator('#messageFilter').inputValue(),'');
   await choose('p2');assert.match(await inboxText(),/项目二消息/);assert.doesNotMatch(await inboxText(),/项目一消息/);
   await page.locator('[data-tab="tasks"]').click();
+  await page.locator('[data-reminder-id="reminder1"]').waitFor();
+  assert.match(await page.locator('[data-reminder-id="reminder1"]').innerText(),/待确认.*项目2本地提醒/s);
+  assert.equal(await page.locator('[data-reminder-id="reminder0"]').count(),0);
+  assert.doesNotMatch(await page.locator('#logisticsTasks').innerText(),/已取消提醒|旧版本提醒/);
+  assert.equal(await page.locator('#logisticsTasks script').count(),0);
   await page.locator('#todoForm [name="title"]').fill('核对照片 <script>bad()</script>');
   await page.locator('#todoForm [name="note"]').fill('补充工厂装货记录');
   await page.locator('#todoForm [name="due_date"]').fill('2026-09-27');
@@ -73,6 +81,8 @@ async function run(pw){
   await page.locator('#todoFilter').selectOption('done');await page.locator('[data-todo-id="todo1"] .todo-toggle').click();
   await page.waitForFunction(()=>document.getElementById('todoCount').textContent.includes('未完成 1'));await page.locator('#todoFilter').selectOption('pending');
   await choose('p1');await page.waitForFunction(()=>document.getElementById('logisticsTasks').textContent.includes('暂无符合'));
+  assert.match(await page.locator('[data-reminder-id="reminder0"]').innerText(),/需人工跟进.*项目1本地提醒/s);
+  assert.equal(await page.locator('[data-reminder-id="reminder1"]').count(),0);
   assert.doesNotMatch(await page.locator('#logisticsTasks').innerText(),/核对现场照片/);
   await page.locator('#todoForm [name="title"]').fill('不应串到第二项目');await choose('p2');
   await page.locator('[data-todo-id="todo1"]').waitFor();assert.equal(await page.locator('#todoForm [name="title"]').inputValue(),'');
@@ -86,11 +96,11 @@ async function run(pw){
   assert.match(await page.locator('[data-todo-id="todo2"]').innerText(),/每天 18:00/);
   assert.match(await page.locator('[data-todo-id="todo2"]').innerText(),/照片来源群/);
   assert.deepEqual(todos[1].schedule.group_ids,['photo-source']);assert.equal(todos[1].schedule.enabled,true);
-  await page.locator('[data-todo-id="todo2"] .todo-toggle').click();await page.waitForFunction(()=>document.querySelector('[data-todo-id="todo2"]').textContent.includes('已暂停'));
+  await page.locator('[data-todo-id="todo2"] .todo-toggle').click();await page.waitForFunction(()=>document.querySelector('[data-todo-id="todo2"]')?.textContent.includes('已暂停'));
   await page.locator('[data-todo-id="todo2"] .todo-edit').click();assert.equal(await page.locator('#todoForm [name="times"]').inputValue(),'18:00');
   await page.locator('#todoForm [name="times"]').fill('18:00,22:00');await page.locator('#todoSave').click();
-  await page.waitForFunction(()=>document.querySelector('[data-todo-id="todo2"]').textContent.includes('18:00、22:00'));
-  await page.locator('[data-todo-id="todo2"] .todo-toggle').click();await page.waitForFunction(()=>document.querySelector('[data-todo-id="todo2"]').textContent.includes('已启用'));
+  await page.waitForFunction(()=>document.querySelector('[data-todo-id="todo2"]')?.textContent.includes('18:00、22:00'));
+  await page.locator('[data-todo-id="todo2"] .todo-toggle').click();await page.waitForFunction(()=>document.querySelector('[data-todo-id="todo2"]')?.textContent.includes('已启用'));
   await page.reload();await page.locator('[data-todo-id="todo2"]').waitFor();assert.match(page.url(),/task_kind=scheduled/);
   await page.setViewportSize({width:320,height:844});assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true);await page.setViewportSize({width:1280,height:900});
   await choose('p1');await page.waitForFunction(()=>document.getElementById('logisticsTasks').textContent.includes('暂无符合'));assert.equal(await page.locator('[data-todo-id="todo2"]').count(),0);
@@ -111,7 +121,7 @@ async function run(pw){
   await page.locator('#showGroupForm').click();await page.locator('#cancelGroupEdit').click();assert.equal(await page.locator('#groupForm').isHidden(),true);await page.locator('#showGroupForm').click();
   await page.locator('#groupForm [name="name"]').fill('未绑定的测试群');await page.locator('#groupForm button[type="submit"]').click();await page.locator('[data-group-id="g3"]').waitFor();assert.equal(groups[2].account_id,'');assert.equal(groups[2].chat_id,'');
   await page.waitForFunction(()=>!document.getElementById('logisticsNotice').hidden);await page.locator('[data-tab="inbox"]').click();assert.equal(await page.locator('#logisticsNotice').isHidden(),true);await page.locator('[data-tab="groups"]').click();
-  await page.locator('[data-group-id="g3"] button').click();await page.locator('#groupForm [name="account_id"]').fill('synthetic-account');await page.locator('#groupForm [name="chat_id"]').fill('synthetic-chat');await page.locator('#groupForm button[type="submit"]').click();await page.waitForFunction(()=>document.querySelector('[data-group-id="g3"]').textContent.includes('已保存会话标识'));
+  await page.locator('[data-group-id="g3"] button').click();await page.locator('#groupForm [name="account_id"]').fill('synthetic-account');await page.locator('#groupForm [name="chat_id"]').fill('synthetic-chat');await page.locator('#groupForm button[type="submit"]').click();await page.waitForFunction(()=>document.querySelector('[data-group-id="g3"]')?.textContent.includes('已保存会话标识'));
   groups.push({id:'g-other-account',project_id:'p1',name:'另一个账号的现场群',category:'site',account_id:'b',chat_id:'c1'});
   const mediaCases=[[3,'图片'],[34,'语音'],[49,'文件或引用'],[43,'视频'],[10000,'系统消息']];
   for(const [code] of mediaCases)messages.push({key:'media-'+code,project_id:'p1',account_id:'b',chat_id:'c1',sender_id:'synthetic-other-account',text:code===3?'[图片]':'',type_code:code,timestamp:4,category:'materials',issues:[]});
@@ -127,7 +137,7 @@ async function run(pw){
   await page.reload();await page.locator('[data-message-key="m1"]').waitFor();assert.equal(await page.locator('#projectTitle').innerText(),'项目一');
   await choose('p2');holdP1=true;await page.locator('[data-project-id="p1"]').click();while(!releaseP1)await new Promise(resolve=>setTimeout(resolve,10));await choose('p2');releaseP1();await page.waitForTimeout(50);assert.equal(await page.locator('#projectTitle').innerText(),'项目二');assert.doesNotMatch(await inboxText(),/项目一消息/);
   await page.locator('#showProjectForm').click();await page.locator('#projectForm [name="name"]').fill('第三个测试项目');await page.locator('#projectForm [name="site_name"]').fill('测试地点丙');await page.locator('#projectForm button').click();await page.waitForFunction(()=>document.getElementById('projectTitle').textContent==='第三个测试项目');await page.waitForFunction(()=>document.getElementById('logisticsInbox').textContent.includes('暂无照片或报销辅助消息'));assert.match(await page.locator('#projectSummary').innerText(),/测试地点丙/);
-  const screenshots=path.resolve(__dirname,'../workspace/ui-checks');await fs.mkdir(screenshots,{recursive:true});
+  const screenshots=process.env.INVOICE_BROWSER_EVIDENCE||path.join(require('node:os').tmpdir(),'invoice-browser-evidence');await fs.mkdir(screenshots,{recursive:true});
   Object.assign(messages[0],{text:'今晚住宿21人，双床房按4人安排，请核对。',timestamp:'2026-09-23 22:45',direction:'inbound'});Object.assign(messages[2],{text:'明天进场材料清单，待核对附件。',timestamp:'2026-09-23 22:40',direction:'inbound'});
   await choose('p1');await page.locator('[data-tab="inbox"]').click();await page.screenshot({path:path.join(screenshots,'logistics-projects-desktop.png'),fullPage:true});
   await page.emulateMedia({colorScheme:'dark'});assert.notEqual(await page.locator('body').evaluate(el=>getComputedStyle(el).color),'rgb(38, 60, 50)');await page.screenshot({path:path.join(screenshots,'logistics-projects-dark.png'),fullPage:true});await page.emulateMedia({colorScheme:'light'});

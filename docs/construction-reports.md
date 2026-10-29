@@ -62,7 +62,7 @@ $env:PYTHONPATH='src'
 .\.venv\Scripts\python.exe -m invoice_print_layout daily status --run RUN_DIRECTORY
 ```
 
-7. 向用户提供 PPTX/HTML 与实际状态，区分历史重放和当天新报告。如果需要向项目正式日报目录复制，先检查已存在交付及哈希；不同内容采用新修订文件名。这个命令不发送、不覆盖已确认交付。不要为了验收调用飞书预览或发送 API。
+7. 向用户提供 PPTX/HTML 与实际状态，区分历史重放和当天新报告。如果需要向项目正式日报目录复制，先检查已存在交付及哈希；不同内容采用新修订文件名。这个命令不发送、不覆盖已确认交付。
 
 操作 PPT 前遵循当前 presentations 技能及其 runtime/finalizer 规则。正式 `daily run` 在每个新 attempt 的首次编辑前自动运行一次 operation marker，并保存 `build/operation-marker.json`；调用方不再额外运行 marker，也不手动重放已开始的 attempt。复用成功产物时不会重复标记或编辑。
 

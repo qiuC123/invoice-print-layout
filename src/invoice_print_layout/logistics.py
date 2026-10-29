@@ -279,7 +279,7 @@ class LogisticsStore:
                     explanation = {'reply_missing': '尚未收到明确回复，请人工跟进。',
                                    'inquiry_not_delivered': '询问消息尚无送达证明，请人工核查。',
                                    'collector_unavailable': '微信采集未正常完成，无法判断是否已回复，请人工核查。'}
-                    self._action(db, task, 'escalate', task['revision'], {**base, 'channel': 'feishu', 'target': project['owner_id'],
+                    self._action(db, task, 'escalate', task['revision'], {**base, 'channel': 'workbench', 'target': project['owner_id'],
                         'reason': reason, 'text': f"{project['name']} {task['business_day']} {LABELS[task['kind']]}：" +
                         explanation[reason]})
                     db.execute("UPDATE tasks SET state='escalated' WHERE id=?", (task['id'],))
@@ -381,7 +381,7 @@ class LogisticsStore:
                                        "clarification='',source_key=?,last_event_at=? WHERE id=?", (value, revision, key, occurred.isoformat(), task['id']))
                             db.execute('INSERT INTO changes VALUES (?,?,?,?)', (task['id'], revision, key, value))
                             db.execute("UPDATE outbox SET state='cancelled' WHERE task_id=? AND state='pending'", (task['id'],))
-                            self._action(db, task, 'review', revision, {'channel': 'feishu', 'target': project['owner_id'],
+                            self._action(db, task, 'review', revision, {'channel': 'workbench', 'target': project['owner_id'],
                                 'project_id': project['id'], 'task_id': task['id'], 'revision': revision,
                                 'quantity': value, 'business_day': task['business_day'], 'kind': kind,
                                 'text': f"{project['name']} {task['business_day']} {LABELS[kind]} {value}份，待你确认。"})

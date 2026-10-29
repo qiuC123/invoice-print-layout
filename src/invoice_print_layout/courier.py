@@ -2,11 +2,9 @@
 from __future__ import annotations
 
 import math
-import os
 import re
-import shutil
 from dataclasses import dataclass
-from datetime import date, datetime
+from datetime import date
 from decimal import Decimal
 from pathlib import Path
 
@@ -17,12 +15,6 @@ from invoice_print_layout.documents import (
     parse_invoice_date, parse_invoice_number, sha256_file,
 )
 from invoice_print_layout.layout import A4_HEIGHT, A4_WIDTH, _slot, validate_print_package
-from invoice_print_layout.memory import refresh_memory_status
-from invoice_print_layout.models import BatchSummary, OutcomeStatus
-from invoice_print_layout.storage import (
-    WorkspacePaths, append_history, choose_output_paths, ensure_workspace, is_duplicate,
-    move_to_review, new_staging_directory, read_history, safe_filename_part, write_report,
-)
 
 KINDS = {"顺丰": ("顺丰", "快递"), "同城": ("顺丰同城", "同城配送")}
 _FOOTER = re.compile(r"^(?:页码[:：]?)?\d+[/\-]\d+$")
@@ -117,84 +109,3 @@ def compose_courier_package(detail: Path, invoice: Path, output: Path, amount: D
         result.save(output, garbage=4, deflate=True)
         expected = math.ceil(len(pages) / 2)
     validate_print_package(output, expected, f"{amount:.2f}", fragments)
-
-
-def process_courier_batch(workspace: Path, files: list[Path], person: str, kind: str | None = None) -> tuple[WorkspacePaths, BatchSummary]:
-    if kind is not None and kind not in KINDS:
-        raise ValueError("不支持的快递类型")
-    paths = ensure_workspace(workspace)
-    summary = BatchSummary()
-    documents: list[CourierPdf] = []
-    for file in files:
-        try:
-            if file.suffix.lower() != ".pdf":
-                raise ValueError("快递批次仅支持原始 PDF；OFD/XML 不需上传")
-            documents.append(inspect_courier_pdf(file, kind))
-        except Exception as exc:
-            review = move_to_review(paths, [file], str(exc), category=kind or "顺丰")
-            summary.add(OutcomeStatus.NEEDS_REVIEW, file.name, str(review))
-    history = read_history(paths.history)
-    invoices = [doc for doc in documents if doc.is_invoice]
-    details = [doc for doc in documents if not doc.is_invoice]
-    def matches(bill: CourierPdf, detail: CourierPdf) -> bool:
-        return bill.kind == detail.kind and bill.amount == detail.amount and (bill.kind == "同城" or bill.invoice_number == detail.invoice_number)
-    consumed: set[Path] = set()
-    for bill in invoices:
-        candidates = [d for d in details if matches(bill, d)]
-        if len(candidates) != 1 or sum(matches(other, candidates[0]) for other in invoices) != 1:
-            continue
-        detail = candidates[0]
-        consumed.update((bill.path, detail.path))
-        duplicate = is_duplicate(history, bill.invoice_number, bill.sha256, detail.sha256)
-        if duplicate:
-            review = move_to_review(paths, [bill.path, detail.path],
-                                    f"重复件；已有打印包：{duplicate.get('output')}", category="重复件")
-            summary.add(OutcomeStatus.DUPLICATE, bill.path.name, str(review))
-            continue
-        provider, category = KINDS[bill.kind]
-        assert bill.invoice_date and bill.invoice_number
-        base = f"{bill.invoice_date.isoformat()}_{provider}_{bill.amount:.2f}元_{safe_filename_part(person)}"
-        output, archive, _ = choose_output_paths(paths, base)
-        stage = new_staging_directory(paths)
-        try:
-            staged_archive = stage / "archive"
-            staged_archive.mkdir()
-            shutil.copy2(bill.path, staged_archive / "原始电子发票.pdf")
-            shutil.copy2(detail.path, staged_archive / "原始运单明细.pdf")
-            compose_courier_package(detail.path, bill.path, stage / "print.pdf", bill.amount)
-            os.replace(staged_archive, archive)
-            os.replace(stage / "print.pdf", output)
-            entry = {"record_version": 4, "created_at": datetime.now().isoformat(timespec="seconds"),
-                     "category": category, "provider": provider, "amount": f"{bill.amount:.2f}",
-                     "person_name": person, "invoice_date": bill.invoice_date.isoformat(),
-                     "invoice_number": bill.invoice_number, "invoice_hash": bill.sha256,
-                     "trip_hash": detail.sha256, "output": str(output), "archive": str(archive)}
-            append_history(paths.history, entry)
-            history.append(entry)
-        except Exception as exc:
-            if output.exists():
-                output.unlink()
-            if archive.exists():
-                shutil.rmtree(archive)
-            review = move_to_review(paths, [bill.path, detail.path], str(exc), category=bill.kind)
-            summary.add(OutcomeStatus.NEEDS_REVIEW, bill.path.name, str(review))
-        else:
-            warning = ""
-            for source in (bill.path, detail.path):
-                try:
-                    source.unlink(missing_ok=True)
-                except OSError:
-                    warning = "；原文件已归档，但工作副本未能清理"
-            summary.add(OutcomeStatus.SUCCESS, output.name, str(output) + warning)
-        finally:
-            shutil.rmtree(stage, ignore_errors=True)
-    remaining = [doc.path for doc in documents if doc.path not in consumed]
-    if remaining:
-        review = move_to_review(paths, remaining, "发票与运单明细缺失、金额不一致或存在多个候选，无法唯一配对", category=kind or "顺丰")
-        summary.add(OutcomeStatus.NEEDS_REVIEW, kind or "顺丰", str(review))
-    try:
-        refresh_memory_status(paths)
-    except (OSError, ValueError) as exc:
-        summary.add(OutcomeStatus.NEEDS_REVIEW, "摘要更新", str(exc))
-    write_report(paths.latest_report, [f"成功：{summary.success_count}，需要检查：{summary.review_count}，重复：{summary.duplicate_count}"])
-    return paths, summary

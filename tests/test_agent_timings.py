@@ -8,6 +8,7 @@ from typing import Any
 
 import pytest
 
+from tests.legacy_agent_fixture import LegacyQuestionFixture
 from invoice_print_layout import agent_jobs, agent_metrics
 from invoice_print_layout.agent_jobs import AgentLoop, AgentService, Jobs
 from tests.test_invoice_agent import environment, material, start, Scripted, call
@@ -57,7 +58,7 @@ def test_user_wait_excluded_from_active_total_on_answer_and_resume(environment: 
     jobs, tools, project = environment
     order = material(tools, project, 'receipt', '17', 'timed-choice-order')
     payments = [material(tools, project, 'payment', '17', 'timed-choice-' + str(n)) for n in range(2)]
-    waiting = AgentLoop(jobs).run(start(environment, [order, *payments])['id'], tools)
+    waiting = LegacyQuestionFixture(jobs).run(start(environment, [order, *payments])['id'], tools)
     assert waiting['state'] == 'needs_input'
     elapsed = waiting['elapsed']
     old_limits = copy.deepcopy(waiting['limits'])
@@ -69,10 +70,11 @@ def test_user_wait_excluded_from_active_total_on_answer_and_resume(environment: 
     assert after_wait['timings']['current_user_wait_seconds'] >= 600
     choice = after_wait['question']['choices'][0]
     jobs.answer(waiting['id'], choice['id'])
-    resumed = AgentLoop(jobs).run(waiting['id'], tools)
+    resumed = LegacyQuestionFixture(jobs).run(waiting['id'], tools)
     # The unused competing payment still needs evidence; only the chosen pair
     # reaches preview, preserving the original partial-preview policy.
-    assert resumed['state'] == 'needs_input' and resumed['preview']['total_cents'] == 1700
+    assert resumed['state'] == 'ready' and resumed['preview']['total_cents'] == 1700
+    assert resumed['remaining_material_count'] == 1 and resumed['question'] is None
     assert resumed['limits'] == old_limits
     assert resumed['timings']['user_wait_seconds'] >= 600
     assert resumed['timings']['active_seconds'] == resumed['elapsed'] == elapsed

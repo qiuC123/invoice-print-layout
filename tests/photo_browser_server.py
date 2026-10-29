@@ -7,15 +7,10 @@ from pathlib import Path
 from PIL import Image
 
 from invoice_print_layout import site_photos
-from invoice_print_layout import photo_briefs
-from invoice_print_layout.bot import FeishuBotSettings
 from invoice_print_layout.logistics import LogisticsStore
 from invoice_print_layout.workbench_web import make_server
 
 with tempfile.TemporaryDirectory(prefix='photo-ui-') as directory:
-    photo_briefs.read_bot_settings = lambda _: FeishuBotSettings('cli_ui_fixture', 'ou_ui_fixture')
-    photo_briefs.read_bot_secret = lambda _: 'fixture-secret-not-real'
-    photo_briefs.PhotoBriefs.send = lambda self, item: 'om_fixture'
     workspace = Path(directory)
     server = make_server(workspace, 0)
     logistics = LogisticsStore(workspace / '后勤/tasks.sqlite3')

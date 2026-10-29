@@ -14,6 +14,7 @@ from typing import Any
 import pymupdf
 import pytest
 
+from tests.legacy_agent_fixture import LegacyQuestionFixture, review_question
 from invoice_print_layout.agent_jobs import AgentLoop, AgentService, Jobs
 from invoice_print_layout.agent_tools import InvoiceTools, ModelPlanner
 from invoice_print_layout.project_registry import ProjectRegistry
@@ -157,13 +158,13 @@ def test_same_price_competition_asks_once_and_answer_does_not_reset_budget(envir
     order = material(tools, project, 'receipt', '17', 'ambiguous order')
     payments = [material(tools, project, 'payment', '17', 'ambiguous ' + str(n)) for n in range(2)]
     job = start(environment, [order, *payments])
-    waiting = AgentLoop(jobs).run(job['id'], tools)
+    waiting = LegacyQuestionFixture(jobs).run(job['id'], tools)
     assert waiting['state'] == 'needs_input' and not tools.store.list_items()
     assert len(waiting['question']['choices']) == 2
     choice = waiting['question']['choices'][0]
     resumed = jobs.answer(job['id'], choice['id'])
     assert resumed['tools'] == waiting['tools'] and resumed['elapsed'] >= waiting['elapsed']
-    done = AgentLoop(jobs).run(job['id'], tools)
+    done = LegacyQuestionFixture(jobs).run(job['id'], tools)
     assert done['preview']['total_cents'] == 1700 and len(tools.store.list_items()) == 1
     assert not tools.store.list_items()[0]['verified']
 
@@ -185,7 +186,7 @@ def test_missing_payment_fact_uses_scripted_question_without_model(environment: 
     order = material(tools, project, 'receipt', '17', 'missing-payment-script-first')
     planner = Scripted(call('shell', command='must-never-be-called'))
     done = AgentLoop(jobs).run(start(environment, [order], use_model=True)['id'], tools, planner)
-    assert done['state'] == 'needs_input' and done['question']['text']
+    assert done['state'] == 'ready' and review_question(done)['text']
     assert planner.calls == done['models'] == 0
     assert not done['item_ids'] and not tools.store.list_items()
 
@@ -195,7 +196,8 @@ def test_call_budget_stops_even_when_distinct_evidence_keeps_arriving(planner_en
     rows = [material(tools, project, 'receipt', '17', 'unmatched-' + str(n)) for n in range(4)]
     job = start(environment, rows, use_model=True, limits={'models': 2, 'tools': 10, 'seconds': 30, 'stalls': 2})
     done = AgentLoop(jobs).run(job['id'], tools, Scripted(*(call('read_material', id=e['id']) for e in rows)))
-    assert done['state'] == 'stopped' and done['models'] == 2
+    assert done['state'] == 'ready' and done['models'] == 2
+    assert done['model_budget_exhausted'] and done['remaining_material_count'] == 4
 
 
 @pytest.mark.parametrize('action,terminal', [
@@ -428,7 +430,7 @@ def test_transient_model_error_retries_once_and_persists_spent_budget(planner_en
     resumed = jobs.retry(job['id'])
     assert resumed['models'] == 2 and resumed['model_retries'] == 1 and resumed['elapsed'] >= done['elapsed']
     done = AgentLoop(jobs).run(job['id'], tools, Scripted(call('ask_user')))
-    assert done['state'] == 'needs_input' and done['models'] == 3
+    assert done['state'] == 'ready' and done['models'] == 3
 
 
 def test_model_schema_error_is_not_automatically_retried(planner_environment: Any) -> None:

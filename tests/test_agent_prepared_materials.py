@@ -109,7 +109,7 @@ def test_prepared_conflicting_or_unpaid_amounts_remain_incomplete_once(environme
     rows[1]['issues'] = ['金额冲突']
     put(environment, rows[1])
     done = AgentLoop(jobs).run(start(environment, rows)['id'], tools)
-    assert done['state'] == 'needs_input' and not tools.store.list_items() and not done['preview']
+    assert done['state'] == 'ready' and not tools.store.list_items() and not done['preview']
     assert not tools.intake.get(rows[1]['id'])['fields'].get('amount')
     assert done['tools'] <= 4 and done['models'] == 0
     assert sum(event.get('tool') == 'analyze_materials' and event['message'] == '本地识别材料'
@@ -133,8 +133,10 @@ def test_prepared_manual_or_conflicting_fields_are_not_reparsed_or_overwritten(e
     put(environment, payment)
     before = copy.deepcopy(tools.intake.get(payment['id']))
     done = AgentLoop(jobs).run(start(environment, rows)['id'], tools)
-    assert done['state'] == 'needs_input' and not tools.store.list_items()
-    assert tools.intake.get(payment['id']) == before
+    assert done['state'] == 'ready' and not tools.store.list_items()
+    after = tools.intake.get(payment['id'])
+    assert after['agent_review_reason']
+    assert {k: v for k, v in after.items() if k != 'agent_review_reason'} == before
 
 
 def test_prepared_mismatching_purchase_components_do_not_become_a_guessed_total(environment: Any) -> None:
@@ -144,7 +146,7 @@ def test_prepared_mismatching_purchase_components_do_not_become_a_guessed_total(
     rows[0]['issues'] = ['金额冲突']
     put(environment, rows[0])
     done = AgentLoop(jobs).run(start(environment, rows)['id'], tools)
-    assert done['state'] == 'needs_input' and not tools.store.list_items()
+    assert done['state'] == 'ready' and not tools.store.list_items()
     assert not tools.intake.get(rows[0]['id'])['fields']['amount']
     assert done['tools'] <= 4
 

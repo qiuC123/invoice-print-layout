@@ -41,6 +41,7 @@ async function run(pw) {
   await page.route(origin + '/**', async route => {
     const request = route.request(), url = new URL(request.url()), body = request.method() === 'POST' ? request.postDataJSON() : null;
     const json = (value, status = 200) => route.fulfill({status, contentType: 'application/json', body: JSON.stringify(value)});
+    if (url.pathname === '/api/runtime') return json({started_at:'synthetic-start',build_id:'synthetic-build'});
     if (url.pathname === '/api/state') {
       if (failedState) {failedState = false; return json({error: 'Synthetic ledger refresh unavailable'}, 503);}
       return json(state);

@@ -47,7 +47,7 @@ def test_agent_csrf_project_scope_and_background_intake(tmp_path: Path) -> None:
             if job['state'] not in {'queued', 'running'}:
                 break
             time.sleep(.1)
-        assert job['state'] == 'needs_input' and job['tools'] >= 2 and job['models'] == 0
+        assert job['state'] == 'ready' and job['tools'] >= 2 and job['models'] == 0
         assert not ExpenseStore(tmp_path).list_items()
         status, history = client.json('GET', '/api/agent/jobs?project=' + project)
         assert status == 200 and history['jobs'][0]['id'] == key

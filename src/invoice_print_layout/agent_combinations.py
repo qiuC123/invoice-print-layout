@@ -15,6 +15,7 @@ import pymupdf
 from invoice_print_layout.documents import (compact_text, parse_amount,
     parse_invoice_number, _parse_positioned_invoice_amount, PdfInspectionError)
 from invoice_print_layout.matching_evidence import merchant_identity
+from invoice_print_layout.mail_project_dates import rail_departure_dates
 from invoice_print_layout.material_matching import _rules_relation, _same_company
 from invoice_print_layout.models import DocumentKind
 from invoice_print_layout.transaction_evidence import identifiers_for_record, identifier_key
@@ -59,8 +60,7 @@ def local_structured_facts(entry: dict[str, Any]) -> dict[str, Any]:
             fields = {'amount': f'{cents / 100:.2f}', 'category': '高铁', 'merchant': '中国铁路',
                       'invoice_number': number, 'title': '铁路退票费' if '退票费' in text else '铁路车票'}
             # The verified ledger dates rail expenses by departure, not issue date.
-            departures = {f'{int(y):04d}-{int(m):02d}-{int(d):02d}' for y, m, d in
-                          re.findall(r'(\d{4})年(\d{1,2})月(\d{1,2})日\d{1,2}:\d{2}开', text)}
+            departures = rail_departure_dates(text)
             if len(departures) == 1:
                 fields['expense_date'] = next(iter(departures))
             return {'role': 'invoice', 'fields': fields}

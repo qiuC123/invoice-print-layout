@@ -27,7 +27,7 @@ LABELS = {
     'investigate_relations': '结合商品、金额和商家调查',
     'validate_group': '验算组合方案', 'create_draft': '整理费用草稿',
     'complete_partial_expense': '按确认补全原费用材料',
-    'build_preview': '生成报销预览', 'ask_user': '需要补充事实',
+    'build_preview': '生成报销预览', 'ask_user': '记录待人工核对原因',
     'extract_goods': '提取原件商品内容', 'classify_expense': '判断费用类别',
     'name_expense': '生成具体报销名称',
 }
@@ -595,15 +595,16 @@ class AgentLoop:
                 with self.jobs.timed(key, 'script_plan', models_before=job['models']):
                     action = tools.next_action(job)
                 if action is None:
+                    if set(job['material_ids']) <= set(job.get('deferred_materials', [])):
+                        from invoice_print_layout.agent_review import leave_for_review
+                        return leave_for_review(self.jobs, key, {}, finish=True)
                     if planner is None or not job['use_model']:
                         action = {'tool': 'ask_user', 'arguments': {}}
                     else:
                         if job['models'] >= job['limits']['models']:
-                            # Use only a remaining tool slot to explain the missing
-                            # fact. This grants neither a new model call nor a
-                            # resumable answer after the durable budget is spent.
+                            # Keep a review reason without another provider call.
                             self.jobs.update(key, model_budget_exhausted=True)
-                            self.jobs.event(key, '模型调用已达上限，保留具体补充问题')
+                            self.jobs.event(key, '模型调用已达上限，保留待人工核对原因')
                             action = {'tool': 'ask_user', 'arguments': {}}
                         else:
                             # Persist before network IO, including malformed/failed replies.
@@ -668,18 +669,14 @@ class AgentLoop:
                 self.jobs.event(key, '验算未通过，继续查找依据' if result.get('tool_error') else
                                 '已复用已有结果' if cached else '步骤完成', tool=name)
                 if name == 'ask_user':
-                    if latest.get('model_budget_exhausted'):
-                        question = {**result['question'], 'choices': [], 'budget_exhausted': True}
-                        self.jobs.update(key, question=question)
-                        return self.jobs.stop(key, 'stopped', '已达到模型调用上限；' + question['text'] +
-                                              '。现有结果已保留，请在人工工作台补充')
-                    self.jobs.update(key, question=result['question'])
-                    return self.jobs.stop(key, 'needs_input', result['question']['text'])
+                    from invoice_print_layout.agent_review import leave_for_review
+                    deferred = leave_for_review(self.jobs, key, result['question'])
+                    if all(deferred.get(field, []) == latest.get(field, []) for field in ('deferred_content', 'deferred_materials')):
+                        return leave_for_review(self.jobs, key, result['question'], finish=True)
+                    continue
                 if name == 'build_preview':
-                    unresolved = result.get('unresolved', [])
-                    self.jobs.update(key, question=result.get('question'))
-                    return self.jobs.stop(key, 'needs_input' if unresolved else 'ready',
-                                          '预览已准备；仍有材料需要补充' if unresolved else '报销预览已准备，请人工核对')
+                    from invoice_print_layout.agent_review import leave_for_review
+                    return leave_for_review(self.jobs, key, result.get('question') or {}, finish=True)
                 if stalls >= job['limits']['stalls']:
                     return self.jobs.stop(key, 'stopped', '连续调查没有获得新证据，已停止重复尝试')
             except ModelBudgetExceeded as exc:
@@ -737,6 +734,12 @@ class AgentService:
         for row in rows:
             job = self.jobs.get(row['id'])
             self.jobs.stop(job['id'], 'queued', '上次处理被中断，按剩余额度继续')
+        with store.connect() as db:
+            waiting = db.execute("SELECT id FROM invoice_agent_jobs WHERE state='needs_input'").fetchall()
+        from invoice_print_layout.agent_review import leave_for_review
+        for row in waiting:
+            job = self.jobs.get(row['id'])
+            leave_for_review(self.jobs, job['id'], job.get('question') or {}, finish=True)
 
     def kick(self) -> None:
         with self._kick_lock:

@@ -91,7 +91,7 @@ def ride_service(text: str) -> bool:
     """Identify passenger service, not a carrier merely mentioned in a filename."""
     source = compact_text(text)
     return bool(_freight_evidence(text) is None and '铁路电子客票' not in source and
-                (re.search(r'出租车|出租客运', source) or
+                (re.search(r'出租车|出租汽车客运|出租客运', source) or
                  '旅客运输服务' in source and re.search(r'[*＊][^*＊]+[*＊]客运服务费?', source) or
                  detect_provider(text) is not RideProvider.UNKNOWN and
                  re.search(r'[*＊][^*＊]+[*＊](?:客运服务|运输服务)', source)))
@@ -103,7 +103,7 @@ def _ride_identities(text: str) -> set[str]:
     source = compact_text(text).upper()
     found = {name for name, markers in {
         '享道': ('享道出行', '上汽享道', 'XIANGDAO'),
-        '曹操': ('曹操出行', '吉利优行', 'CAOCAOTRAVEL', 'GEELYRIDE'),
+        '曹操': ('曹操出行', '苏州市吉利优行电子科技有限公司', '吉利优行', 'CAOCAOTRAVEL', 'GEELYRIDE'),
         '滴滴': ('滴滴', 'DIDITRAVEL'),
         'T3': ('T3出行',),
     }.items() if any(marker in source for marker in markers)}

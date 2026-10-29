@@ -46,6 +46,7 @@ async function run(pw) {
       return route.fulfill({status: 403, contentType: 'application/json', body: '{"error":"read-only preview fixture"}'});
     }
     const json = value => route.fulfill({contentType: 'application/json', body: JSON.stringify(value)});
+    if (url.pathname === '/api/runtime') return json({started_at:'synthetic-start',build_id:'synthetic-build'});
     if (url.pathname === '/api/state') return json(state);
     if (url.pathname === '/api/material-matching') return json(board);
     if (url.pathname === '/api/intake') return json({queue: []});

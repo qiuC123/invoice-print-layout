@@ -12,7 +12,7 @@ import urllib.request
 
 import pymupdf
 
-from invoice_print_layout.lodging_remote import NoRedirect
+from invoice_print_layout.http_utils import NoRedirect
 from invoice_print_layout.receipt_intake import read_receipt, rows_of, validate_image
 from invoice_print_layout.workbench import ExpenseStore, MAX_BYTES
 

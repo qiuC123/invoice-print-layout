@@ -12,6 +12,7 @@ from typing import Any
 
 import pytest
 
+from tests.legacy_agent_fixture import LegacyQuestionFixture
 from invoice_print_layout.agent_confirmed_facts import content_fact, relation_fact, restore, verified_content
 from invoice_print_layout.agent_jobs import AgentLoop, Jobs
 from invoice_print_layout.agent_tools import InvoiceTools
@@ -170,7 +171,7 @@ def test_restore_rejects_sources_outside_current_originals(facts_env: Any, mutat
 def waiting_relation(env: tuple[Jobs, InvoiceTools, str], rows: list[dict[str, Any]]) -> dict[str, Any]:
     jobs, tools, project = env
     job = jobs.create(project, [e['id'] for e in rows], 'fact-question-' + str(time.time_ns()))
-    waiting = AgentLoop(jobs).run(job['id'], tools)
+    waiting = LegacyQuestionFixture(jobs).run(job['id'], tools)
     assert waiting['state'] == 'needs_input'
     assert waiting['question']['type'] == 'material_relation'
     return waiting
