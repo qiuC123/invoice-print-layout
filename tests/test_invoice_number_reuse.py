@@ -10,7 +10,7 @@ import pymupdf
 
 from invoice_print_layout import glm_invoice_ai as glm
 from invoice_print_layout.material_matching import MaterialMatching
-from tests.test_glm_intake import FakeAI, NUMBER, local_ocr, pdf, picture, response, setup, update
+from tests.glm_intake_helpers import FakeAI, NUMBER, local_ocr, pdf, picture, response, setup, update
 from tests.test_material_matching import auto_queued, snapshots
 from tests.test_glm_invoice_ai import TEXT, extraction, network, png
 

@@ -7,7 +7,7 @@ from typing import Any
 import pytest
 
 from invoice_print_layout.transaction_evidence import extract_transaction_evidence, record_identifier_keys
-from tests.test_glm_material_matching import activate
+from tests.material_matching_helpers import activate
 from tests.test_material_matching import active_items, proof, queued, revisions, setup, snapshots
 from tests.test_matching_suggestions import create_from
 

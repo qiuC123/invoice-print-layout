@@ -5,7 +5,7 @@ from typing import Any
 
 import pytest
 
-from tests.test_glm_material_matching import activate, confirmed, payment
+from tests.material_matching_helpers import activate, confirmed, payment
 from tests.test_material_matching import expense, queued, setup, snapshots
 
 

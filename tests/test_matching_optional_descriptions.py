@@ -4,7 +4,7 @@ from typing import Any
 
 import pytest
 
-from tests.test_glm_material_matching import confirmed, payment
+from tests.material_matching_helpers import confirmed, payment
 from tests.test_material_matching import queued, revisions, setup, snapshots
 
 

@@ -15,7 +15,7 @@ from invoice_print_layout.material_matching import MaterialMatching
 from invoice_print_layout.project_registry import ProjectRegistry
 from invoice_print_layout.workbench import ExpenseStore
 from invoice_print_layout.workbench_web import make_server
-from tests.test_glm_material_matching import payment
+from tests.material_matching_helpers import payment
 from tests.test_material_matching import queued, snapshots
 from tests.test_matching_suggestions import hotel_group
 

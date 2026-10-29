@@ -9,7 +9,7 @@ import pytest
 
 from invoice_print_layout import material_matching as matching_module
 from invoice_print_layout import matching_evidence as evidence_module
-from tests.test_glm_material_matching import activate
+from tests.material_matching_helpers import activate
 from tests.test_material_matching import proof, setup, snapshots
 from tests.test_matching_suggestions import create_from
 from tests.test_platform_transaction_matching import material, save
