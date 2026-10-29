@@ -28,7 +28,7 @@ _PURCHASE_ANCHOR = re.compile(r'^(?:商品明细|购买明细|(?:淘宝)?闪购|
 _CONTACT = re.compile(r'地址|电话|手机|联系人|收货人|收件人|寄件人|送至|送到|开票人|'
                       r'纳税人识别号|统一社会信用代码|税号|开户|银行账号|身份证|电子邮箱|https?://|@', re.I)
 _NUMBER = re.compile(r'-?\d+(?:\.\d+)?')
-PARSER_VERSION = 'material-facts-v5'
+PARSER_VERSION = 'material-facts-v7'
 
 
 def _clean(value: str) -> str:
@@ -69,19 +69,23 @@ def _union(words: list[_Word]) -> list[float]:
 def _passenger_page(page: Any, words: list[_Word]) -> tuple[str, list[_Word], bool, str]:
     """Remove only a complete native passenger table; never retain passenger PII."""
     text = str(page.get_text())
-    if '电子发票(旅客运输服务)' not in _clean(text):
+    compact = _clean(text)
+    if ('电子发票(旅客运输服务)' not in compact and not (
+            '电子发票(普通发票)' in compact and
+            '旅客运输服务' in {_clean(row) for row in text.splitlines()} and
+            any(label in compact for label in ('出行人', '出行日期', '交通工具类型')))):
         return text, words, False, ''
     patterns = {'出行人': r'[\u4e00-\u9fffA-Za-z·*＊]{1,40}',
                 '有效身份证件号': r'[A-Za-z0-9*＊-]{4,30}',
                 '出行日期': r'\d{4}[-/.年]\d{1,2}[-/.月]\d{1,2}日?',
-                '出发地': r'[\u4e00-\u9fffA-Za-z·]{1,40}',
-                '到达地': r'[\u4e00-\u9fffA-Za-z·]{1,40}',
+                '出发地': r'[\u4e00-\u9fffA-Za-z0-9·|+()（）/\-]{1,100}',
+                '到达地': r'[\u4e00-\u9fffA-Za-z0-9·|+()（）/\-]{1,100}',
                 '等级': r'无|-|经济舱|商务舱|头等舱|一等座|二等座|商务座|普通',
                 '交通工具类型': r'出租汽车|出租车|网约车|汽车|飞机|火车|轮船|其他'}
     headers = sorted([w for w in words if _clean(w.text) in patterns], key=lambda w: w.left)
     valid = (len(headers) == len(patterns) and len({_clean(w.text) for w in headers}) == len(patterns) and
              max(w.cy for w in headers) - min(w.cy for w in headers) < max(w.height for w in headers))
-    if not headers:
+    if not valid:
         return '', [], True, ''
     top = max(w.bottom for w in headers)
     bottom = min((w.top for w in words if w.top > top and re.match(r'^(?:合计|价税合计|备注)', _clean(w.text))),
@@ -93,8 +97,23 @@ def _passenger_page(page: Any, words: list[_Word]) -> tuple[str, list[_Word], bo
         right = (header.right + headers[index + 1].left) / 2 if index + 1 < len(headers) else float(page.rect.width)
         column = [w for w in table if left <= w.cx < right]
         cells.append(column)
-        valid = valid and bool(column) and all(re.fullmatch(patterns[_clean(header.text)], _clean(w.text)) for w in column)
-    valid = valid and len({len(column) for column in cells}) == 1 and sum(map(len, cells)) == len(table)
+    dates = cells[next(i for i, header in enumerate(headers) if _clean(header.text) == '出行日期')]
+    dates = sorted(dates, key=lambda word: word.top)
+    valid = not table or bool(dates)
+    assigned = 0
+    for index, date in enumerate(dates):
+        lower = date.top - date.height * .5
+        upper = dates[index + 1].top - dates[index + 1].height * .5 if index + 1 < len(dates) else bottom
+        for header, column in zip(headers, cells):
+            label = _clean(header.text)
+            cell = sorted([w for w in column if lower <= w.cy < upper], key=lambda word: (word.top, word.left))
+            assigned += len(cell)
+            # Locations wrap independently; grade may be blank on taxi forms.
+            count_ok = (1 <= len(cell) <= 2 if label in {'出发地', '到达地'} else
+                        len(cell) <= 1 if label == '等级' else len(cell) == 1)
+            value = ''.join(_clean(w.text) for w in cell)
+            valid = valid and count_ok and (not cell and label == '等级' or bool(re.fullmatch(patterns[label], value)))
+    valid = valid and assigned == len(table)
     if not valid:
         return '', [], True, ''
     excluded = [*headers, *table]
@@ -108,7 +127,7 @@ def _passenger_page(page: Any, words: list[_Word]) -> tuple[str, list[_Word], bo
             if spans:
                 rows.append(''.join(spans))
     vehicles = cells[next(i for i, header in enumerate(headers) if _clean(header.text) == '交通工具类型')]
-    service = '客运服务' if all(_clean(w.text) in {'出租汽车', '出租车', '网约车'} for w in vehicles) else ''
+    service = '客运服务' if vehicles and all(_clean(w.text) in {'出租汽车', '出租车', '网约车'} for w in vehicles) else ''
     return '\n'.join(rows), [w for w in words if w not in excluded], False, service
 
 
@@ -238,14 +257,21 @@ def _native_metadata(words: list[_Word], page_number: int, source_sha: str) -> l
     specs = (
         ('invoice_total_words', r'价税合计[（(]大写[）)]', r'[零壹贰叁肆伍陆柒捌玖拾佰仟万亿圆元角分整正]+'),
         ('issuer', r'开票人[:：]?', r'[\u4e00-\u9fff·]{2,20}'),
+        ('payee', r'收款人[:：]?', r'[\u4e00-\u9fff·]{2,20}'),
+        ('reviewer', r'复核人?[:：]?', r'[\u4e00-\u9fff·]{2,20}'),
     )
     for kind, label_pattern, value_pattern in specs:
         labels = [word for word in words if re.fullmatch(label_pattern, _clean(word.text))]
         if len(labels) != 1:
             continue
         label = labels[0]
+        # Font boxes can overlap; the next labelled field bounds this value.
+        right = min((word.left for word in words if word.left > label.right and
+                     abs(word.cy - label.cy) <= max(word.height, label.height) * .6 and
+                     any(re.fullmatch(pattern, _clean(word.text)) for _, pattern, _ in specs)),
+                    default=label.right + max(label.height, 8) * 30)
         values = [word for word in words if word is not label and
-                  label.right - 2 <= word.left <= label.right + max(label.height, 8) * 30 and
+                  label.right - label.height * .5 <= word.left < right and word.right <= right and
                   abs(word.cy - label.cy) <= max(word.height, label.height) * .6 and
                   re.fullmatch(value_pattern, _clean(word.text))]
         if len(values) != 1:
@@ -347,7 +373,7 @@ def _native_goods(words: list[_Word], page_number: int) -> list[dict[str, Any]]:
     groups: list[list[list[_Word]]] = []
     for row in rows[start + 1:]:
         text = _clean(''.join(word.text for word in row))
-        if text.startswith(('合计', '价税合计', '备注', '开票人')):
+        if text.startswith(('合计', '价税合计', '备注', '开票人', '收款人', '复核')):
             break
         names = [word for word in row if word.left < name_right and word.right <= name_right + 2]
         if names and _clean(names[0].text).startswith(('*', '＊')):

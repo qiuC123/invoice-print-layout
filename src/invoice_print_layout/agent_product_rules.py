@@ -13,7 +13,7 @@ from typing import Any
 import unicodedata
 
 
-PRODUCT_RULES_VERSION = 'whole-product-rules-v6'
+PRODUCT_RULES_VERSION = 'whole-product-rules-v8'
 EXACT_PRODUCT_CATEGORIES = {'亚克力导视牌': '材料采购', '透明亚克力导视牌': '材料采购',
                             '办公鼠标': '材料采购', '娃哈哈饮用水596ml*12瓶': '餐饮'}
 _LABEL = re.compile(r'^(?:商品名称|商品说明|购买内容|货物或应税劳务名称|商品明细|'
@@ -23,7 +23,7 @@ _TAX = re.compile(r'^[*＊][^*＊]+[*＊]')
 _BOUNDARY = re.compile(r'^(?:合计|价税合计|总计|总价|实付|实际付款|已提取总金额|付款金额|支付金额|'
                        r'支付时间|订单号|订单编号|商家订单号|交易号|发票号码|发票代码|开票日期|'
                        r'销售方|购买方|商家名称|店铺名称|收款方|收货|收件|地址|电话|手机|联系人|'
-                       r'配送费|打包费|包装费|运费|价格明细|备注|开票人|商品金额)')
+                       r'配送费|打包费|包装费|运费|价格明细|备注|开票人|收款人|复核|商品金额)')
 _METADATA = re.compile(r'^(?:数量|单位|单价|售价|原价|现价|参考价|税额|税率|金额)\s*[:：]?'
                        r'\s*(?:[¥￥]?[\d.+%×xX\s-]*(?:元|件|个|只|份|组|瓶|盒|杯|包|卷|块)?)?$')
 _NUMERIC = re.compile(r'^[\d\s.+%¥￥×xX-]+(?:元|件|个|只|份|组|瓶|盒|杯|包|卷|块)?$')
@@ -151,9 +151,16 @@ def _source_products(source: Mapping[str, Any], text: str) -> list[str]:
                 _compact(str(row['name'])) in _compact(str(row['quote']))) or
                native_wrapped_product(row, text) == str(row['name']) for row in native):
             names = [part for row in native for part in _parts(str(row['name']))]
+            if (source.get('role') == 'invoice' and '旅客运输服务' in text_compact and
+                    all(_compact(str(row.get('raw_name') or '')) == '*交通运输服务*客运服务费' for row in native)):
+                # Repeated passenger-service/discount rows describe one service;
+                # keep every valued native row intact in the source facts.
+                names = list(dict.fromkeys(names))
             specific = [name for name in names if _compact(name) not in _ANCILLARY]
             return (specific or names) + _native_uncovered_products(text, names, source=source)
-    names = _labelled_products(text)
+    metadata_lines = _native_metadata_lines(source, text)
+    names = _labelled_products('\n'.join(row for index, row in enumerate(text.splitlines())
+                                        if index not in metadata_lines))
     if not names and _courier_detail_product(source, text):
         return ['顺丰快递费']
     if not names and str(source.get('role') or '') in {'purchase', 'order'}:
@@ -257,7 +264,8 @@ def _native_metadata_lines(source: Mapping[str, Any], text: str) -> set[int]:
     if (source.get('role') != 'invoice' or not re.fullmatch(r'[0-9a-f]{64}', digest) or
             not isinstance(metadata, list)):
         return set()
-    labels = {'invoice_total_words': r'价税合计\(大写\)[:：]?', 'issuer': r'开票人[:：]?'}
+    labels = {'invoice_total_words': r'价税合计\(大写\)[:：]?', 'issuer': r'开票人[:：]?',
+              'payee': r'收款人[:：]?', 'reviewer': r'复核人?[:：]?'}
     rows = [_compact(row) for row in text.splitlines()]
     excluded = set()
     for field in metadata:
@@ -303,7 +311,7 @@ def _native_uncovered_products(text: str, names: Sequence[str], *,
             candidates = _parts(row[tax.end():])
         elif active:
             if ((_BOUNDARY.match(_compact(row)) and _compact(row) not in _ANCILLARY) or
-                    _compact(row).startswith('下载次数')):
+                    _compact(row).startswith('下载次数') or _compact(row) in {'合', '计'}):
                 active = False
             elif not (_METADATA.fullmatch(row) or _NUMERIC.fullmatch(row) or
                       re.fullmatch(r'天|无|次|个|件|只|份|组|瓶|盒|单位|数量|单价|金额|税额', _compact(row))):

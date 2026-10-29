@@ -1,4 +1,4 @@
-"""One-time local repair of source-bound F10 review markers."""
+"""Versioned local repair of source-bound organizing review markers."""
 from __future__ import annotations
 
 import json
@@ -8,7 +8,8 @@ from invoice_print_layout.agent_jobs import Jobs, encoded
 from invoice_print_layout.workbench import now
 
 
-_REPAIR = 'organize-review-repair-v1'
+_REPAIR = 'organize-review-repair-v2'
+_LEGACY_REPAIR = 'organize-review-repair-v1'
 _CONTENT_SUFFIX = '；已组合费用和原件保留，可在人工工作台继续核对'
 
 
@@ -23,8 +24,10 @@ def repair_legacy_reviews(jobs: Jobs) -> None:
     for candidate in candidates:
         with jobs.store.connect() as db:
             db.execute('BEGIN IMMEDIATE')
-            if db.execute('SELECT 1 FROM invoice_agent_actions WHERE job_id=? AND key=?',
-                          (candidate['id'], _REPAIR)).fetchone():
+            repaired = {row['key'] for row in db.execute(
+                'SELECT key FROM invoice_agent_actions WHERE job_id=? AND key IN (?,?)',
+                (candidate['id'], _LEGACY_REPAIR, _REPAIR))}
+            if _LEGACY_REPAIR in repaired and _REPAIR in repaired:
                 continue
             job = json.loads(db.execute('SELECT data FROM invoice_agent_jobs WHERE id=?',
                                         (candidate['id'],)).fetchone()['data'])
@@ -39,7 +42,8 @@ def repair_legacy_reviews(jobs: Jobs) -> None:
                        isinstance(q.get('text'), str) and q['text'].endswith(_CONTENT_SUFFIX) and
                        q.get('material_ids') and set(q['material_ids']) <= set(job['material_ids'])}
             cleared_materials: list[str] = []
-            for ident in set(job.get('deferred_materials', [])) & set(job['material_ids']):
+            legacy_materials = [] if _LEGACY_REPAIR in repaired else job.get('deferred_materials', [])
+            for ident in set(legacy_materials) & set(job['material_ids']):
                 row = db.execute('SELECT data FROM intake_queue WHERE id=?', (ident,)).fetchone()
                 entry = json.loads(row['data']) if row else {}
                 if (entry.get('project_id') == job['project_id'] and not entry.get('item_id') and
@@ -48,7 +52,8 @@ def repair_legacy_reviews(jobs: Jobs) -> None:
                     db.execute('UPDATE intake_queue SET data=? WHERE id=?', (encoded(entry), ident))
                     cleared_materials.append(ident)
             cleared_items = []
-            for ident in job.get('deferred_content', []):
+            reviewed_content = False
+            for ident in ([] if _REPAIR in repaired else job.get('deferred_content', [])):
                 try:
                     _, item, sources, _ = tools.content._load(job, ident)
                     if (not item.get('agent_review_reason') or item.get('deleted') or item.get('merged_into') or
@@ -58,6 +63,7 @@ def repair_legacy_reviews(jobs: Jobs) -> None:
                     trip = next((e for e in sources if e['role'] in {'trip', 'trip_sheet'}), None)
                     if invoice is None or trip is None or pair_status(invoice, trip) != 'supported':
                         continue
+                    reviewed_content = True
                     state = item.get('agent_content') or {}
                     checked = tools.content._inspect_products(state, sources, item)
                     if (checked['status'] != 'exact' or not checked['coverage_complete'] or
@@ -77,4 +83,7 @@ def repair_legacy_reviews(jobs: Jobs) -> None:
             job['deferred_content'] = [i for i in job.get('deferred_content', []) if i not in cleared_items]
             db.execute('UPDATE invoice_agent_jobs SET data=? WHERE id=?', (encoded(job), job['id']))
             receipt: dict[str, Any] = {'material_ids': sorted(cleared_materials), 'item_ids': sorted(cleared_items)}
-            db.execute('INSERT INTO invoice_agent_actions VALUES (?,?,?)', (job['id'], _REPAIR, encoded(receipt)))
+            if _LEGACY_REPAIR not in repaired:
+                db.execute('INSERT INTO invoice_agent_actions VALUES (?,?,?)', (job['id'], _LEGACY_REPAIR, encoded(receipt)))
+            if reviewed_content:
+                db.execute('INSERT INTO invoice_agent_actions VALUES (?,?,?)', (job['id'], _REPAIR, encoded(receipt)))

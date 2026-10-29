@@ -163,6 +163,15 @@ def test_native_geometry_retains_full_wrapped_name_and_numeric_evidence() -> Non
     assert (goods, sources) == before
 
 
+@pytest.mark.parametrize('label', ['开票人', '收款人', '复核人', '复核'])
+def test_inline_invoice_signature_is_not_a_product(label: str) -> None:
+    goods, sources = evidence(['鼠标'], text=f'*办公用品*鼠标\n{label}：合成甲')
+    sources[0]['role'] = 'invoice'
+    result = inspect_product_rules(goods, sources, CATEGORIES)
+    assert result['status'] == 'exact' and result['coverage_complete'] is True
+    assert result['goods_text'] == '鼠标'
+
+
 def test_same_name_in_two_sources_keeps_each_source_and_no_quantity_inference() -> None:
     goods, sources = evidence(['鼠标'])
     second_good, second_source = deepcopy(goods[0]), deepcopy(sources[0])

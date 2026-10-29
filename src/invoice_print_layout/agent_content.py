@@ -433,7 +433,16 @@ class ContentTools:
             if len(sources) == 2 and len(invoices) == len(trips) == 1 and pair_status(invoices[0], trips[0]) == 'supported':
                 parts = []
                 for fact in facts:
-                    goods = [g for g in checked_goods if g['material_id'] == fact['id']]
+                    goods = [dict(g) for g in checked_goods if g['material_id'] == fact['id']]
+                    for good in goods:
+                        if good.get('name') == '出租汽车客运':
+                            for native in fact.get('goods', []):
+                                # Old display aliases lost the wrapped raw name;
+                                # require their own quote to prove the full current row.
+                                if (native.get('name') in {'客运服务', '客运服务费'} and
+                                        native_wrapped_product({**native, 'quote': good.get('quote', '')},
+                                                               str(fact.get('source_text') or ''))):
+                                    good['raw_name'] = native['name']
                     part = inspect_product_rules(goods, [fact], {**categories, '客运服务': '打车', '客运服务费': '打车', '出租汽车客运': '打车'})
                     if part['status'] == 'needs_input':
                         part = self._special_ticket_check({'goods': goods}, [fact]) or part
