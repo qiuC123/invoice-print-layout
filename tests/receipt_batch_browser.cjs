@@ -28,6 +28,8 @@ async function run(playwright) {
     const json = (value,status=200)=>route.fulfill({status,contentType:'application/json',body:JSON.stringify(value)});
     if(url.pathname==='/api/state')return json({items:[],inbox:[],categories:['材料采购','外卖','其他'],roles:{purchase:'购买明细',order:'订单',invoice:'发票',payment:'扣费记录'},stages:{draft:'待提交'},token:'synthetic'});
     if(url.pathname.startsWith('/api/')){
+      if(!['/api/recognize','/api/receipt'].includes(url.pathname))return json({error:'unknown synthetic API'},404);
+      assert.equal(route.request().method(),'POST');
       const body=route.request().postDataJSON(); requests.push({route:url.pathname,...body});
       concurrent++;maxConcurrent=Math.max(maxConcurrent,concurrent);
       try {

@@ -74,7 +74,7 @@ async function run(pw) {
     unavailable = false;
     await page.locator('#matchingFiles').setInputFiles({name: 'synthetic.png', mimeType: 'image/png', buffer: Buffer.from('synthetic')});
     await page.locator('#matchingMessage').filter({hasText: '1份识别结果需人工处理'}).waitFor();
-    assert.match(await page.locator('#matchingMessage').innerText(), /已保存 1 份.*原件留在材料区/);
+    assert.match(await page.locator('#matchingMessage').innerText(), /新增 1 份，已收过 0 份.*跳过 0 个.*失败 0 项.*原件留在材料区/);
     assert.match(await page.locator('#matchingProgressText').innerText(), /存疑材料留待人工处理/);
     board.ai.available = true;
     board.payments = [{key: 'q:retry-payment', id: 'retry-payment', role: 'payment', name: '合成付款截图.png',

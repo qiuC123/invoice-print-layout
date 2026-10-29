@@ -144,8 +144,9 @@ async function run(pw) {
     assert.equal(await page.locator('#personFilter').inputValue(), 'alice'); assert.equal(await page.locator('#categoryFilter').inputValue(), '高铁');
     assert.equal(await page.locator('#search').inputValue(), 'queue');
     const afterScroll = await page.locator('#list').evaluate(node => node.scrollTop);
-    assert.ok(Math.abs(afterScroll - beforeScroll) <= 2, 'review should not reset the list to its top');
     const visibility = await page.locator('[data-item="queue-16"]').evaluate(row => {const r = row.getBoundingClientRect(), list = row.closest('#list').getBoundingClientRect(); return {top: r.top, bottom: r.bottom, start: list.top, end: list.bottom};});
+    assert.ok(Math.abs(afterScroll - beforeScroll) <= visibility.bottom - visibility.top, 'review preserves list position, allowing at most one row to reveal the next fee below the notice');
+    assert.match(await page.locator('#notice').innerText(), /已打开当前筛选下的下一笔/);
     assert.ok(visibility.top >= visibility.start - 1 && visibility.bottom <= visibility.end + 1, 'the next expense should remain visible');
     assert.deepEqual(transitions[0], {id: 'queue-15', action: 'verify', expected_version: 'queue-15-v1'});
     assert.equal(items.find(x => x.id === 'queue-16').verified, false); assert.equal(items.filter(x => x.verified).length, 1);

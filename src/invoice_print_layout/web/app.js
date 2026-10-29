@@ -86,10 +86,12 @@ async function act(fn){try{await fn();}catch(e){notify(e.message,true);}}
 let loadRetryTimer=null,loadDisconnected=false;
 let loadedRuntime=null,loadCompleted=false,runtimeChecking=false,reloadPending=false;
 async function readRuntime(){
- const response=await fetch('/api/runtime',{cache:'no-store'});
- if(!response.ok)throw Error('无法读取服务状态');
- const value=await response.json();
- return typeof value.started_at==='string'&&typeof value.build_id==='string'?{started_at:value.started_at,build_id:value.build_id}:null;
+ try{
+  const response=await fetch('/api/runtime',{cache:'no-store'});
+  if(!response.ok)return null;
+  const value=await response.json();
+  return typeof value?.started_at==='string'&&typeof value?.build_id==='string'?{started_at:value.started_at,build_id:value.build_id}:null;
+ }catch(_){return null;}
 }
 function runtimeChanged(value){return loadedRuntime&&value&&(value.started_at!==loadedRuntime.started_at||value.build_id!==loadedRuntime.build_id);}
 function refreshWorkbench(){
@@ -122,7 +124,7 @@ async function load({beforeRender,skipClassification=false}={}){
    const runtime=await readRuntime();
    if(loadDisconnected&&(!loadCompleted||runtimeChanged(runtime))){loadDisconnected=false;refreshWorkbench();return;}
    if(runtimeChanged(runtime)){refreshWorkbench();return;}
-   loadedRuntime=runtime;state=data;
+   if(runtime)loadedRuntime=runtime;state=data;
   }catch(error){
    if(error.message===workbenchOfflineMessage){loadDisconnected=true;scheduleLoadRetry();}
    throw error;
@@ -440,11 +442,12 @@ async function verifyExpense(id,{next=false}={}){
     active=nextId;view='review';advanced=true;
    }else{view='submitted';active=null;}
   }});
+  notify(next&&advanced?(nextId?'本笔核对完成，已打开当前筛选下的下一笔。':'本笔核对完成，当前筛选范围已全部核对。'):'本笔核对完成，可在“已核对”查看。');
   if(advanced){
+   // The notice changes the available list height; reveal the row after that layout change.
    revealExpenseRow(nextId,listTop);$('detail').scrollTop=0;
    if(!nextId)$('detail').innerHTML='<div class="empty" role="status"><h2>当前筛选范围已核对完</h2><p>可切换人员、类别或问题筛选，继续处理其他费用；已核对费用在“已核对”中。</p></div>';
   }
-  notify(next&&advanced?(nextId?'本笔核对完成，已打开当前筛选下的下一笔。':'本笔核对完成，当前筛选范围已全部核对。'):'本笔核对完成，可在“已核对”查看。');
  }catch(error){
   if(committed){render();throw Error('本笔已核对成功；刷新失败，请刷新页面继续，无需再次核对。'+error.message);}
   throw error;

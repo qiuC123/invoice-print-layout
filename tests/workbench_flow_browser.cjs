@@ -70,7 +70,8 @@ async function run(pw){
   await page.locator('#materialMatching').click();
   assert.equal(await page.locator('#matchingProject').count(),0);
   await page.locator('#matchingFiles').setInputFiles({name:'receipt.png',mimeType:'image/png',buffer:Buffer.from('synthetic')});
-  await page.locator('#matchingMessage').filter({hasText:'已保存 1 份'}).waitFor();
+  await page.locator('#matchingMessage').filter({hasText:'新增 1 份'}).waitFor();
+  assert.match(await page.locator('#matchingMessage').innerText(),/新增 1 份，已收过 0 份.*跳过 0 个.*失败 0 项/);
   assert.equal(await page.locator('[data-support-id="q1"]').count(),1,'uploaded material remains available before any fee is created');
   assert.equal(writes.filter(x=>x.path==='/api/intake/receive').at(-1).data.project_id,'p2');
   await page.locator('#matchingClose').click();await page.reload();
