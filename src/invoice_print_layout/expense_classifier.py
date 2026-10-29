@@ -150,6 +150,9 @@ def ask_jev(evidence: dict[str, str]) -> dict[str, Any]:
                 or not math.isfinite(confidence) or not 0 <= confidence <= 1):
             raise ValueError
         return {'choice': answer['choice'], 'confidence': confidence, 'model': MODEL}
+    except OSError:
+        from invoice_print_layout.glm_invoice_ai import GlmAIError
+        raise GlmAIError('', failure_code='network_error') from None
     except Exception:
         raise ValueError('Jev暂时不可用或返回结果无效；未改动记录，可重试或手动分类。') from None
 

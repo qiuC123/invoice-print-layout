@@ -16,6 +16,7 @@ from invoice_print_layout.agent_expense_naming import concise_expense_name
 from invoice_print_layout.agent_product_rules import (PRODUCT_RULES_VERSION, inspect_product_rules,
                                                      native_wrapped_product)
 from invoice_print_layout.agent_jobs import Jobs, ModelBudgetExceeded, digest, encoded
+from invoice_print_layout.glm_invoice_ai import GlmAIError
 from invoice_print_layout.intake_queue import IntakeQueue
 from invoice_print_layout.report_types import infer_report_choice, validate_report_choice
 from invoice_print_layout.workbench import now
@@ -742,6 +743,8 @@ class ContentTools:
                     try:
                         decision = classifier.decide(evidence, ask_model=model_call)
                     except ModelBudgetExceeded:
+                        raise
+                    except GlmAIError:
                         raise
                     except ValueError:
                         decision = {'category': None, 'source': 'local', 'reason': '已有商品，但分类尚未确定，请在人工工作台确认'}

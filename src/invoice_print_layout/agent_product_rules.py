@@ -13,7 +13,7 @@ from typing import Any
 import unicodedata
 
 
-PRODUCT_RULES_VERSION = 'whole-product-rules-v5'
+PRODUCT_RULES_VERSION = 'whole-product-rules-v6'
 EXACT_PRODUCT_CATEGORIES = {'亚克力导视牌': '材料采购', '透明亚克力导视牌': '材料采购',
                             '办公鼠标': '材料采购', '娃哈哈饮用水596ml*12瓶': '餐饮'}
 _LABEL = re.compile(r'^(?:商品名称|商品说明|购买内容|货物或应税劳务名称|商品明细|'
@@ -131,6 +131,16 @@ def _labelled_products(text: str) -> list[str]:
 
 
 def _source_products(source: Mapping[str, Any], text: str) -> list[str]:
+    passenger = source.get('goods') or []
+    if (source.get('role') == 'invoice' and len(passenger) == 1 and
+            passenger[0].get('method') == 'native_passenger_service' and
+            passenger[0].get('name') == '客运服务' and '电子发票(旅客运输服务)' in _compact(text) and
+            all(re.fullmatch(r'电子发票\(旅客运输服务\)|旅客运输服务|'
+                r'发票号码[:：](?:\d{8,30}|\[编号省略\])|开票日期[:：]\d{4}年\d{1,2}月\d{1,2}日|'
+                r'(?:销售方|购买方)名称[:：][\u4e00-\u9fffA-Za-z0-9()·]{2,100}|'
+                r'价税合计|\(小写\)|(?:价税合计)?(?:\(小写\))?[¥￥]?\d+\.\d{2}', _compact(row))
+                for row in text.splitlines() if row.strip())):
+        return ['客运服务']
     # Native table geometry already supplies complete wrapped names without
     # numeric columns.  It is preferable to reconstructing table stream order.
     native = [row for row in source.get('goods', []) if isinstance(row, Mapping) and

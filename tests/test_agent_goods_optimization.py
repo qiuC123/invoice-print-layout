@@ -379,10 +379,14 @@ def test_negative_attempt_survives_adapter_recreation_without_provider_retry(
             raise GlmAIError('', failure_code='network_error')
         return {'goods': []} if failure == 'empty' else {'goods': [{'name': '胶带', 'source_ids': [0], 'quote': '胶带'}]}
     monkeypatch.setattr(GlmInvoiceAI, '_request', request)
-    first = supplement_goods(jobs, job, entry, facts(), [])
+    if failure == 'network':
+        with pytest.raises(GlmAIError):
+            supplement_goods(jobs, job, entry, facts(), [])
+    else:
+        assert not supplement_goods(jobs, job, entry, facts(), [])['complete']
     monkeypatch.setattr(GlmInvoiceAI, '_request', lambda *a, **k: pytest.fail('durable negative cache'))
     second = supplement_goods(jobs, jobs.get(job['id']), entry, facts(), [])
-    assert not first['complete'] and not second['complete']
+    assert not second['complete']
     assert second['source'] == 'cache' and jobs.get(job['id'])['models'] == 1
 
 

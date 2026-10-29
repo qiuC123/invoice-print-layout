@@ -26,15 +26,18 @@ def leave_for_review(jobs: Jobs, key: str, question: dict[str, Any], *, finish: 
         content_ids = set(job.get('deferred_content', []))
         material_ids = set(job.get('deferred_materials', []))
         reason = str(question.get('text') or '材料缺少明确的金额或对应关系')
-        for ident in items:
+        targets = set(question.get('material_ids') or []) & set(job['material_ids'])
+        content_targets = {json.loads(row['data']).get('item_id') for row in db.execute(
+            'SELECT data FROM intake_queue WHERE id IN (' + ','.join('?' for _ in targets) + ')',
+            sorted(targets))} if question.get('type') == 'expense_content' else set()
+        for ident in items & content_targets:
             row = db.execute('SELECT data FROM expenses WHERE id=?', (ident,)).fetchone()
             item = json.loads(row['data']) if row else {}
             content = item.get('agent_content') or {}
             if (item.get('project_id') != job['project_id'] or item.get('stage') != 'draft' or
                     item.get('verified') or item.get('deleted') or item.get('merged_into')):
                 continue
-            if content.get('status') == 'needs_input' or (
-                    question.get('type') == 'expense_content' and content.get('status') != 'ready'):
+            if content.get('status') != 'ready':
                 item.update(agent_review_reason=content.get('reason') or reason,
                             review_requested=True, updated_at=now())
                 if content:
@@ -42,7 +45,10 @@ def leave_for_review(jobs: Jobs, key: str, question: dict[str, Any], *, finish: 
                     content['base'] = ContentTools._base(item)
                 db.execute('UPDATE expenses SET data=? WHERE id=?', (encoded(item), ident))
                 content_ids.add(ident)
-        targets = set(question.get('material_ids') or []) if question.get('type') != 'expense_content' else set()
+        if question.get('type') == 'expense_content':
+            targets = set()
+        elif job.get('model_unavailable'):
+            reason = '模型暂时不可用，已留在材料合成台'
         remaining = []
         for ident in job['material_ids']:
             row = db.execute('SELECT data FROM intake_queue WHERE id=?', (ident,)).fetchone()
@@ -51,11 +57,14 @@ def leave_for_review(jobs: Jobs, key: str, question: dict[str, Any], *, finish: 
                     entry.get('status') not in {'received', 'review'}):
                 continue
             remaining.append(ident)
-            if ident in targets or finish:
+            if ident in targets:
                 entry['agent_review_reason'] = entry.get('agent_review_reason') or reason
                 db.execute('UPDATE intake_queue SET data=? WHERE id=?', (encoded(entry), ident))
                 material_ids.add(ident)
         previous = job['state']
+        if previous == 'needs_input':
+            db.execute('INSERT OR IGNORE INTO invoice_agent_actions VALUES (?,?,?)',
+                       (key, 'nonblocking-review-question', encoded({'question': question})))
         job.update(deferred_content=sorted(content_ids), deferred_materials=sorted(material_ids),
                    question=None, approval=None, updated_at=time.time())
         if finish:
@@ -63,7 +72,8 @@ def leave_for_review(jobs: Jobs, key: str, question: dict[str, Any], *, finish: 
                 job['elapsed'] += max(0, time.time() - job['run_started'])
             job.update(state='ready', run_started=None, item_ids=sorted(items),
                        remaining_material_ids=remaining, remaining_material_count=len(remaining),
-                       message=f'已生成 {len(items)} 笔费用，{len(remaining)} 份材料留在材料合成台')
+                       message=f'已生成 {len(items)} 笔费用，{len(remaining)} 份材料留在材料合成台' +
+                       ('；模型暂时不可用' if job.get('model_unavailable') else ''))
             jobs._timing_transition(job, previous)
         db.execute('UPDATE invoice_agent_jobs SET state=?,data=? WHERE id=?', (job['state'], encoded(job), key))
     return jobs._timing_snapshot(job)

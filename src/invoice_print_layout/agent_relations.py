@@ -387,7 +387,7 @@ class RelationTools:
             with self.jobs.timed(job['id'], 'relation_model', models_before=job['models']):
                 raw=self.ai._request(RULES,encoded(payload),max_tokens=4096)
         except GlmAIError as exc:
-            if exc.failure_code=='network_error':
+            if exc.failure_code in {'network_error', 'config_unavailable'}:
                 raise
             raise ValueError('模型未返回可验证的调查证据；保留原件并确认具体对应关系') from None
         decisions=raw.get('decisions')

@@ -92,6 +92,8 @@ def ride_service(text: str) -> bool:
     source = compact_text(text)
     return bool(_freight_evidence(text) is None and '铁路电子客票' not in source and
                 (re.search(r'出租车|出租汽车客运|出租客运', source) or
+                 '电子发票(旅客运输服务)' in source.replace('（', '(').replace('）', ')') and
+                 '交通工具类型' in source and '出租汽车' in source or
                  '旅客运输服务' in source and re.search(r'[*＊][^*＊]+[*＊]客运服务费?', source) or
                  detect_provider(text) is not RideProvider.UNKNOWN and
                  re.search(r'[*＊][^*＊]+[*＊](?:客运服务|运输服务)', source)))

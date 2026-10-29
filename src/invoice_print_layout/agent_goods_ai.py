@@ -250,7 +250,12 @@ def supplement_goods(jobs: Jobs, job: dict[str, Any], entry: dict[str, Any], fac
         try:
             raw = ai._request(RULES, encoded({'sources': sources}), max_tokens=2048)
             accepted = _validate(raw, sources, ai.model)
-        except (GlmAIError, ValueError, TypeError, KeyError):
+        except GlmAIError as exc:
+            if exc.failure_code in {'network_error', 'config_unavailable'}:
+                raise
+            timing['outcome'] = 'rejected'
+            return {**base, 'source': 'glm', 'reason': '商品补提取未得到完整原文依据，请人工确认购买内容'}
+        except (ValueError, TypeError, KeyError):
             # Negative cache is durable: cancellation/restart/repeated inputs cannot
             # turn an uncertain provider response into an unbounded retry loop.
             timing['outcome'] = 'rejected'

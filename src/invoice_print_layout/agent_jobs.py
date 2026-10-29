@@ -258,6 +258,11 @@ class Jobs:
             if any(e['project_id'] != project or e['status'] not in {'received', 'review'} or
                    e.get('item_id') for e in entries):
                 raise ValueError('材料已关联、移除或不属于当前项目，请刷新')
+            for entry in entries:
+                if entry.get('agent_review_reason') is not None:
+                    stored = json.loads(db.execute('SELECT data FROM intake_queue WHERE id=?', (entry['id'],)).fetchone()['data'])
+                    stored.pop('agent_review_reason', None)
+                    db.execute('UPDATE intake_queue SET data=? WHERE id=?', (encoded(stored), entry['id']))
             job = {
                 'id': uuid.uuid4().hex, 'project_id': project, 'material_ids': ids,
                 'material_revisions': {e['id']: e['revision'] for e in entries},
@@ -635,6 +640,8 @@ class AgentLoop:
                     else:
                         try:
                             result = tools.execute(name, args, job)
+                        except GlmAIError:
+                            raise
                         except ValueError as exc:
                             if name not in {'validate_group', 'reconcile_amount', 'read_material', 'investigate_relations',
                                             'inspect_materials', 'extract_goods', 'classify_expense', 'name_expense'}:
@@ -682,10 +689,10 @@ class AgentLoop:
             except ModelBudgetExceeded as exc:
                 return self.jobs.stop(key, 'stopped', str(exc))
             except GlmAIError as exc:
-                failed = self.jobs.get(key)
                 self.jobs.event(key, '模型请求未完成', error=exc.failure_code)
-                if exc.failure_code == 'network_error' and failed.get('model_retries', 0) < 1:
-                    self.jobs.update(key, model_retries=failed.get('model_retries', 0) + 1)
+                if exc.failure_code in {'network_error', 'config_unavailable'}:
+                    self.jobs.update(key, use_model=False, model_unavailable=True)
+                    self.jobs.event(key, '模型暂时不可用，继续按本地规则整理')
                     continue
                 return self.jobs.stop(key, 'failed', '模型请求未完成，已有结果保留，可按剩余额度重试')
             except (ValueError, KeyError, TypeError, OSError) as exc:
@@ -740,6 +747,8 @@ class AgentService:
         for row in waiting:
             job = self.jobs.get(row['id'])
             leave_for_review(self.jobs, job['id'], job.get('question') or {}, finish=True)
+        from invoice_print_layout.agent_review_recovery import repair_legacy_reviews
+        repair_legacy_reviews(self.jobs)
 
     def kick(self) -> None:
         with self._kick_lock:

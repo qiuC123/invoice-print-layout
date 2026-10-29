@@ -28,7 +28,7 @@ _PURCHASE_ANCHOR = re.compile(r'^(?:商品明细|购买明细|(?:淘宝)?闪购|
 _CONTACT = re.compile(r'地址|电话|手机|联系人|收货人|收件人|寄件人|送至|送到|开票人|'
                       r'纳税人识别号|统一社会信用代码|税号|开户|银行账号|身份证|电子邮箱|https?://|@', re.I)
 _NUMBER = re.compile(r'-?\d+(?:\.\d+)?')
-PARSER_VERSION = 'material-facts-v4'
+PARSER_VERSION = 'material-facts-v5'
 
 
 def _clean(value: str) -> str:
@@ -64,6 +64,52 @@ def _words(page: Any) -> list[_Word]:
 def _union(words: list[_Word]) -> list[float]:
     return [round(min(word.left for word in words), 3), round(min(word.top for word in words), 3),
             round(max(word.right for word in words), 3), round(max(word.bottom for word in words), 3)]
+
+
+def _passenger_page(page: Any, words: list[_Word]) -> tuple[str, list[_Word], bool, str]:
+    """Remove only a complete native passenger table; never retain passenger PII."""
+    text = str(page.get_text())
+    if '电子发票(旅客运输服务)' not in _clean(text):
+        return text, words, False, ''
+    patterns = {'出行人': r'[\u4e00-\u9fffA-Za-z·*＊]{1,40}',
+                '有效身份证件号': r'[A-Za-z0-9*＊-]{4,30}',
+                '出行日期': r'\d{4}[-/.年]\d{1,2}[-/.月]\d{1,2}日?',
+                '出发地': r'[\u4e00-\u9fffA-Za-z·]{1,40}',
+                '到达地': r'[\u4e00-\u9fffA-Za-z·]{1,40}',
+                '等级': r'无|-|经济舱|商务舱|头等舱|一等座|二等座|商务座|普通',
+                '交通工具类型': r'出租汽车|出租车|网约车|汽车|飞机|火车|轮船|其他'}
+    headers = sorted([w for w in words if _clean(w.text) in patterns], key=lambda w: w.left)
+    valid = (len(headers) == len(patterns) and len({_clean(w.text) for w in headers}) == len(patterns) and
+             max(w.cy for w in headers) - min(w.cy for w in headers) < max(w.height for w in headers))
+    if not headers:
+        return '', [], True, ''
+    top = max(w.bottom for w in headers)
+    bottom = min((w.top for w in words if w.top > top and re.match(r'^(?:合计|价税合计|备注)', _clean(w.text))),
+                 default=float(page.rect.height))
+    table = [w for w in words if top < w.cy < bottom]
+    cells: list[list[_Word]] = []
+    for index, header in enumerate(headers):
+        left = (headers[index - 1].right + header.left) / 2 if index else 0
+        right = (header.right + headers[index + 1].left) / 2 if index + 1 < len(headers) else float(page.rect.width)
+        column = [w for w in table if left <= w.cx < right]
+        cells.append(column)
+        valid = valid and bool(column) and all(re.fullmatch(patterns[_clean(header.text)], _clean(w.text)) for w in column)
+    valid = valid and len({len(column) for column in cells}) == 1 and sum(map(len, cells)) == len(table)
+    if not valid:
+        return '', [], True, ''
+    excluded = [*headers, *table]
+    # Span geometry preserves unrelated product lines, including unknown extra rows.
+    rows = []
+    for block in page.get_text('dict')['blocks']:
+        for line in block.get('lines', []):
+            spans = [span['text'] for span in line['spans'] if not any(
+                span['bbox'][0] <= w.cx <= span['bbox'][2] and span['bbox'][1] <= w.cy <= span['bbox'][3]
+                for w in excluded)]
+            if spans:
+                rows.append(''.join(spans))
+    vehicles = cells[next(i for i, header in enumerate(headers) if _clean(header.text) == '交通工具类型')]
+    service = '客运服务' if all(_clean(w.text) in {'出租汽车', '出租车', '网约车'} for w in vehicles) else ''
+    return '\n'.join(rows), [w for w in words if w not in excluded], False, service
 
 
 def _rows(words: list[_Word]) -> list[list[_Word]]:
@@ -446,9 +492,21 @@ def _material_facts(entry: dict[str, Any], payload: bytes | None,
                 if document.needs_pass or len(document) > 10:
                     raise ValueError('PDF页数或加密状态需要人工检查')
                 collected: dict[str, list[dict[str, Any]]] = {'seller': [], 'buyer': []}
+                source_pages = []
+                passenger_goods = []
                 for index, page in enumerate(document):
                     words = _words(page)
                     native = native or bool(words)
+                    if role == 'invoice':
+                        page_text, words, passenger_issue, service = _passenger_page(page, words)
+                        source_pages.append(page_text)
+                        if passenger_issue:
+                            issues.append('客运栏目未能完整核验，请在人工工作台核对原件')
+                        if service:
+                            passenger_goods.append({'name': service, 'quote': '电子发票（旅客运输服务）',
+                                                    'method': 'native_passenger_service', 'page': index + 1})
+                    else:
+                        source_pages.append(str(page.get_text()))
                     for actor, label in (('seller', '销售方'), ('buyer', '购买方')):
                         fact = _actor(page, words, label, index + 1)
                         if actor == 'seller' and fact:
@@ -468,10 +526,12 @@ def _material_facts(entry: dict[str, Any], payload: bytes | None,
                     elif facts:
                         issues.append('原件' + ('销售方' if actor == 'seller' else '购买方') + '不唯一')
                 if native:
-                    source = '\n'.join(str(page.get_text()) for page in document)
+                    source = '\n'.join(source_pages)
                     source_text = source
                     if not goods:
                         goods = [{**item, 'method': 'native_text'} for item in goods_from_text(_safe_text(source), fields)]
+                    if not goods:
+                        goods = passenger_goods
                     for actor in ('seller', 'buyer'):
                         if actors[actor] is None:
                             fact = _labelled_actor(source, actor)

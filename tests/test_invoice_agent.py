@@ -413,7 +413,7 @@ def test_cancel_after_validation_prevents_any_write(environment: Any) -> None:
     assert not tools.store.list_items()
 
 
-def test_transient_model_error_retries_once_and_persists_spent_budget(planner_environment: Any) -> None:
+def test_transient_model_error_falls_back_and_persists_spent_budget(planner_environment: Any) -> None:
     from invoice_print_layout.glm_invoice_ai import GlmAIError
     jobs, tools, project = environment = planner_environment
     entry = material(tools, project, 'receipt', '17', 'transient network')
@@ -425,12 +425,10 @@ def test_transient_model_error_retries_once_and_persists_spent_budget(planner_en
             raise GlmAIError('', failure_code='network_error')
     planner = NetworkPlanner()
     done = AgentLoop(jobs).run(job['id'], tools, planner)
-    assert done['state'] == 'failed' and done['models'] == planner.calls == 2
-    assert done['model_retries'] == 1
-    resumed = jobs.retry(job['id'])
-    assert resumed['models'] == 2 and resumed['model_retries'] == 1 and resumed['elapsed'] >= done['elapsed']
-    done = AgentLoop(jobs).run(job['id'], tools, Scripted(call('ask_user')))
-    assert done['state'] == 'ready' and done['models'] == 3
+    assert done['state'] == 'ready' and done['models'] == planner.calls == 1
+    assert done['model_unavailable'] and not done['use_model']
+    assert tools.intake.get(entry['id'])['agent_review_reason'] == '模型暂时不可用，已留在材料合成台'
+    assert AgentLoop(jobs).run(job['id'], tools, planner) == done
 
 
 def test_model_schema_error_is_not_automatically_retried(planner_environment: Any) -> None:
