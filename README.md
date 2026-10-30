@@ -6,6 +6,30 @@
 
 > 运行环境：Windows + Python 3.12，浏览器打开 `http://127.0.0.1:8765/`。双击 `打开发票助手.cmd` 即可启动，优先打开无地址栏的 Edge 应用窗口；没有 Edge 时使用默认浏览器。启动脚本加 `-BrowserTab` 可强制普通浏览器标签页，`-NoBrowser` 仍只启动服务。
 
+![发票工作台主界面：待核对费用与 A4 打印页](docs/images/workbench.png)
+
+## 三步上手
+
+1. 安装 [Python 3.12](https://www.python.org/downloads/windows/)，然后在 PowerShell 里：
+
+   ```powershell
+   git clone https://github.com/qiuC123/invoice-print-layout.git
+   cd invoice-print-layout
+   py -3.12 -m venv .venv
+   .\.venv\Scripts\python.exe -m pip install -e .
+   ```
+
+2. 双击 `打开发票助手.cmd`，工作台会在单独的窗口里打开。
+3. 新建项目，把发票、行程单、付款截图（或整个文件夹）拖进窗口；在材料合成台确认组合，核对后点「制作报销包」，得到可直接打印的 PDF。
+
+不配置邮箱和 AI 模型也能完整使用；需要时在左下角「设置」里开启。
+
+| 整个文件夹一次收进来 | 发票＋行程单自动配对 | 一键生成 A4 报销打印包 |
+| --- | --- | --- |
+| ![收材料](docs/images/intake.png) | ![自动配对](docs/images/pairing.png) | ![报销打印包](docs/images/print-package.png) |
+
+截图均为虚构演示数据。
+
 ## 主要功能
 
 **收集材料**

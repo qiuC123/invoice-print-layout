@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "invoice-print-layout"
 version = "0.1.0"
-description = "Local ride-hailing trip-sheet and electronic-invoice PDF imposition tool"
+description = "Local invoice workbench: collect invoices and payment proofs, pair them, and build vector A4 reimbursement packages"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [

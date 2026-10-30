@@ -28,6 +28,8 @@ tmp/
 *.webp
 *.xlsx
 *.xls
+# README screenshots: reviewed, fictional demo data only.
+!/docs/images/*.png
 *.zip
 mail163.toml
 feishu_bot.toml
