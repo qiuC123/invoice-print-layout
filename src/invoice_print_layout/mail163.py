@@ -55,6 +55,18 @@ _IMAP_MONTHS = (
 class MailImportError(RuntimeError):
     """Raised when mail import cannot proceed safely."""
 
+    def __init__(self, message: str, *, category: str = 'internal') -> None:
+        super().__init__(message)
+        self.category = category if category in {'auth', 'network', 'internal'} else 'internal'
+
+
+def mail_failure_category(error: Exception) -> str:
+    if isinstance(error, MailImportError):
+        return error.category
+    if isinstance(error, (imaplib.IMAP4.abort, OSError)):
+        return 'network'
+    return 'internal'
+
 
 class ImapConnection(Protocol):
     def login(self, user: str, password: str) -> tuple[str, list[bytes]]: ...
@@ -198,9 +210,9 @@ def read_auth_code(address: str) -> str:
     try:
         value = keyring.get_password(KEYRING_SERVICE, address)
     except keyring.errors.KeyringError as exc:
-        raise MailImportError(f"无法读取 Windows 凭据管理器：{exc}") from exc
+        raise MailImportError(f"无法读取 Windows 凭据管理器：{exc}", category='auth') from exc
     if not value:
-        raise MailImportError("未找到客户端授权码，请重新运行 mail setup")
+        raise MailImportError("未找到客户端授权码，请重新运行 mail setup", category='auth')
     return value
 
 
@@ -518,9 +530,14 @@ def _connect(
             ssl_context=ssl.create_default_context(),
             timeout=30,
         )
-        status, _ = client.login(settings.address, auth_code)
+        try:
+            status, _ = client.login(settings.address, auth_code)
+        except imaplib.IMAP4.abort:
+            raise
+        except imaplib.IMAP4.error:
+            raise MailImportError("163 邮箱登录失败，请检查邮箱地址和客户端授权码", category='auth') from None
         if status != "OK":
-            raise MailImportError("163 邮箱登录失败，请检查邮箱地址和客户端授权码")
+            raise MailImportError("163 邮箱登录失败，请检查邮箱地址和客户端授权码", category='auth')
         status, _ = client.xatom(
             "ID",
             '("name" "invoice-print-layout" "version" "0.2.0" "vendor" "local")',
@@ -544,7 +561,7 @@ def _connect(
                 client.logout()
             except (imaplib.IMAP4.error, OSError):
                 pass
-        raise MailImportError(f"无法连接 163 邮箱：{exc}") from exc
+        raise MailImportError(f"无法连接 163 邮箱：{exc}", category='network') from exc
 
 
 def test_connection(settings: Mail163Settings, auth_code: str, *,

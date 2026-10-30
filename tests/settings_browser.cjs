@@ -191,6 +191,14 @@ async function run(pw){
   await page.locator('#settingsMailInterval').fill('5');await page.locator('#settingsMailProject').selectOption('p1');await page.locator('#settingsMailEnabled').check();await page.locator('#settingsMailForm button[type=submit]').click();await waitStatus('收件邮箱设置已保存');assert.equal(settings.mail.interval_seconds,300);assert.equal(settings.mail.default_project_id,'p1');assert.equal(await page.locator('#settingsMailAuth').inputValue(),'');assert.ok(!(await page.locator('#settingsDialog').textContent()).includes('synthetic-mail-auth-only'));
   assert.equal(await page.evaluate(()=>JSON.stringify(window.settingsEvents).includes('synthetic-mail-auth-only')),false);
   await page.locator('#settingsMailCollect').click();await page.getByText('已开始收件',{exact:true}).waitFor();assert.match(await page.locator('#settingsMailLastChecked').textContent(),/上次检查/);
+  for(const [error_category,hint] of [['auth','请去163邮箱重新生成客户端授权码后在设置里更新'],['network','网络连接失败，会自动重试'],['internal','会自动重试，持续失败请重启发票助手']]){
+   Object.assign(settings.mail,{error_category,suspended:true,last_error:hint+'。收件连续失败，已改为每小时自动重试一次。'});
+   await page.locator('#settingsClose').click();await page.evaluate(()=>window.invoiceSettings.open('mail'));
+   await page.waitForFunction(hint=>document.getElementById('settingsMailLastError').textContent.includes(hint),hint);
+   assert.match(await page.locator('#settingsMailLastError').innerText(),new RegExp(hint));assert.match(await page.locator('#settingsMailLastError').innerText(),/每小时自动重试一次/);
+  }
+  Object.assign(settings.mail,{error_category:'',suspended:false,last_error:''});
+  await page.locator('#settingsMailCollect').click();await page.waitForFunction(()=>document.getElementById('settingsMailLastError').hidden);
   if(evidence)await page.screenshot({path:path.join(evidence,'settings-mail.png')});
   await page.mouse.click(5,5);assert.equal(await page.locator('#settingsDialog').evaluate(node=>node.open),false);
   await page.setViewportSize({width:390,height:844});await page.locator('#settingsCompactOpen').click();

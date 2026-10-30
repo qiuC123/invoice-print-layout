@@ -11,7 +11,7 @@ window.fetch=async(...args)=>{
   throw error;
  }
 };
-const projectScope=new URLSearchParams(location.search).get('project')||'';
+let projectScope=new URLSearchParams(location.search).get('project')||'';
 const embeddedWorkbench=!!projectScope&&new URLSearchParams(location.search).get('embedded')==='1'&&window.parent!==window;
 if(embeddedWorkbench)document.documentElement.classList.add('embedded-workbench');
 if(embeddedWorkbench)document.addEventListener('DOMContentLoaded',()=>{if(projectContext())renderProjectContext();});
@@ -24,14 +24,29 @@ function projectContext(){return (state.projects||[]).find(p=>p.id===projectScop
 function currentInvoiceProjectId(){return projectContext()?.id||'';}
 let projectReimbursementView=null;
 function projectReimbursementStatus(project){return project?.reimbursement_status==='reimbursed'?'reimbursed':'unreimbursed';}
+function sortedProjects(projects,status){return projects.filter(p=>projectReimbursementStatus(p)===status).sort((a,b)=>Number(!!b.pinned)-Number(!!a.pinned));}
+function selectStartupProject(data){
+ if(data.app_mode!=='invoice'||embeddedWorkbench)return;
+ const projects=data.projects||[],url=new URL(location.href);
+ if((projectScope&&!projects.some(p=>p.id===projectScope))||(!projectScope&&url.searchParams.get('view')!=='all')){
+  let remembered='';try{remembered=localStorage.getItem('invoice-last-project')||'';}catch(_){}
+  const candidates=sortedProjects(projects,'unreimbursed');
+  projectScope=(candidates.find(p=>p.id===remembered)||candidates[0])?.id||'';
+  if(projectScope)url.searchParams.set('project',projectScope);else url.searchParams.delete('project');
+  // Resolve scope before the first render, without another document/API load or history entry.
+  history.replaceState(null,'',url);
+ }
+ if(projectScope)try{localStorage.setItem('invoice-last-project',projectScope);}catch(_){}
+}
 function renderProjectNavigation(){
  const projects=state.projects||[];
  if(projectReimbursementView===null)projectReimbursementView=projectContext()?projectReimbursementStatus(projectContext()):projects.some(p=>projectReimbursementStatus(p)==='unreimbursed')?'unreimbursed':'reimbursed';
  let nav=$('projectWorkbenches');
  if(!nav){nav=document.createElement('nav');nav.id='projectWorkbenches';nav.setAttribute('aria-label','项目报销工作台');document.querySelector('.rail').append(nav);}
  const statuses=[['unreimbursed','未报销'],['reimbursed','已报销']];
- const visible=projects.filter(p=>projectReimbursementStatus(p)===projectReimbursementView).sort((a,b)=>Number(!!b.pinned)-Number(!!a.pinned));
+ const visible=sortedProjects(projects,projectReimbursementView);
  nav.innerHTML=`<div class="project-status-tabs" role="group" aria-label="项目报销分类">${statuses.map(([value,label])=>`<button type="button" data-project-status="${value}" aria-pressed="${value===projectReimbursementView}" class="${value===projectReimbursementView?'active':''}">${label} <span>${projects.filter(p=>projectReimbursementStatus(p)===value).length}</span></button>`).join('')}</div><div id="projectLinks">${visible.map(p=>`<a href="/?project=${encodeURIComponent(p.id)}" data-project-menu-id="${esc(p.id)}" aria-haspopup="menu" ${p.id===projectScope?'aria-current="page"':''}>${p.pinned?'<span class="project-pin" aria-hidden="true">⌖</span>':''}${esc(p.name)} · 发票报销</a>`).join('')||'<p class="project-empty">暂无项目</p>'}</div>`;
+ if(state.app_mode==='invoice'&&!embeddedWorkbench){const all=document.createElement('a');all.href='/?view=all';all.textContent='全部项目';all.className='nav'+(!projectScope?' active':'');if(!projectScope)all.setAttribute('aria-current','page');nav.prepend(all);}
 }
 function renderProjectContext(){
  const project=projectContext();
@@ -120,7 +135,8 @@ async function load({beforeRender,skipClassification=false}={}){
   clearTimeout(loadRetryTimer);loadRetryTimer=null;
   try{
    const res=await fetch('/api/state');if(!res.ok)throw Error('无法读取工作台');
-   const data=scopeData(await res.json());
+   const raw=await res.json();selectStartupProject(raw);
+   const data=scopeData(raw);
    const runtime=await readRuntime();
    if(loadDisconnected&&(!loadCompleted||runtimeChanged(runtime))){loadDisconnected=false;refreshWorkbench();return;}
    if(runtimeChanged(runtime)){refreshWorkbench();return;}

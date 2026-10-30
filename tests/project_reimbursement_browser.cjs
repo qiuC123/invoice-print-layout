@@ -188,7 +188,7 @@ async function run(pw) {
     assert.deepEqual(await linkIds(page), ['p1', 'p3']);
     await counts(page, 2, 2);
 
-    await page.goto(origin + '/'); await page.locator('[data-item="draft-fee"]').waitFor();
+    await page.goto(origin + '/?view=all'); await page.locator('[data-item="draft-fee"]').waitFor();
     assert.ok(await selector(page).count() === 0 || !await selector(page).isVisible(), 'root page cannot change an unspecified project status');
     await obsoleteSidebarGone(page);
     assert.deepEqual(await linkIds(page), ['p1', 'p3']);

@@ -19,7 +19,7 @@ import uuid
 from invoice_print_layout.agent_jobs import AgentService, encoded
 from invoice_print_layout.expense_projects import ExpenseProjects
 from invoice_print_layout.intake_queue import IntakeQueue
-from invoice_print_layout.mail163 import Mail163Settings, read_auth_code, read_mail_settings
+from invoice_print_layout.mail163 import Mail163Settings, mail_failure_category, read_auth_code, read_mail_settings
 from invoice_print_layout.organize_settings import OrganizeSettings
 from invoice_print_layout.glm_invoice_ai import GlmInvoiceAI
 from invoice_print_layout.workbench import ExpenseStore
@@ -27,6 +27,11 @@ from invoice_print_layout.workbench import ExpenseStore
 Fetcher = Callable[..., dict[str, Any]]
 _ZONE = timezone(timedelta(hours=8))
 _RETRY_LIMIT = 3
+_FAILURE_HINTS = {
+    'auth': '收件授权失败，请去163邮箱重新生成客户端授权码后在设置里更新。',
+    'network': '收件网络连接失败，会自动重试，请检查网络连接。',
+    'internal': '收件程序运行失败，会自动重试，持续失败请重启发票助手。',
+}
 
 
 def _today() -> str:
@@ -246,10 +251,15 @@ class MailAgentService:
         visible.sort(key=lambda m: m['status'] not in unresolved)
         has_more = len(visible) > 30
         visible = visible[:30]
+        category = account.get('error_category', '')
+        hint = _FAILURE_HINTS.get(category, '')
+        if account.get('suspended'):
+            hint = (hint or _FAILURE_HINTS['internal']) + '收件连续失败，已改为每小时自动重试一次（前几次会更早重试）。'
         return {k: config[k] for k in ('enabled', 'interval_seconds', 'since', 'approved_since', 'use_model', 'default_project_id')} | {
             'address': address, 'folder': folder,
             'last_checked_at': account.get('last_checked_at'),
-            'last_error': error or account.get('last_error', ''),
+            'last_error': error or hint or account.get('last_error', ''),
+            'error_category': category if category in _FAILURE_HINTS else '',
             'next_check_at': account.get('next_check_at'),
             'suspended': bool(account.get('suspended')), 'collecting': bool(self._thread and self._thread.is_alive()),
             'messages': visible, 'pending': visible, 'unresolved_count': unresolved_count, 'has_more': has_more,
@@ -274,7 +284,7 @@ class MailAgentService:
                 account = self._account(self._settings(), config)
             except Exception:
                 return
-            network = self._force or (not account.get('suspended') and time.time() >= account['next_check_at'])
+            network = self._force or time.time() >= account['next_check_at']
             if not network and time.time() < self._dispatch_at:
                 return
             self._force = False
@@ -326,17 +336,18 @@ class MailAgentService:
                 if type(result.get('last_uid')) is int and result['last_uid'] > account['last_uid']:
                     self._account_update(account['id'], last_uid=result['last_uid'])
                 self._account_update(account['id'], last_checked_at=time.time(), last_error='', failures=0,
+                                     error_category='',
                                      suspended=False, next_check_at=time.time() + (3 if result.get('more') else
                                                                                 config['interval_seconds']))
-            except Exception:
+            except Exception as error:
                 if self._closed.is_set():
                     return
                 failures = int(account.get('failures', 0)) + 1
+                category = mail_failure_category(error)
                 self._account_update(account['id'], last_checked_at=time.time(), failures=failures,
                                      suspended=failures >= _RETRY_LIMIT,
                                      next_check_at=time.time() + min(3600, 60 * 2 ** min(failures - 1, 6)),
-                                     last_error=('收件连续失败已暂停，请检查网络或授权后点立即收件' if failures >= _RETRY_LIMIT
-                                                 else '收件未完成，原件和处理进度已保留，将稍后重试'))
+                                     error_category=category, last_error=_FAILURE_HINTS[category])
         if not self._closed.is_set() and self._config()['enabled']:
             try:
                 if self._settings() == settings:

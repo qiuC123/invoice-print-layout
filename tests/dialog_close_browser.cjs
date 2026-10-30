@@ -43,7 +43,7 @@ async function run(pw){
   assert.match(geometry.beforeTransform,/matrix/);assert.notEqual(geometry.beforeTransform,geometry.afterTransform);
   assert.equal(await dialog.locator('.dialoghead button:not(.dialog-close),.matching-header>button:not(.dialog-close)').count(),0);
   evidence.push({dialogId,keyboard,...geometry});
-  if(keyboard){await close.focus();await close.press('Enter');}else{const rect=await close.boundingBox();await page.mouse.click(rect.x+20,rect.y+20);}
+  if(keyboard){await close.focus();await close.press('Enter');}else await close.click({position:{x:20,y:20}});
   await dialog.waitFor({state:'hidden'});
  }
  try{

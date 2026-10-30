@@ -14,7 +14,7 @@ import time
 from typing import Any, Callable
 
 from invoice_print_layout.agent_jobs import terminate_worker
-from invoice_print_layout.mail163 import Mail163Settings, MailImportError
+from invoice_print_layout.mail163 import Mail163Settings, MailImportError, mail_failure_category
 
 
 MAX_RESULT_BYTES = 40 * 1024 * 1024
@@ -58,21 +58,21 @@ def _write_result(directory: Path, result: dict[str, Any]) -> None:
 def _fetch_worker(settings: Mail163Settings, parameters: dict[str, Any], output: str) -> None:
     # Only the child process reads the local Vault. The parent and process args
     # contain mailbox/range information but never a password or authorization code.
-    from invoice_print_layout.mail163 import read_auth_code
-    from invoice_print_layout.mail_agent_source import fetch_messages
-
     directory = Path(output)
     code = ''
     try:
+        from invoice_print_layout.mail163 import read_auth_code
+        from invoice_print_layout.mail_agent_source import fetch_messages
+
         code = read_auth_code(settings.address)
         result = fetch_messages(settings, code, since=date.fromisoformat(parameters['since']),
                                 after_uid=parameters['after_uid'], uidvalidity=parameters['uidvalidity'],
                                 limit=parameters['limit'])
         code = ''
         _write_result(directory, result)
-    except Exception:
+    except Exception as error:
         # Do not write exception repr/traceback: remote errors may contain tokens.
-        _write_manifest(directory, {'ok': False})
+        _write_manifest(directory, {'ok': False, 'error_category': mail_failure_category(error)})
     finally:
         code = ''
 
@@ -82,6 +82,10 @@ def _read_result(directory: Path, limit: int) -> dict[str, Any]:
     if manifest.is_symlink() or not manifest.is_file() or manifest.stat().st_size > MAX_MANIFEST_BYTES:
         raise ValueError('missing or invalid manifest')
     value = json.loads(manifest.read_text(encoding='utf-8'))
+    if isinstance(value, dict) and value.get('ok') is False:
+        category = value.get('error_category')
+        raise MailImportError('自动收件未完成，原有进度保留，请稍后重试',
+                              category=category if isinstance(category, str) else 'internal')
     if not isinstance(value, dict) or value.get('ok') is not True or not isinstance(value.get('result'), dict):
         raise ValueError('fetch failed')
     result: dict[str, Any] = value['result']
@@ -176,11 +180,13 @@ def fetch_with_deadline(
                         raise MailImportError('自动收件已停止，本轮未确认任何邮件')
                     remaining = deadline - time.monotonic()
                     if remaining <= 0:
-                        raise MailImportError('自动收件等待超时，原有进度保留，请稍后重试')
+                        raise MailImportError('自动收件等待超时，原有进度保留，请稍后重试', category='network')
                     process.join(min(.1, remaining))
                 if stop is not None and stop.is_set():
                     raise MailImportError('自动收件已停止，本轮未确认任何邮件')
-                if time.monotonic() > deadline or process.exitcode != 0:
+                if time.monotonic() > deadline:
+                    raise MailImportError('自动收件等待超时，原有进度保留，请稍后重试', category='network')
+                if process.exitcode != 0:
                     raise MailImportError('自动收件未完成，原有进度保留，请稍后重试')
                 return _read_result(Path(folder), limit)
             finally:

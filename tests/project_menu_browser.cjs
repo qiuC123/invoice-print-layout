@@ -84,8 +84,8 @@ async function run(pw){
   assert.equal(await dialog().locator('[name=name]').inputValue(),'应保留的输入');assert.equal(await dialog().getByRole('button',{name:'保存名称'}).isDisabled(),true);await dialog().locator('form').evaluate(form=>form.requestSubmit());assert.equal(writes.length,renameBefore+1);
   await dialog().getByRole('button',{name:'取消',exact:true}).click();await action('p1','永久删除');await dialog().getByRole('button',{name:'确认永久删除'}).click();await page.waitForURL(url=>!url.searchParams.has('project'));await page.getByRole('heading',{name:'全部项目台账',exact:true}).waitFor();await counts(0,1);
   assert.deepEqual(projects.map(p=>p.id),['p3']);assert.equal(items[0].stage,'submitted');assert.equal(items[0].amount_cents,1200);
-  const invalidBefore=writes.length;await page.goto(origin+'/?project=p1');await page.locator('#error').filter({hasText:'项目不存在'}).waitFor();assert.equal(await page.locator('[data-item]').count(),0);
-  const recovery=page.getByRole('link',{name:'返回项目列表',exact:true});assert.equal(await recovery.getAttribute('href'),'/');await recovery.click();await page.waitForURL(url=>!url.searchParams.has('project'));assert.equal(writes.length,invalidBefore,'an old deleted project URL recovers without writes or another project ledger');
+  const invalidBefore=writes.length;await page.goto(origin+'/?project=p1');await page.getByRole('heading',{name:'全部项目台账',exact:true}).waitFor();assert.equal(await page.locator('[data-item]').count(),0);
+  assert.equal(new URL(page.url()).searchParams.has('project'),false);assert.equal(await page.locator('#error').isVisible(),false);assert.equal(writes.length,invalidBefore,'an old deleted project URL recovers without writes');
   assert.deepEqual(native,[]);assert.deepEqual(errors,[]);
   return {passed:true,scope:'synthetic menu: revisions, names, pin persistence, reimbursement isolation, keyboard/dismissal/viewport, pending duplicate suppression, failed input retention, stale rename/delete refusal, malformed deletion acknowledgement, confirmed projection deletion and root navigation',writes:writes.length};
  }finally{await browser.close();}

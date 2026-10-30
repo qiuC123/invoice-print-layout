@@ -148,6 +148,19 @@ def mail_test_body(web: Any, **changes: Any) -> dict[str, Any]:
             if key in {'address', 'folder', 'auth_code'}}
 
 
+@pytest.mark.parametrize('category,expected', [('auth', '客户端授权码'), ('network', '网络'), ('internal', '重启发票助手')])
+def test_mail_failure_hint_reaches_settings_and_clears_on_success(web: Any, category: str, expected: str) -> None:
+    web.client.request('/api/settings/mail', mail_body(web, enabled=True))
+    service = mail_agent.MailAgentService(web.store, SimpleNamespace(kick=lambda: None))
+    account = service._account(service._settings(), service._config())
+    service._account_update(account['id'], failures=3, suspended=True, error_category=category)
+    state = web.client.request('/api/settings')[1]['mail']
+    assert state['error_category'] == category and state['suspended']
+    assert expected in state['last_error'] and '每小时自动重试一次' in state['last_error']
+    service._account_update(account['id'], failures=0, suspended=False, error_category='', last_error='')
+    assert web.client.request('/api/settings')[1]['mail']['last_error'] == ''
+
+
 def file_snapshot(workspace: Path) -> dict[str, bytes]:
     return {str(path.relative_to(workspace)): path.read_bytes() for path in workspace.rglob('*') if path.is_file()}
 

@@ -245,7 +245,7 @@ async function run(pw) {
     await noOverflow();
     await page.screenshot({path: path.join(evidence, 'synthetic-mobile-target.png'), fullPage: true});
 
-    await page.goto(origin + '/');
+    await page.goto(origin + '/?view=all');
     await row('move-me').waitFor();
     assert.equal(await row('move-me').count(), 1, 'migration counts the expense once in the all-project ledger');
     assert.equal(await row('already-deleted').count(), 0);

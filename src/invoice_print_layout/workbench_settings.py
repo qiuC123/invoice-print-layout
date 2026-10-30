@@ -45,7 +45,8 @@ class WorkbenchSettings:
     def mail_status(self) -> dict[str, Any]:
         status = self.mail.status()
         result = {key: status[key] for key in ('address', 'enabled', 'interval_seconds', 'since',
-                  'approved_since', 'default_project_id', 'last_checked_at', 'last_error')}
+                  'approved_since', 'default_project_id', 'last_checked_at', 'last_error', 'error_category',
+                  'suspended', 'next_check_at')}
         return {**result, 'folder': status['folder'] or 'INBOX',
                 'auth_saved': bool(status['address'] and self._saved_auth(status['address'])),
                 'projects': [{'id': row['id'], 'name': row['name']} for row in ExpenseProjects(self.store).list()]}

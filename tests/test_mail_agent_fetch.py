@@ -87,8 +87,9 @@ def test_hard_deadline_terminates_hung_process_and_cleans_results(monkeypatch: p
         return value
     monkeypatch.setattr(fetcher.tempfile, 'TemporaryDirectory', temporary)
     before = time.monotonic()
-    with pytest.raises(MailImportError, match='超时'):
+    with pytest.raises(MailImportError, match='超时') as raised:
         call(hung_worker, timeout=.5)
+    assert raised.value.category == 'network'
     assert time.monotonic() - before < 6
     assert created and all(not path.exists() for path in created)
 
@@ -149,7 +150,57 @@ def test_child_failure_manifest_contains_no_transport_exception(tmp_path: Path, 
     monkeypatch.setattr(mail163, 'read_auth_code', fail)
     fetcher._fetch_worker(Mail163Settings('synthetic@163.com'),
                           {'since': '2026-10-21', 'after_uid': 0, 'uidvalidity': '', 'limit': 20}, str(tmp_path))
-    assert json.loads((tmp_path / 'manifest.json').read_text(encoding='utf-8')) == {'ok': False}
+    assert json.loads((tmp_path / 'manifest.json').read_text(encoding='utf-8')) == {'ok': False, 'error_category': 'internal'}
+
+
+@pytest.mark.parametrize('error,category', [
+    (MailImportError('private', category='auth'), 'auth'),
+    (TimeoutError('private'), 'network'),
+    (ModuleNotFoundError('private'), 'internal'),
+])
+def test_child_serializes_only_fixed_category(tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+                                             error: Exception, category: str) -> None:
+    from invoice_print_layout import mail163, mail_agent_source
+    monkeypatch.setattr(mail163, 'read_auth_code', lambda _: 'SYNTHETIC_PRIVATE_CODE')
+    def fail(*args: Any, **kwargs: Any) -> Any:
+        raise error
+    monkeypatch.setattr(mail_agent_source, 'fetch_messages', fail)
+    fetcher._fetch_worker(Mail163Settings('synthetic@163.com'),
+                          {'since': '2026-10-21', 'after_uid': 0, 'uidvalidity': '', 'limit': 20}, str(tmp_path))
+    assert json.loads((tmp_path / 'manifest.json').read_text(encoding='utf-8')) == {
+        'ok': False, 'error_category': category}
+    with pytest.raises(MailImportError) as raised:
+        fetcher._read_result(tmp_path, 20)
+    assert raised.value.category == category
+
+
+def test_missing_child_dependency_still_writes_internal_manifest(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    import builtins
+    original = builtins.__import__
+    def importing(name: str, *args: Any, **kwargs: Any) -> Any:
+        if name == 'invoice_print_layout.mail_agent_source':
+            raise ModuleNotFoundError('private dependency path')
+        return original(name, *args, **kwargs)
+    monkeypatch.setattr(builtins, '__import__', importing)
+    fetcher._fetch_worker(Mail163Settings('synthetic@163.com'), {}, str(tmp_path))
+    assert json.loads((tmp_path / 'manifest.json').read_text(encoding='utf-8')) == {
+        'ok': False, 'error_category': 'internal'}
+
+
+def test_missing_vault_code_is_auth_without_real_vault(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from invoice_print_layout import mail163
+    monkeypatch.setattr(mail163.keyring, 'get_password', lambda *args: None)
+    fetcher._fetch_worker(Mail163Settings('synthetic@163.com'), {}, str(tmp_path))
+    assert json.loads((tmp_path / 'manifest.json').read_text(encoding='utf-8')) == {
+        'ok': False, 'error_category': 'auth'}
+
+
+def test_unknown_manifest_category_cannot_escape_allowlist(tmp_path: Path) -> None:
+    fetcher._write_manifest(tmp_path, {'ok': False, 'error_category': 'SYNTHETIC_PRIVATE_CODE'})
+    with pytest.raises(MailImportError) as raised:
+        fetcher._read_result(tmp_path, 20)
+    assert raised.value.category == 'internal'
+    assert 'PRIVATE' not in str(raised.value)
 
 
 def test_parent_enforces_aggregate_result_budget(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

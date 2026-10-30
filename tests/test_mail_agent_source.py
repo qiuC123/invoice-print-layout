@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import io
+import imaplib
+import ssl
 import zipfile
 from datetime import date
 from email.message import EmailMessage
@@ -69,6 +71,30 @@ def image_bytes() -> bytes:
 def fetch(client: SourceImap, **kwargs: Any) -> dict[str, Any]:
     return source.fetch_messages(Mail163Settings('synthetic@163.com'), 'synthetic-private-credential',
                                  since=date(2026, 10, 21), imap_factory=lambda *args, **kw: client, **kwargs)
+
+
+@pytest.mark.parametrize('failure,category', [
+    (imaplib.IMAP4.error('private login reply'), 'auth'),
+    (imaplib.IMAP4.abort('private connection reply'), 'network'),
+    (ssl.SSLError('private SSL reply'), 'network'),
+])
+def test_login_failure_classification_survives_sanitization(failure: Exception, category: str) -> None:
+    class BrokenImap(SourceImap):
+        def login(self, user: str, password: str) -> Any:
+            raise failure
+    with pytest.raises(MailImportError) as raised:
+        fetch(BrokenImap({}))
+    assert raised.value.category == category
+    assert 'private' not in str(raised.value) and raised.value.__cause__ is None
+
+
+def test_login_rejection_status_is_auth() -> None:
+    class RejectedImap(SourceImap):
+        def login(self, user: str, password: str) -> Any:
+            return 'NO', [b'private server reply']
+    with pytest.raises(MailImportError) as raised:
+        fetch(RejectedImap({}))
+    assert raised.value.category == 'auth'
 
 
 def test_original_attachment_and_ordinary_mail_are_read_only_and_have_provenance(tmp_path: Path) -> None:

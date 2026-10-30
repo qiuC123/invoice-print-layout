@@ -167,7 +167,7 @@ async function run(playwright) {
     await page.locator('#matchingClose').click();
     assert.equal(writes.length, 1);
     state.items.push(item('historical-project', {project_id:'p2', amount_cents:2500, verified:true, ready:true}));
-    await page.goto(origin + '/');
+    await page.goto(origin + '/?view=all');
     await page.locator('.metric[data-view="submitted"]').waitFor();
     const metric = page.locator('.metric[data-view="submitted"]');
     assert.equal(await metric.locator('b').innerText(), '¥ 425.00', 'The summary and reviewed list use the same scope across both project statuses');

@@ -218,11 +218,52 @@ def test_retry_failure_is_bounded_and_error_does_not_leak_secret(env: Any) -> No
     state = service.status()
     assert state['suspended'] is True and len(attempts) == 3
     assert 'secret-not-in-any-receipt' not in json.dumps(state)
-    # A real kick honors suspension, with the only worker allowed being local dispatch.
+    assert state['error_category'] == 'internal'
+    assert '每小时自动重试一次' in state['last_error']
+    assert 230 < state['next_check_at'] - time.time() <= 240
+    # A real kick honors the retry deadline, rather than permanently stopping.
     service._dispatch_at = time.time() + 100
     service._force = False  # Direct _run above bypassed kick's normal one-shot flag consumption.
     mail_agent.MailAgentService.kick(service)
     assert service._thread is None
+    for delay in (480, 960, 1920, 3600, 3600):
+        run(service)
+        assert delay - 10 < service.status()['next_check_at'] - time.time() <= delay
+
+
+def test_suspended_account_retries_after_restart_and_clears_failure(env: Any) -> None:
+    service, store, agent, _, _, _, _, calls = env
+    enable(service)
+    account = service._account(service._settings(), service._config())
+    service._account_update(account['id'], failures=3, suspended=True, next_check_at=time.time() - 1,
+                            error_category='network', last_error='old suspended message')
+    restarted = mail_agent.MailAgentService(store, agent, fetcher=service._fetcher)
+    try:
+        restarted.kick()
+        assert restarted._thread is not None
+        restarted._thread.join(5)
+        assert not restarted._thread.is_alive() and len(calls) == 1
+        state = restarted.status()
+        assert not state['suspended'] and state['last_error'] == '' and state['error_category'] == ''
+        assert restarted._account(restarted._settings(), restarted._config())['failures'] == 0
+    finally:
+        restarted.close()
+
+
+@pytest.mark.parametrize('category', ['auth', 'network', 'internal'])
+def test_failure_category_persists_and_manual_collect_ignores_deadline(env: Any, category: str) -> None:
+    from invoice_print_layout.mail163 import MailImportError
+    service, _, _, _, _, _, _, _ = env
+    def fail(*args: Any, **kwargs: Any) -> Any:
+        raise MailImportError('secret-not-in-any-receipt', category=category)
+    service._fetcher = fail
+    enable(service)
+    for _ in range(3):
+        run(service)
+    assert service.status()['error_category'] == category
+    service.collect_now()
+    assert service._force
+    assert 'secret-not-in-any-receipt' not in service.config_path.read_text(encoding='utf-8')
 
 
 def test_failed_poll_recovers_and_keeps_saved_originals(env: Any) -> None:

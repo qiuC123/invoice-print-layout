@@ -76,13 +76,13 @@ async function run(pw){
   await page.getByRole('button',{name:'开启自动收件',exact:true}).waitFor();
   assert.equal(await page.locator('#mail-collect').isDisabled(),true);
   Object.assign(mail,{address:'another@163.com',folder:'INBOX',default_project_id:'',interval_seconds:90,use_model:false,
-   enabled:true,suspended:true,next_check_at:1792570000,last_error:'收件连续失败已暂停，请检查网络或授权后点立即收件',messages:[]});
+   enabled:true,suspended:true,next_check_at:1792570000,error_category:'network',last_error:'收件网络连接失败，会自动重试。收件连续失败，已改为每小时自动重试一次。',messages:[]});
   await page.getByText('another@163.com · INBOX',{exact:true}).waitFor({timeout:8000});
   assert.equal(await page.locator('#mail-project').inputValue(),'','Changing accounts must clear the prior default project');
   assert.equal(await page.locator('#mail-interval').inputValue(),'90');
   assert.equal(await page.locator('#mail-model').isChecked(),false);
-  assert.match(await page.locator('#mail-status').innerText(),/收件重试已暂停/);
-  assert.doesNotMatch(await page.locator('#mail-status').innerText(),/下次检查/);
+  assert.match(await page.locator('#mail-status').innerText(),/每小时自动重试一次/);
+  assert.match(await page.locator('#mail-status').innerText(),/下次检查/);
   assert.equal(await page.locator('#mail-collect').isEnabled(),true,'Suspended retries can be resumed explicitly');
   await page.locator('#mail-interval').fill('240');await page.locator('#mail-save').click();
   await page.waitForFunction(()=>document.getElementById('mail-save').disabled===false);

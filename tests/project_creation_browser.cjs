@@ -65,7 +65,7 @@ async function run(pw) {
     await fs.mkdir(evidence, {recursive: true});
     // Every existing project and the unscoped page expose the same single sidebar entry.
     for (const scope of ['', 'old-unpaid', 'old-paid']) {
-      await page.goto(origin + '/' + (scope ? '?project=' + scope : ''));
+      await page.goto(origin + '/' + (scope ? '?project=' + scope : '?view=all'));
       if (scope) await loaded(scope); else await page.locator('[data-item]').first().waitFor();
       assert.equal(await page.locator('.rail #createProject').isVisible(), true);
       assert.equal(await page.locator('#createProject').count(), 1);
@@ -107,7 +107,7 @@ async function run(pw) {
     unchanged();
     await page.screenshot({path: path.join(evidence, 'synthetic-created-project.png'), fullPage: true});
     // Root creation navigates using the actual POST response ID, without retaining old query filters.
-    await page.goto(origin + '/?matter=synthetic-fee-0'); await page.locator('[data-item]').first().waitFor();
+    await page.goto(origin + '/?view=all&matter=synthetic-fee-0'); await page.locator('[data-item]').first().waitFor();
     await open(); await input().fill('合成全部项目中新建'); await submit().click();
     await page.waitForURL(origin + '/?project=server-generated-13'); await loaded('server-generated-13');
     assert.equal(projects.length, 4); unchanged();

@@ -256,10 +256,11 @@ def fetch_messages(
             result['messages'].append(parsed)
             batch_bytes += message_bytes
         return result
-    except (MailImportError, imaplib.IMAP4.error, OSError, ValueError, TypeError, UnicodeError):
+    except (MailImportError, imaplib.IMAP4.error, OSError, ValueError, TypeError, UnicodeError) as error:
         # Raw transport messages can contain server diagnostics or signed links.
         # Do not leak credentials/links through exceptions or their cause chain.
-        raise MailImportError('自动收件未完成，请检查邮箱连接和收件配置后重试；尚未确认本轮邮件。') from None
+        raise MailImportError('自动收件未完成，请检查邮箱连接和收件配置后重试；尚未确认本轮邮件。',
+                              category=mail163.mail_failure_category(error)) from None
     finally:
         if client is not None:
             try:

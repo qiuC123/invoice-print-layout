@@ -153,9 +153,9 @@
     if(account!==mailAccount){mailAccount=account;mailConfigured=false;renderedMail='';mailSelections.clear();}
     mailState=data;$('mail-address').textContent=data.address?(data.address+' · '+(data.folder||'INBOX')):'尚未配置收件邮箱';
     $('mail-pending-count').textContent=String(Number.isInteger(data.unresolved_count)?data.unresolved_count:(data.messages||[]).filter(m=>['unassigned','needs_input','attention'].includes(m.status)).length);
-    const parts=[data.collecting||data.running?'正在收取邮件…':!data.enabled?'自动收件已暂停':data.suspended?'收件重试已暂停，检查网络或授权后可点立即收件':'自动收件已开启'];
+    const parts=[data.collecting||data.running?'正在收取邮件…':!data.enabled?'自动收件已暂停':data.suspended?'收件连续失败，已改为每小时自动重试一次':'自动收件已开启'];
     if(data.last_checked_at)parts.push('最近检查 '+mailTime(data.last_checked_at));
-    if(data.enabled&&!data.suspended&&data.next_check_at)parts.push('下次检查 '+mailTime(data.next_check_at));
+    if(data.enabled&&data.next_check_at)parts.push('下次检查 '+mailTime(data.next_check_at));
     $('mail-status').textContent=parts.join(' · ');
     $('mail-error').hidden=!data.last_error;if(data.last_error)$('mail-error').textContent=data.last_error;
     if(!mailConfigured||updateSettings){

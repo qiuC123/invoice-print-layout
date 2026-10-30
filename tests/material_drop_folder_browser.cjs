@@ -55,7 +55,7 @@ async function run(pw) {
   const received = () => writes.filter(row => row.path === '/api/intake/receive');
   const screenshot = async name => {if (evidence) {await fs.mkdir(evidence, {recursive: true}); await page.screenshot({path: path.join(evidence, name + '.png')});}};
   async function ready(project = true, realAgent = false) {
-    await page.goto(origin + (project ? '/?project=p1' : '/'));
+    await page.goto(origin + (project ? '/?project=p1' : '/?view=all'));
     await page.waitForFunction(() => window.manualInvoiceAgent && window.openMaterialMatching && state.token);
     await page.evaluate(realAgent => {
       window.invoiceIntakeProgress = null;
