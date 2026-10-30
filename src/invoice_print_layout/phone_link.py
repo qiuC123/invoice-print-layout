@@ -101,6 +101,11 @@ def drain_rejected_body(handler: BaseHTTPRequestHandler) -> None:
         handler.connection.settimeout(previous)
 
 
+class MobileServer(ThreadingHTTPServer):
+    # Browsers request many page assets at once; the default backlog of 5 refuses some of them.
+    request_queue_size = 128
+
+
 class PhoneLink:
     def __init__(self, handler: type[BaseHTTPRequestHandler], desktop_token: str,
                  local_analyze: Callable[[str], dict[str, Any]], workspace: Path) -> None:
@@ -295,7 +300,7 @@ class PhoneLink:
                     except (ValueError, KeyError, OSError, TypeError) as exc:
                         self.respond({'error': str(exc)}, 400)
 
-            server = ThreadingHTTPServer((address, port), MobileHandler)
+            server = MobileServer((address, port), MobileHandler)
             server.daemon_threads = False
             self.address, self.code = address, secrets.token_urlsafe(32)
             self.mode = mode

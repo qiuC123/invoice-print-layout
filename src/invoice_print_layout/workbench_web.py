@@ -855,6 +855,8 @@ def make_server(workspace: Path, port: int = 8765, *, mode: str = 'workbench',
                 self.respond({'error': '操作未完成，原文件保留。请检查服务日志或重试。'}, 500)
 
     class WorkbenchServer(ThreadingHTTPServer):
+        # Edge requests ~30 page assets at once; the default backlog of 5 refuses some of them.
+        request_queue_size = 128
         next_schedule_check = 0.0
 
         def server_close(self) -> None:

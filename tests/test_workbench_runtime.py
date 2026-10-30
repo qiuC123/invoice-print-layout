@@ -55,3 +55,14 @@ def test_runtime_identity_is_frozen_after_server_creation(tmp_path, monkeypatch)
         server.shutdown()
         server.server_close()
         thread.join()
+
+
+def test_servers_queue_a_full_page_burst_of_connections(tmp_path):
+    # Edge opens ~30 asset connections at once; a backlog of 5 refused some (2026-10-30).
+    from invoice_print_layout.phone_link import MobileServer
+    server = web.make_server(tmp_path, 0)
+    try:
+        assert server.request_queue_size >= 64
+    finally:
+        server.server_close()
+    assert MobileServer.request_queue_size >= 64
