@@ -216,7 +216,8 @@ def make_server(workspace: Path, port: int = 8765, *, mode: str = 'workbench',
             origins = {'http://' + h for h in hosts} | {'http://127.0.0.1', 'http://localhost'}
             return self.headers.get('Host') in hosts and (origin is None or origin in origins)
 
-        def send(self, data: bytes, content_type: str, code: int = 200, filename: str | None = None) -> None:
+        def send(self, data: bytes, content_type: str, code: int = 200, filename: str | None = None,
+                 download: bool = False) -> None:
             self.send_response(code)
             self.send_header('Content-Type', content_type)
             self.send_header('Content-Length', str(len(data)))
@@ -225,7 +226,7 @@ def make_server(workspace: Path, port: int = 8765, *, mode: str = 'workbench',
             self.send_header('X-Frame-Options', 'SAMEORIGIN')
             self.send_header('Referrer-Policy', 'no-referrer')
             if filename:
-                self.send_header('Content-Disposition', "inline; filename*=UTF-8''" + quote(filename))
+                self.send_header('Content-Disposition', ("attachment" if download else "inline") + "; filename*=UTF-8''" + quote(filename))
             self.end_headers()
             self.wfile.write(data)
 
@@ -251,6 +252,14 @@ def make_server(workspace: Path, port: int = 8765, *, mode: str = 'workbench',
                     self.send((assets / path[1:]).read_bytes(), 'text/javascript' if path.endswith('.js') else 'text/css')
                 elif path == '/api/agent/mail':
                     self.respond(mail_agent.status())
+                elif path == '/api/agent/mail/attachment':
+                    query = parse_qs(urlparse(self.path).query)
+                    payload, name = mail_agent.attachment(query.get('id', [''])[0], int(query.get('index', [''])[0]))
+                    content_type = {'.pdf': 'application/pdf', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg',
+                                    '.png': 'image/png', '.webp': 'image/webp', '.bmp': 'image/bmp',
+                                    '.tif': 'image/tiff', '.tiff': 'image/tiff'}.get(Path(name).suffix.lower())
+                    self.send(payload, content_type or 'application/octet-stream', filename=name,
+                              download=content_type is None)
                 elif path == '/api/agent/jobs':
                     pid = parse_qs(urlparse(self.path).query).get('project', [''])[0]
                     self.respond({'jobs': invoice_agent.jobs.list(pid), 'token': token,
@@ -551,11 +560,14 @@ def make_server(workspace: Path, port: int = 8765, *, mode: str = 'workbench',
                     finally:
                         intake_run_lock.release()
                     return
-                if path in {'/api/agent/mail/configure', '/api/agent/mail/collect', '/api/agent/mail/assign'}:
+                if path in {'/api/agent/mail/configure', '/api/agent/mail/collect', '/api/agent/mail/assign',
+                            '/api/agent/mail/dismiss'}:
                     if path.endswith('/configure'):
                         mail_agent_result = mail_agent.configure(body)
                     elif path.endswith('/assign'):
                         mail_agent_result = mail_agent.assign(body.get('id', ''), body.get('project_id', ''))
+                    elif path.endswith('/dismiss'):
+                        mail_agent_result = mail_agent.dismiss(body.get('id', ''))
                     else:
                         mail_agent_result = mail_agent.collect_now()
                     self.respond(mail_agent_result)

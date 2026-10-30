@@ -50,6 +50,7 @@ async function readDroppedMaterialFiles(transfer) {
     <div id="matchingLoadState" hidden></div>
     <div class="matching-layout">
       <div class="matching-pools" tabindex="0" role="region" aria-label="材料列表，可独立滚动">
+        <section class="matching-lane" id="matchingUnassignedMail" aria-labelledby="matchingUnassignedMailTitle" tabindex="-1" hidden></section>
         <section class="matching-lane" id="matchingSuggestions"><div class="matching-lane-head"><h3>建议组合</h3><span id="matchingSuggestionSummary"></span></div><p class="muted">本项目材料的建议组合；点击一组，在右侧预览并确认报销信息。</p><div id="matchingSuggestionTools"></div><div id="matchingSuggestionStatus" role="status"></div><div id="matchingSuggestionsList"></div></section>
         <section class="matching-lane"><div class="matching-lane-head"><h3>① 发票／收据</h3><span id="matchingVoucherCount"></span></div><p class="muted">含平台购买记录，可选多张票据；缺付款的已有费用也在这里。再次点击可取消。</p><div id="matchingVouchers" class="matching-card-grid"></div></section>
         <section class="matching-lane"><div class="matching-lane-head"><h3>② 付款截图</h3><span id="matchingPaymentCount"></span></div><p class="muted">可选多张，对应票据合计；同一笔付款只计一次。</p><div id="matchingPayments" class="matching-card-grid matching-payments"></div></section>
@@ -663,7 +664,7 @@ async function readDroppedMaterialFiles(transfer) {
     isBusy: () => busy, closeAfterCommit: closeMatchingAfterCommit};
   el('matchingClose').onclick = closeMatching;
   dialog.addEventListener('cancel', event => {event.preventDefault(); closeMatching();});
-  el('matchingRefresh').onclick = () => mutation(async () => {await refreshBoard(); void window.invoiceIntakeProgress?.refresh(projectId); message('材料已刷新；失效的选择已清除。');});
+  el('matchingRefresh').onclick = () => mutation(async () => {window.dispatchEvent(new CustomEvent('invoice-mail-refresh')); await refreshBoard(); void window.invoiceIntakeProgress?.refresh(projectId); message('材料已刷新；失效的选择已清除。');});
   el('matchingUpload').onclick = () => {if (!busy) el('matchingFiles').click();};
   el('matchingFiles').onchange = () => uploadFiles([...el('matchingFiles').files]);
   el('matchingImportFolder').onclick = () => {if (!busy) el('matchingFolder').click();};
@@ -774,6 +775,7 @@ async function readDroppedMaterialFiles(transfer) {
     });
   });
   window.openMaterialMatching = async ({suggestion} = {}) => {
+    window.dispatchEvent(new CustomEvent('invoice-mail-refresh'));
     if(dialog.open){if(suggestion&&!busy)applySuggestion(suggestion);return;}
     const serial = ++openRevision, current = () => serial === openRevision && dialog.open;
     async function read() {

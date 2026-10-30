@@ -454,18 +454,26 @@ class IntakeQueue:
         login-bound QR carriers remain manual and are never auto-organized.
         Ordinary proofs use local OCR/PDF analysis of this entry only.
         """
-        from invoice_print_layout.invoice_claim import claim
-        from invoice_print_layout.mail_search import qr_value
         if type(force_ai) is not bool:
             raise ValueError('AI辅助识别选项须为布尔值')
+        source = self.get(key)
+        data = self.claim_batch_qr(key)
+        if (data.get('duplicate_of') or data['status'] in {'linked', 'duplicate', 'converted'} | INACTIVE_STATUSES or
+                data.get('qr_status') == 'manual' or source.get('qr_status') == 'converted' and not force_ai):
+            return data
+        return (self._analyze_batch_pdf(data, force_ai=force_ai) if Path(data['path']).suffix.lower() == '.pdf'
+                else self._analyze_batch_image(data, force_ai=force_ai))
+
+    def claim_batch_qr(self, key: str) -> dict[str, Any]:
+        """Replace a tax QR carrier without analyzing ordinary images or PDFs."""
+        from invoice_print_layout.invoice_claim import claim
+        from invoice_print_layout.mail_search import qr_value
         self.mark_invoice_render_duplicates()
         data = self.get(key)
         if data.get('duplicate_of') or data['status'] in {'linked', 'duplicate'} | INACTIVE_STATUSES:
             return data
         if data.get('qr_status') == 'converted' and data.get('replacement_id'):
-            replacement = self.get(data['replacement_id'])
-            return (replacement if not force_ai or replacement.get('duplicate_of') or replacement['status'] in {'linked', 'duplicate'} else
-                    self.prepare_batch_entry(replacement['id'], force_ai=force_ai))
+            return self.get(data['replacement_id'])
         path = Path(data['path'])
         value = qr_value(path.read_bytes()) if path.suffix.lower() != '.pdf' else ''
         if value and self.mark_invoice_render_duplicates(qr_values={key: value}):
@@ -473,12 +481,7 @@ class IntakeQueue:
             if data.get('duplicate_of') or data['status'] == 'duplicate':
                 return data
         if not value:
-            # A previously decoded QR must not become a fictitious proof merely
-            # because a later decoder attempt fails.
-            if data.get('qr_status') == 'manual':
-                return data
-            return (self._analyze_batch_image(data, force_ai=force_ai) if path.suffix.lower() != '.pdf'
-                    else self._analyze_batch_pdf(data, force_ai=force_ai))
+            return data
         try:
             result = claim(cast(IntakeQueue, _BatchClaimReceiver(self, data, value)), value, data.get('project_id', ''))
         except (ValueError, OSError, RuntimeError) as exc:
@@ -488,9 +491,7 @@ class IntakeQueue:
         replacement = result['entry']
         current_source = self.get(key)
         if current_source.get('qr_status') == 'converted' and current_source.get('replacement_id') == replacement['id']:
-            target = self.get(replacement['id'])
-            return (target if target.get('duplicate_of') or target['status'] in {'linked', 'duplicate'} | INACTIVE_STATUSES
-                    else self._analyze_batch_pdf(target, force_ai=force_ai))
+            return self.get(replacement['id'])
         if (replacement.get('project_id') and data.get('project_id') and
                 replacement['project_id'] != data['project_id']):
             return self._save_batch_qr_manual(data, value, '对应发票已属于其他项目，请人工核对归属。',
@@ -520,8 +521,7 @@ class IntakeQueue:
             for entry in (current, target):
                 db.execute('UPDATE intake_queue SET data=? WHERE id=?',
                            (json.dumps(entry, ensure_ascii=False), entry['id']))
-        return (self.get(target['id']) if target.get('duplicate_of') or target['status'] in {'linked', 'duplicate'}
-                else self._analyze_batch_pdf(self.get(target['id']), force_ai=force_ai))
+        return self.get(target['id'])
 
     def _analyze_batch_pdf(self, data: dict[str, Any], *, force_ai: bool = False) -> dict[str, Any]:
         """Read one PDF with mature invoice parsers, without organizing older inbox files."""

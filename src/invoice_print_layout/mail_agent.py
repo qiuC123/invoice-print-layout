@@ -242,6 +242,8 @@ class MailAgentService:
             visible.append({k: message.get(k, '') for k in (
                 'id', 'subject', 'sender', 'issues', 'project_id', 'job_id', 'received_at', 'sent_date', 'route_reason')} |
                            {'status': state, 'material_count': len(message.get('files', [])),
+                            'attachments': [{'name': file['name'], 'index': index}
+                                            for index, file in enumerate(message.get('files', []))],
                             'route_dates': message.get('route_dates', []),
                             'material_ids': message.get('material_ids', [])})
         unresolved = {'unassigned', 'attention', 'waiting_agent', 'queued', 'running', 'needs_input', 'failed', 'stopped'}
@@ -443,6 +445,35 @@ class MailAgentService:
         self.kick()
         return self.status()
 
+    def attachment(self, message_key: str, index: int) -> tuple[bytes, str]:
+        message = self._message(message_key)
+        if message['account_id'] != self._account_key(self._settings()):
+            raise ValueError('邮件属于另一邮箱，请切回对应邮箱操作')
+        files = message.get('files', [])
+        if type(index) is not int or not 0 <= index < len(files):
+            raise ValueError('附件序号无效')
+        file = files[index]
+        path = Path(file['path']).resolve()
+        if not path.is_relative_to(self.originals.resolve()):
+            raise ValueError('附件路径无效')
+        payload = path.read_bytes()
+        if hashlib.sha256(payload).hexdigest() != file['digest']:
+            raise ValueError('附件原件已变化')
+        return payload, file['name']
+
+    def dismiss(self, message_key: str) -> dict[str, Any]:
+        if not isinstance(message_key, str):
+            raise ValueError('邮件无效')
+        with self._lock:
+            message = self._message(message_key)
+            if message['account_id'] != self._account_key(self._settings()):
+                raise ValueError('邮件属于另一邮箱，请切回对应邮箱操作')
+            if (message['status'] != 'unassigned' or message.get('project_id') or
+                    message.get('job_id') or message.get('material_ids')):
+                raise ValueError('邮件已开始整理，不能忽略')
+            self._message_update(message_key, status='dismissed')
+        return self.status()
+
     def reroute_unassigned(self) -> int:
         count = 0
         with self._lock:
@@ -510,6 +541,7 @@ class MailAgentService:
             return
         queue = IntakeQueue(self.store)
         ids = []
+        claim_pending = False
         for file in message['files']:
             payload = Path(file['path']).read_bytes()
             if hashlib.sha256(payload).hexdigest() != file['digest']:
@@ -517,14 +549,21 @@ class MailAgentService:
             entry = queue.receive(file['name'], payload, source='mail_agent', project_id=message['project_id'],
                                   batch=message['id'])
             if (entry.get('source') == 'mail_agent' and entry.get('batch') == message['id'] and
-                    entry['project_id'] == message['project_id'] and entry['status'] in {'received', 'review'} and
+                    entry['project_id'] == message['project_id'] and entry['status'] in {'received', 'review', 'converted'} and
                     not entry.get('item_id')):
-                ids.append(entry['id'])
+                if Path(entry['path']).suffix.lower() != '.pdf' and entry.get('qr_status') != 'manual':
+                    entry = queue.claim_batch_qr(entry['id'])
+                if entry.get('qr_status') == 'manual':
+                    claim_pending = True
+                elif (entry['project_id'] == message['project_id'] and entry['status'] in {'received', 'review'} and
+                      not entry.get('item_id') and not entry.get('duplicate_of')):
+                    ids.append(entry['id'])
         ids = list(dict.fromkeys(ids))
         self._message_update(message['id'], material_ids=ids)
         if not ids:
-            self._message_update(message['id'], status='duplicate', issues=list(dict.fromkeys([
-                *message['issues'], '材料已存在，保留原归属和处理状态，不重复创建费用'])))
+            self._message_update(message['id'], status='attention' if claim_pending else 'duplicate', issues=list(dict.fromkeys([
+                *message['issues'], '领票待处理，请到材料合成台查看原件并继续领票。' if claim_pending else
+                '材料已存在，保留原归属和处理状态，不重复创建费用'])))
             return
         if len(ids) > 20:
             raise ValueError('too many materials')

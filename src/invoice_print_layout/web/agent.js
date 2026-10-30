@@ -118,7 +118,7 @@
     const labels={unassigned:'需要确定项目',waiting_agent:'等待开始整理',attention:'需要处理收件问题',
       queued:'等待整理',running:'正在整理',ready:'报销预览已准备',needs_input:'需要补充依据',
       failed:'处理未完成',stopped:'已停止尝试',ignored:'无需整理',no_materials:'没有可整理材料',
-      duplicate:'材料已存在',received:'材料已收到',cancelled:'已取消'};
+      duplicate:'材料已存在',received:'材料已收到',cancelled:'已取消',dismissed:'已忽略'};
     for(const [index,message] of messages.entries()){
       const card=el('article',undefined,'mail-message');card.dataset.mailId=message.id;
       card.append(el('h3',message.subject||'无主题邮件'));
