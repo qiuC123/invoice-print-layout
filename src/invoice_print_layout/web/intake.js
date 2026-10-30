@@ -44,7 +44,7 @@
     // Files have been saved. Read failures after handing off must not re-send
     // the batch or repeat the Agent start request.
     $('intakeFiles').value='';let started=false,startError='';
-    if(entryIds.size){try{await organizer.startReceived({projectId:uploadProject,entryIds:[...entryIds],batch});started=true;}catch(error){startError=`自动整理未能启动：${error.message}。原件已保存，请在自动整理助手中查看或重试。`;}}
+    if(entryIds.size){try{await organizer.startReceived({projectId:uploadProject,entryIds:[...entryIds],batch});started=true;}catch(error){startError=`自动整理未能启动：${error.message}。原件已保存，请在材料合成台查看未处理材料。`;}}
     const summary=`本批 ${files.length} 份，已保存 ${received} 份，重复 ${duplicates} 份，上传失败 ${failed} 份。`+(started?`已将本批 ${entryIds.size} 份新材料交给自动整理；缺少依据时会在当前工作台询问。`:startError||'本批没有可交给自动整理的新材料；原件及已有费用关联保持。');
     if(started){dialog.close();notify(summary,failed>0);try{await organizer.open?.();}catch(error){notify(summary+` 助手显示未完成：${error.message}；任务已启动，请刷新查看，无需重新上传。`,true);}}else{let refreshError='';try{await refresh();}catch(error){refreshError=' 材料刷新未完成：'+error.message;}notify(summary+refreshError,!!startError||failed>0||!!refreshError);}
     return;

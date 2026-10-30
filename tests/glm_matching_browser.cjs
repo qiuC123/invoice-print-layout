@@ -51,7 +51,7 @@ async function run(pw) {
   try {
     await fs.mkdir(evidence, {recursive: true});
     await page.goto(origin + '/?project=p1');
-    await page.locator('#manualAgent summary').click();
+    await page.waitForFunction(()=>!!document.querySelector('#manualAgent .mia-settings'));
     await page.evaluate(()=>window.dispatchEvent(new CustomEvent('invoice-settings-changed',{detail:{organize:{auto_after_upload:false,use_model:true,model_available:false}}})));
     await page.locator('#materialMatching').click();
     await page.locator('#matchingAuto:not([disabled])').waitFor();

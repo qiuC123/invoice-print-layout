@@ -574,7 +574,7 @@ async function readDroppedMaterialFiles(transfer) {
         for (let offset = 0; offset < ids.length; offset += 20) {
           const chunk = ids.slice(offset, offset + 20);
           try {await organizer.startReceived({projectId: uploadProject, entryIds: chunk, batch}); started += chunk.length;}
-          catch (error) {startError = `自动整理未能全部启动：${error.message}。已收到的原件保留，请在自动整理助手中查看或重试。`;}
+          catch (error) {startError = `自动整理未能全部启动：${error.message}。已收到的原件保留，请在材料合成台查看未处理材料。`;}
         }
         const summary = receiptSummary() + `上传失败 ${failures.length} 份。` +
           (started ? `已将本批 ${started} 份新材料交给自动整理；缺少依据时会在当前工作台询问。` : '') +

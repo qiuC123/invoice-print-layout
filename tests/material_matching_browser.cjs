@@ -257,6 +257,8 @@ async function run(pw) {
       return json(selectedProject === 'p2' ? {vouchers: [], payments: [], other: [], matches: [], report_types: reportTypes} : board);
     }
     if (url.pathname === '/api/intake') return json({queue: []});
+    if (url.pathname === '/api/agent/jobs') return json({jobs: []});
+    if (url.pathname === '/api/settings') return json({organize:{auto_after_upload:true,use_model:false,model_available:false}});
     if (url.pathname === '/api/preferences') return json({rules: [], learned: [], sections: {}});
     if (url.pathname.startsWith('/synthetic-image/') || url.pathname.startsWith('/intake-file/') || url.pathname.startsWith('/file/') || url.pathname.startsWith('/export/')) return route.fulfill({contentType: 'image/png', body: png});
     const name = url.pathname === '/' ? 'index.html' : url.pathname.slice(1);
@@ -301,7 +303,7 @@ async function run(pw) {
     // This regression exercises explicit manual preparation and composition.
     // The default automatic path has its own upload/Agent integration coverage.
     await page.waitForFunction(() => !!document.querySelector('#manualAgent .mia-settings'));
-    await page.locator('#manualAgent summary').click();
+    assert.equal(await page.locator('#manualAgent').isVisible(),false);
     await page.evaluate(()=>window.dispatchEvent(new CustomEvent('invoice-settings-changed',{detail:{organize:{auto_after_upload:false,use_model:true,model_available:false}}})));
     assert.equal(await page.getByRole('button', {name: '确认当前费用金额／分笔付款', exact: true}).count(), 0, 'old split-payment button must be removed');
     assert.equal(await page.locator('#newItem').count(), 0, 'the old separate manual-entry button should not duplicate this creation flow');

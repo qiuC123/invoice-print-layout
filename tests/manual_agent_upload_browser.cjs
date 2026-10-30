@@ -108,6 +108,7 @@ async function run(pw) {
           assert.equal(payloads.opened, startFails ? 0 : 1);
           if (startFails) {
             assert.match(await (kind === 'matching' ? page.locator('#matchingMessage') : page.locator('#feedback')).innerText(), /原件.*保留|原件已保存/);
+            assert.match(await (kind === 'matching' ? page.locator('#matchingMessage') : page.locator('#feedback')).innerText(), /请在材料合成台查看未处理材料/);
             await page.locator(kind === 'matching' ? '#matchingRefresh' : '#intakeRefresh').click();
             assert.equal(writes.filter(x => x.route === '/api/agent/start').length, 1, 'read retry cannot restart the saved batch');
           } else if (openFails) {

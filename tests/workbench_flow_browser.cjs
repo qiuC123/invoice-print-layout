@@ -35,6 +35,8 @@ async function run(pw){
   }
   if(u.pathname==='/api/state')return json(state);
   if(u.pathname==='/api/intake')return json({queue});
+  if(u.pathname==='/api/agent/jobs')return json({jobs:[]});
+  if(u.pathname==='/api/settings')return json({organize:{auto_after_upload:true,use_model:false,model_available:false}});
   if(u.pathname==='/api/material-matching')return json({vouchers:[],payments:[],matches:[],suggestions:[],unused:[],
    other:queue.filter(q=>q.status!=='linked').map(q=>({...q,key:'q:'+q.id,amount_cents:1400,
     report_choice:{project_type:'materials',project_name:q.fields.title||''}})),
@@ -65,7 +67,7 @@ async function run(pw){
   await page.goto('http://127.0.0.1:18771/?project=p2');
   // Keep this existing manual intake/relationship regression in manual mode.
   await page.waitForFunction(()=>!!document.querySelector('#manualAgent .mia-settings'));
-  await page.locator('#manualAgent summary').click();
+  assert.equal(await page.locator('#manualAgent').isVisible(),false);
   await page.evaluate(()=>window.dispatchEvent(new CustomEvent('invoice-settings-changed',{detail:{organize:{auto_after_upload:false,use_model:true,model_available:false}}})));
   await page.locator('#materialMatching').click();
   assert.equal(await page.locator('#matchingProject').count(),0);

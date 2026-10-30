@@ -43,6 +43,7 @@
     function displayError() {
       const message = actionError || refreshError;
       error.textContent = message; error.hidden = !message;
+      updateControls();
     }
     function actionFailure(reason) { actionError = reason && reason.message ? reason.message : String(reason); displayError(); }
     function requestRecords(projectId) {
@@ -60,15 +61,19 @@
       remember('requests:' + projectId, JSON.stringify(rows.map(({result, ...row}) => row)));
     }
     function updateControls() {
-      host.hidden = !project;
+      const attention = jobs.some(needsAttention) || (project && requestRecords(project).some(row => row.failed && !row.accepted)) || actionError || refreshError;
+      const visible = !!project && (!automatic(project) || !!attention);
+      if (visible && (host.hidden || attention)) panel.open = true;
+      host.hidden = !visible;
+      hint.hidden = automatic(project);
       organize.disabled = !project || startLocks.has(project);
       if (!project) badge.textContent = '';
       else {
         const waiting = jobs.filter(job => job.state === 'needs_input').length;
-        const working = jobs.some(job => ['queued', 'running'].includes(job.state));
-        badge.textContent = waiting ? waiting + ' 项待确认' : working ? '正在整理' : automatic(project) ? '上传后自动整理已开启' : '上传后需手动整理';
+        badge.textContent = waiting ? waiting + ' 项待确认' : attention ? '需要处理' : '上传后需手动整理';
       }
     }
+    function needsAttention(job) { return ['needs_input', 'failed', 'stopped'].includes(job.state); }
     function applySettings(data) {
       const value = data?.organize || data;
       if (!value || typeof value.auto_after_upload !== 'boolean' || typeof value.use_model !== 'boolean') return false;
@@ -163,8 +168,8 @@
       return record.promise;
     }
     function open() {
-      setProject(); panel.open = true;
-      panel.scrollIntoView({block:'nearest', behavior:'smooth'});
+      setProject(); updateControls();
+      if (!host.hidden) { panel.open = true; panel.scrollIntoView({block:'nearest', behavior:'smooth'}); }
       void refresh();
     }
     function makeButton(text, action) {
@@ -203,13 +208,13 @@
     function render(force = false) {
       // Live timing counters do not change any controls or evidence. Keeping
       // their polling out of the render key preserves keyboard focus and logs.
-      const signature = JSON.stringify([project, jobs.map(({timings, ...job}) => job), [...jobLocks]]);
+      const attentionJobs = jobs.filter(needsAttention);
+      const signature = JSON.stringify([project, attentionJobs.map(({timings, ...job}) => job), [...jobLocks]]);
       if (!force && signature === rendered) return;
       rendered = signature; list.replaceChildren();
-      if (!project) { list.append(node('p', '先选择或新建项目，再上传材料。', 'mia-empty')); return; }
-      if (!jobs.length) { list.append(node('p', '还没有整理任务。可直接使用原来的上传入口。', 'mia-empty')); return; }
-      const priority = job => job.state === 'needs_input' ? 0 : ['queued', 'running'].includes(job.state) ? 1 : 2;
-      for (const job of [...jobs].sort((left, right) => priority(left) - priority(right))) {
+      if (!project) return;
+      const priority = job => job.state === 'needs_input' ? 0 : 1;
+      for (const job of attentionJobs.sort((left, right) => priority(left) - priority(right))) {
         const card = node('article', undefined, 'mia-job' + (job.state === 'needs_input' ? ' mia-needs-input' : ''));
         card.dataset.jobId = job.id; card.dataset.state = job.state;
         const title = node('div', undefined, 'mia-job-heading');
@@ -278,9 +283,7 @@
       if (jobs.some(job => job.state === 'needs_input')) panel.open = true;
     }
     function renderPending() {
-      pending.replaceChildren(); if (!project) return;
-      const waiting = requestRecords(project).filter(row => row.waiting && !row.accepted);
-      if (waiting.length) pending.append(node('p', `${waiting.reduce((sum, row) => sum + row.ids.length, 0)} 份材料等待分批整理；前一批结束后自动继续。切换项目或关闭页面后，回到本项目继续。`, 'mia-muted'));
+      updateControls(); pending.replaceChildren(); if (!project) return;
       for (const record of requestRecords(project).filter(row => row.failed && !row.accepted)) {
         const card = node('div', undefined, 'mia-start-retry');
         card.append(node('span', record.ids.length + ' 份材料已保留，启动状态未确认。'));

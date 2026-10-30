@@ -29,7 +29,7 @@
     }catch(error){
       // The job has already committed. A refresh failure must not start it again.
       updates.forEach(update=>pending.delete(update.jobId));
-      notify('材料已整理，列表刷新未完成：'+error.message+'。可点击任务中的“查看费用”重读结果。',true);
+      notify('材料已整理，列表刷新未完成：'+error.message+'。请刷新页面后在待核对列表查看结果，无需重新上传。',true);
     }finally{refreshing=false;scheduleRefresh();}
   }
   async function agentApi(path,body){

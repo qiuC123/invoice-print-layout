@@ -29,6 +29,8 @@ async function run(pw){
   if(url.pathname.startsWith('/export/'))return route.fulfill({contentType:'image/svg+xml',body:'<svg xmlns="http://www.w3.org/2000/svg" width="842" height="595"><rect width="842" height="595" fill="white"/></svg>'});
   if(url.pathname==='/api/material-matching')return json({report_types:reportTypes,vouchers:[],payments:[],matches:[],other:queue.filter(q=>q.project_id===url.searchParams.get('project')&&q.status!=='linked').map(q=>({...q,key:'q:'+q.id,role:'detail',amount_cents:1200,report_choice:{project_type:'other',project_name:'机器名称'},fields:{title:'机器名称',amount:'12.00',category:'其他'}}))});
   if(url.pathname==='/api/intake')return json({queue});
+  if(url.pathname==='/api/agent/jobs')return json({jobs:[]});
+  if(url.pathname==='/api/settings')return json({organize:{auto_after_upload:true,use_model:false,model_available:false}});
   const name=url.pathname==='/'?'index.html':url.pathname==='/logistics'?'logistics.html':url.pathname.slice(1);
   if(!/^[a-z-]+\.(html|js|css)$/.test(name))return route.abort();
   return route.fulfill({contentType:name.endsWith('.js')?'text/javascript':name.endsWith('.css')?'text/css':'text/html',body:await fs.readFile(path.resolve(__dirname,'../src/invoice_print_layout/web',name))});
@@ -48,6 +50,8 @@ async function run(pw){
   assert.equal(await page.getByRole('button',{name:'收件／待处理',exact:true}).count(),0,'standalone page has no duplicate sidebar entry');
   assert.equal(await page.locator('#recognizeReceipt,#checkMail').count(),0,'collection is consolidated into the matching desk');
   assert.equal(await page.locator('.rail #createProject').isVisible(),true,'existing project pages allow new project creation');
+  await page.waitForFunction(()=>!!document.querySelector('#manualAgent .mia-settings'));
+  assert.equal(await page.locator('#manualAgent').isVisible(),false,'ordinary project ledger has no organizer panel');
   await page.locator('#matchingDeskDialog').waitFor({state:'attached'});
   await page.locator('#materialMatching').click();
   assert.equal(await page.locator('#matchingProject').count(),0);

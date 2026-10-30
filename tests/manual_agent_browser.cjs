@@ -24,7 +24,7 @@ async function run(pw) {
       window.selectedProject='alpha';window.callbacks=[];window.parentLoads=0;window.deferredChanges=[];window.manualEditing=false;window.settingsOpened=[];window.invoiceSettings={open:tab=>settingsOpened.push(tab)};
       window.injectedApi=async(path,body)=>{const response=await fetch(path,body===undefined?{cache:'no-store'}:{method:'POST',headers:{'Content-Type':'application/json','X-Workbench-Token':'synthetic'},body:JSON.stringify(body)});const data=await response.json();if(!response.ok)throw new Error(data.error||'处理未完成');return data;};
       window.mountTest=()=>window.controller=window.manualInvoiceAgent.mount({host:document.getElementById('agentHost'),api:window.injectedApi,getProject:()=>window.selectedProject,
-        onChanged:data=>{window.callbacks.push(['changed',data]);if(window.manualEditing)window.deferredChanges.push(data);else window.parentLoads++;},
+        onChanged:data=>{if(window.failChanged)throw Error('合成结果回调失败');window.callbacks.push(['changed',data]);if(window.manualEditing)window.deferredChanges.push(data);else window.parentLoads++;},
         onOpenMaterial:data=>window.callbacks.push(['material',data]),onOpenExpense:data=>window.callbacks.push(['expense',data]),onPreview:data=>window.callbacks.push(['preview',data])});
       window.mountTest();
     </script></body></html>`});
@@ -89,23 +89,34 @@ async function run(pw) {
   async function select(project) { await page.evaluate(project=>{window.selectedProject=project;return window.controller.refresh();},project); }
   async function settingsChange(values) { Object.assign(state.organize,values);await page.evaluate(organize=>window.dispatchEvent(new CustomEvent('invoice-settings-changed',{detail:{organize}})),state.organize); }
   async function refreshAndWait(text) { await refresh(); await page.getByText(text,{exact:true}).waitFor(); }
+  async function screenshot(name) {
+    const output=process.env.INVOICE_BROWSER_EVIDENCE;
+    if (output) { await fs.mkdir(output,{recursive:true});await page.screenshot({path:path.join(output,name+'.png')}); }
+  }
   try {
     state.jobs.alpha=[base('alpha','old-ready',{state:'ready',item_ids:['old-item'],preview:{pdf:'old.pdf',xlsx:'old.xlsx',total_cents:800}})];
     await page.goto(origin+'/');
-    await page.locator('[data-job-id="old-ready"]').waitFor({state:'attached'});
+    await refresh();
+    assert.equal(await page.locator('#agentHost').isVisible(),false,'completed history stays hidden');
+    assert.equal(await page.locator('.mia-job').count(),0);
+    await screenshot('normal-hidden');
     assert.equal(await page.evaluate(()=>window.parentLoads),0,'initial historical ready cannot reload the parent');
     assert.equal(await page.evaluate(()=>window.manualInvoiceAgent.shouldAutoOrganize('alpha')),true);
     await page.evaluate(()=>window.controller.open());
+    assert.equal(await page.locator('#agentHost').isVisible(),false,'upload open hook cannot reveal ordinary history');
     assert.equal(await page.locator('.mia-check input').count(),0,'organizer preferences live only in settings');
-    await page.getByRole('button',{name:'整理设置',exact:true}).click();assert.deepEqual(await page.evaluate(()=>window.settingsOpened),['organize']);
     await settingsChange({auto_after_upload:false});assert.equal(await page.evaluate(()=>window.controller.shouldAutoOrganize('alpha')),false);
+    await page.getByRole('button',{name:'整理未处理材料',exact:true}).waitFor();
+    await page.getByRole('button',{name:'整理设置',exact:true}).click();assert.deepEqual(await page.evaluate(()=>window.settingsOpened),['organize']);
+    assert.equal(await page.locator('.mia-job').count(),0,'manual mode still omits history');
+    await screenshot('manual-entry');
     await select('beta'); assert.equal(await page.evaluate(()=>window.controller.shouldAutoOrganize('beta')),false,'preferences are global');
     await select('alpha'); assert.equal(await page.evaluate(()=>window.controller.shouldAutoOrganize('alpha')),false);
     await page.evaluate(()=>{window.mountTest();window.controller.open();}); await refresh();
     assert.equal(await page.evaluate(()=>window.controller.shouldAutoOrganize('alpha')),false,'remount reads global manual-mode preference');
     await settingsChange({auto_after_upload:true,use_model:false});
     await select('');assert.equal(await page.locator('#agentHost').isVisible(),false);assert.equal(await page.evaluate(()=>window.controller.shouldAutoOrganize('')),false);
-    await select('alpha');assert.equal(await page.locator('#agentHost').isVisible(),true);
+    await select('alpha');assert.equal(await page.locator('#agentHost').isVisible(),false);
 
     const request={projectId:'alpha',entryIds:['new-b','new-a','new-a'],batch:'upload-one'};
     startGate={gate:gate(),entered:false}; const starting=startGate;
@@ -119,21 +130,31 @@ async function run(pw) {
     state.failGet=1; starting.gate.release(); const accepted=await start;
     assert.equal(accepted[0].job.id,accepted[1].job.id); assert.equal(posts[0].body.use_model,false);
     assert.deepEqual(posts[0].body.material_ids,['new-a','new-b']);
-    await refresh(); await page.evaluate(request=>window.controller.startReceived(request),request);
+    await refresh(); await refresh(); await page.evaluate(request=>window.controller.startReceived(request),request);
     assert.equal(posts.filter(row=>row.path==='/api/agent/start').length,1,'GET failures and repeated batch cannot repeat accepted writes');
+    assert.equal(await page.locator('#agentHost').isVisible(),false,'queued jobs run without a panel');
+    state.failGet=1;await refresh();
+    assert.equal(await page.locator('#agentHost').isVisible(),true,'read errors remain visible');
+    assert.equal(await page.locator('.manual-invoice-agent').evaluate(element=>element.open),true);
+    await refresh();assert.equal(await page.locator('#agentHost').isVisible(),false,'read recovery hides the panel');
 
     const networkBatch={projectId:'alpha',entryIds:['retry-material'],batch:'uncertain-network'};
     state.failStart=true;
     const failed=await page.evaluate(async request=>{try{await window.controller.startReceived(request);return '';}catch(reason){return reason.message;}},networkBatch);
     assert.ok(failed); await page.getByRole('button',{name:'重试启动本批整理',exact:true}).waitFor();
+    await screenshot('start-failure');
+    assert.equal(await page.locator('.manual-invoice-agent').evaluate(element=>element.open),true);
     const uncertain=posts.filter(row=>row.path==='/api/agent/start').at(-1).body;
-    await page.evaluate(()=>window.mountTest()); await refresh(); await page.evaluate(()=>window.controller.open());
+    await page.evaluate(()=>window.mountTest()); await refresh();
+    assert.equal(await page.locator('#agentHost').isVisible(),true,'persisted failed starts reveal the panel after remount');
     await page.getByRole('button',{name:'重试启动本批整理',exact:true}).click();
     await page.getByRole('button',{name:'重试启动本批整理',exact:true}).waitFor({state:'detached'});
+    assert.equal(await page.locator('#agentHost').isVisible(),false,'successful start retry hides the panel');
     assert.deepEqual(posts.filter(row=>row.path==='/api/agent/start').at(-1).body,uncertain,'retry after browser remount preserves exact key and body');
     assert.equal(state.jobs.alpha.filter(job=>job.id==='created-2').length,1,'ambiguous delivery still creates one durable job');
 
     const created=state.jobs.alpha.find(job=>job.id===accepted[0].job.id);
+    await page.evaluate(()=>document.querySelector('.manual-invoice-agent').open=false);
     Object.assign(created,{state:'needs_input',models:1,tools:5,question:{id:'source-question',type:'material_relation',text:'这张付款确实对应饮用水采购吗？',
       material_ids:['water','pay','support'],evidence_summary:['发票29.60元；美团付款29.60元，但未写实际商家。'],
       material_facts:[{id:'water',goods:'娃哈哈饮用水2组、派送',merchant:'合成供水店',amount_cents:2960}],
@@ -142,6 +163,8 @@ async function run(pw) {
     await refreshAndWait('材料 1：娃哈哈饮用水2组、派送 · 29.60 元 · 合成供水店');
     assert.equal(await page.locator('.manual-invoice-agent').evaluate(element=>element.open),true);
     const card=page.locator('[data-job-id="'+created.id+'"]');
+    assert.equal(await page.locator('.mia-job').count(),1,'only actionable cards appear alongside history and queued jobs');
+    await screenshot('question-expanded');
     assert.equal(await card.locator('.mia-original').count(),3);
     assert.match(await card.innerText(),/付款29.60元.*未写实际商家/);
     assert.match(await card.getByRole('button',{name:/^同一笔/}).innerText(),/明细：材料 3/);
@@ -170,18 +193,23 @@ async function run(pw) {
     assert.equal(answering.entered,true); assert.equal(answers.length,1);
     assert.deepEqual(answers[0],{id:created.id,choice:'yes',question_id:'source-question'});
     answering.gate.release();
-    await page.getByText('本次预览合计 29.60 元 · 尚未核对',{exact:true}).waitFor();
+    await card.waitFor({state:'detached'});
+    assert.equal(await page.locator('#agentHost').isVisible(),false,'answering the last question hides the panel');
+    await screenshot('answered-hidden');
     await refresh(); await refresh();
     assert.equal(await page.evaluate(()=>window.callbacks.filter(row=>row[0]==='changed').length),1,'new results notify once');
     assert.equal(await page.evaluate(()=>window.parentLoads),0,'parent can delay reload while manual editing');
     assert.equal(await page.evaluate(()=>window.deferredChanges.length),1);
     assert.equal(created.models,1); assert.equal(created.tools,13); assert.equal(created.id,accepted[0].job.id);
+    // Navigation on an actionable partial result keeps the original exact-ID contract.
+    created.state='needs_input';await refresh();
     await card.getByRole('button',{name:'查看费用',exact:true}).click();
     await card.getByRole('button',{name:'查看报销预览',exact:true}).click();
     const preview=await page.evaluate(()=>window.callbacks.find(row=>row[0]==='preview')[1]);
     assert.deepEqual(preview,{projectId:'alpha',jobId:created.id,itemIds:['expense-alpha'],preview:created.preview});
     assert.deepEqual(await page.evaluate(()=>window.callbacks.find(row=>row[0]==='expense')[1]),{projectId:'alpha',jobId:created.id,itemId:'expense-alpha'});
     assert.equal(await card.getByRole('link',{name:'查看本次 PDF'}).getAttribute('href'),'/export/only-this-job.pdf');
+    created.state='ready';await refresh();
 
     state.jobs.beta=[base('beta','beta-missing',{state:'needs_input',question:{text:'缺少付款原件',material_ids:[],choices:[]}})];
     delayedGet={project:'alpha',gate:gate(),entered:false}; const delayed=delayedGet;
@@ -219,7 +247,7 @@ async function run(pw) {
       const card=page.locator('[data-job-id="'+id+'"]');
       assert.equal(await card.getByRole('button',{name:'重新检查对应关系',exact:true}).count(),0);
       await card.getByRole('button',{name:'按新规则检查商品',exact:true}).click();
-      await page.locator('[data-job-id="'+id+'"][data-state="queued"]').waitFor({state:'attached'});
+      await card.waitFor({state:'detached'});
       assert.deepEqual(posts.at(-1),{path:'/api/agent/retry',body:{id}});
       assert.equal(state.jobs.beta[0].models,1); assert.equal(state.jobs.beta[0].tools,7);
       assert.equal(answers.length,answersBeforeRefresh,'a rule recheck cannot fabricate a user fact');
@@ -227,25 +255,33 @@ async function run(pw) {
     state.queue=[{id:'beta-eligible',project_id:'beta',status:'received'}, {id:'beta-review',project_id:'beta',status:'review'},
       {id:'beta-linked',project_id:'beta',status:'linked',item_id:'existing'}, {id:'alpha-not-selected',project_id:'alpha',status:'received'},
       {id:'unknown-project',status:'received'},{id:'beta-removed',project_id:'beta',status:'removed'}];
-    state.available=false; await settingsChange({use_model:true,model_available:false});await refresh();
-    await page.getByRole('button',{name:'整理未处理材料',exact:true}).click();
-    await page.locator('[data-job-id="created-3"]').waitFor({state:'attached'});
+    state.available=false; await settingsChange({auto_after_upload:false,use_model:true,model_available:false});await refresh();
+    const explicitStart=page.waitForResponse(response=>new URL(response.url()).pathname==='/api/agent/start');
+    await page.getByRole('button',{name:'整理未处理材料',exact:true}).click();await explicitStart;
+    await page.waitForFunction(()=>document.querySelector('.mia-controls button').disabled===false);
     const explicit=posts.filter(row=>row.path==='/api/agent/start').at(-1).body;
     assert.deepEqual(explicit.material_ids,['beta-eligible','beta-review']); assert.equal(explicit.project_id,'beta'); assert.equal(explicit.use_model,false);
-    const cancel=page.locator('[data-job-id="created-3"]').getByRole('button',{name:'停止本次整理'}); await cancel.click();
-    await page.locator('[data-job-id="created-3"][data-state="cancelled"]').waitFor({state:'attached'});
+    assert.equal(await page.locator('[data-job-id="created-3"]').count(),0,'manual mode also omits queued cards');
+    assert.equal(state.jobs.beta.find(row=>row.id==='created-3').state,'queued');
+    state.jobs.beta=[...state.jobs.beta.filter(row=>row.state==='queued')];
+    await settingsChange({auto_after_upload:true});await refresh();
+    assert.equal(await page.locator('#agentHost').isVisible(),false);
     state.jobs.beta.unshift(base('beta','retry-job',{state:'failed',models:2,tools:18,item_ids:['existing-partial-draft']})); await refresh();
     await page.locator('[data-job-id="retry-job"]').getByRole('button',{name:'按剩余额度重试'}).click();
-    await page.locator('[data-job-id="retry-job"][data-state="queued"]').waitFor({state:'attached'});
+    await page.locator('[data-job-id="retry-job"]').waitFor({state:'detached'});
+    assert.equal(await page.locator('#agentHost').isVisible(),false,'successful job retry hides the panel');
     assert.equal(state.jobs.beta.find(row=>row.id==='retry-job').models,2); assert.equal(state.jobs.beta.find(row=>row.id==='retry-job').tools,18);
     assert.deepEqual(posts.at(-1),{path:'/api/agent/retry',body:{id:'retry-job'}});
     state.jobs.beta.find(row=>row.id==='retry-job').state='failed'; await refresh();
+    assert.equal(await page.locator('#agentHost').isVisible(),true);
+    state.jobs.beta.find(row=>row.id==='retry-job').state='stopped';await refresh();
+    await page.getByRole('button',{name:'按剩余额度重试',exact:true}).waitFor();
     assert.equal(await page.evaluate(()=>window.callbacks.filter(row=>row[0]==='changed').length),1,'retry retaining the same partial draft is not a new write');
     const bounded=await page.evaluate(async()=>{try{await window.controller.startReceived({projectId:'beta',entryIds:Array.from({length:21},(_,index)=>'too-many-'+index),batch:'overflow'});return '';}catch(reason){return reason.message;}});
     assert.match(bounded,/最多整理20份/); assert.deepEqual(posts.at(-1),{path:'/api/agent/retry',body:{id:'retry-job'}},'limit failure cannot write');
 
     await page.setViewportSize({width:390,height:844});
-    await select('alpha'); await page.evaluate(()=>window.controller.open());
+    created.state='needs_input';await select('alpha');
     assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1),true,'390px workbench module cannot overflow');
     assert.equal(await page.locator('.mia-check input').count(),0);
     state.failSettings=true;await page.evaluate(()=>{window.mountTest();window.controller.open();});await refresh();await page.waitForTimeout(50);
@@ -254,10 +290,22 @@ async function run(pw) {
     await select(''); assert.equal(await page.locator('#agentHost').isVisible(),false);
     assert.equal(await page.evaluate(()=>window.controller.shouldAutoOrganize('')),false);
     assert.equal(await page.locator('#originalControl').count(),1,'manual workbench remains in place');
+    created.state='ready';await select('alpha');
+    await page.evaluate(()=>window.failChanged=true);
+    const callbackJob=base('alpha','callback-error',{state:'running'});state.jobs.alpha.unshift(callbackJob);await refresh();
+    assert.equal(await page.locator('#agentHost').isVisible(),false,'running tasks stay hidden');
+    Object.assign(callbackJob,{state:'ready',item_ids:['callback-expense']});await refresh();
+    await page.getByRole('alert').filter({hasText:'合成结果回调失败'}).waitFor();
+    assert.equal(await page.locator('.manual-invoice-agent').evaluate(element=>element.open),true,'operation errors reveal an expanded panel without actionable jobs');
+    assert.equal(await page.locator('.mia-job').count(),0);
+    await page.evaluate(()=>window.failChanged=false);
+    await page.evaluate(()=>window.controller.startReceived({projectId:'alpha',entryIds:['error-recovery'],batch:'error-recovery'}));
+    await refresh();assert.equal(await page.locator('#agentHost').isVisible(),false,'successful operation clears the error panel');
     assert.deepEqual(errors,[]);
     return {passed:true,globalPreferences:true,settingsFailureDefaults:true,noProjectPanelHidden:true,configuredModelOnly:true,oneBatchOneStart:true,networkRetryKeepsIdentity:true,
       pollingNeverPosts:true,pollingKeepsManualInput:true,parentControlsManualEditRefresh:true,sourceBoundAnswer:true,sameJobRemainingBudget:true,
-      exactPreviewCallbacks:true,projectLateResponseFence:true,missingEvidenceNeedsManual:true,guardedLegacyRefresh:true,unlinkedCurrentProjectOnly:true,cancelRetry:true,mobile390:true,pageErrors:errors};
+      exactPreviewCallbacks:true,projectLateResponseFence:true,missingEvidenceNeedsManual:true,guardedLegacyRefresh:true,unlinkedCurrentProjectOnly:true,jobRetry:true,
+      normalPanelHidden:true,questionsAutoExpand:true,answeredPanelHidden:true,startFailureVisible:true,retrySuccessHidden:true,manualModeEntry:true,operationErrorVisible:true,mobile390:true,pageErrors:errors};
   } finally { await browser.close(); }
 }
 module.exports=run;

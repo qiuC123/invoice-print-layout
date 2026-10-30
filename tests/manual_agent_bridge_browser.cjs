@@ -73,6 +73,7 @@ async function run(pw){
     await advance(510);assert.equal(await loads(),beforeFailure+1);await advance(1600);assert.equal(await loads(),beforeFailure+1);
     assert.equal(await page.evaluate(()=>calls.notices.at(-1).error),true);
     assert.match(await page.evaluate(()=>calls.notices.at(-1).message),/列表刷新未完成/);
+    assert.match(await page.evaluate(()=>calls.notices.at(-1).message),/刷新页面后在待核对列表查看结果，无需重新上传/);
     assert.deepEqual(await page.evaluate(()=>calls.writes),[],'A failed result refresh must not restart an accepted job');
     await page.evaluate(()=>calls.failLoad=false);
 
