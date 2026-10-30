@@ -211,7 +211,10 @@ def make_server(workspace: Path, port: int = 8765, *, mode: str = 'workbench',
             actual_port = cast(ThreadingHTTPServer, self.server).server_port
             hosts = {f'127.0.0.1:{actual_port}', f'localhost:{actual_port}'}
             origin = self.headers.get('Origin')
-            return self.headers.get('Host') in hosts and (origin is None or origin in {'http://' + h for h in hosts})
+            # Some Edge setups send a port-less loopback Origin on same-origin requests;
+            # it is still this machine, and writes also need the workbench token.
+            origins = {'http://' + h for h in hosts} | {'http://127.0.0.1', 'http://localhost'}
+            return self.headers.get('Host') in hosts and (origin is None or origin in origins)
 
         def send(self, data: bytes, content_type: str, code: int = 200, filename: str | None = None) -> None:
             self.send_response(code)
