@@ -317,28 +317,28 @@
       } finally {busy = false; if (dialog.isConnected) {dialog.querySelectorAll('button,select').forEach(control => control.disabled = false); save.disabled = expired || committed;}}
     };
   }
-  async function bulkAssign(records, {projectId = project(), onSaved} = {}, materials = false) {
+  async function bulkAssignExpenses(records, {projectId = project(), onSaved} = {}) {
     if (!projectId || projectId !== project()) throw Error('请先进入当前项目。');
     if (bulkOpening || document.getElementById('reimbursementPeopleBulk')) return;
-    if (!Array.isArray(records) || !records.length || records.length > 200) throw Error('每次请选择1至200份不重复的' + (materials ? '材料' : '费用') + '。');
+    if (!Array.isArray(records) || !records.length || records.length > 200) throw Error('每次请选择1至200份不重复的费用。');
     const selected = records.map(record => ({...record})), ids = selected.map(record => record.id);
     if (ids.some(id => typeof id !== 'string' || !id) || new Set(ids).size !== ids.length) throw Error('勾选列表含无效或重复记录，请重新选择。');
     bulkOpening = true;
     try {await refresh(projectId);} finally {bulkOpening = false;}
     if (projectId !== project()) throw Error('项目已变化，请重新选择。');
     const targets = activePeople(projectId).map(person => ({...person}));
-    const invalid = selected.filter(record => materials ? record.key?.startsWith('e:') || record.item_id || !['received', 'review'].includes(record.status) || !Number.isSafeInteger(record.revision) || record.revision < 0 || record.project_id && record.project_id !== projectId : record.project_id !== projectId || typeof record.version !== 'string' || !record.version || record.stage !== 'draft' || record.verified || record.deleted || record.returned_to_synthesis || record.merged_into || record.legacy || record.history_imported || ['archived', 'deleted'].includes(record.synthesis_material_state));
+    const invalid = selected.filter(record => record.project_id !== projectId || typeof record.version !== 'string' || !record.version || record.stage !== 'draft' || record.verified || record.deleted || record.returned_to_synthesis || record.merged_into || record.legacy || record.history_imported || ['archived', 'deleted'].includes(record.synthesis_material_state));
     const known = selected.filter(record => !record.amount_pending && Number.isSafeInteger(record.amount_cents)), total = known.reduce((sum, record) => sum + record.amount_cents, 0);
     const owners = new Map();
     for (const record of selected) {const id = record.reimbursement_person_id || '', owner = owners.get(id) || {label: label(record) || '未指定', count: 0}; owner.count++; owners.set(id, owner);}
-    const title = materials ? '批量修改材料归属人' : '批量修改费用归属人';
+    const title = '批量修改费用归属人';
     const dialog = document.createElement('dialog'); dialog.id = 'reimbursementPeopleBulk'; dialog.className = 'reimbursement-people-dialog';
-    dialog.innerHTML = `<div class="dialoghead"><h2>${title}</h2><button type="button" data-close class="dialog-close" aria-label="关闭">×</button></div><p>仅修改本次勾选的 ${selected.length} ${materials ? '份材料' : '笔费用'}；${materials ? '识别金额合计（非费用合计）' : '费用合计'} ¥ ${money(total)}${known.length < selected.length ? `，另有 ${selected.length - known.length} 份金额待确认` : ''}。</p><p>当前归属：${[...owners.values()].map(owner => `${esc(owner.label)} ${owner.count} ${materials ? '份' : '笔'}`).join('；')}。已指定 ${[...owners.keys()].filter(Boolean).length} 人${owners.has('') ? `，未指定 ${owners.get('').count} ${materials ? '份' : '笔'}` : ''}。</p><details class="reimbursement-bulk-records"><summary>查看本次勾选列表</summary><ul>${selected.map(record => `<li>${esc(record.title || record.name || '未命名记录')} · ${esc(label(record) || '未指定')} · ${Number.isSafeInteger(record.amount_cents) && !record.amount_pending ? '¥ ' + money(record.amount_cents) : '金额待确认'}</li>`).join('')}</ul></details><p class="muted">${materials ? '只指定材料归属，不改用途或识别金额，不创建费用；票据与付款识别金额不作为重复记账。' : '只改这些费用的人员归属，金额、报销分类、核对状态和原件保持；仅未核对草稿可指定归属，已退回合成台的费用请在材料中处理。'}</p>${invalid.length ? `<p class="reimbursement-bulk-invalid">${invalid.length} 份记录不符合当前条件，整组不能保存。请刷新并重新选择，未跳过任何记录。</p>` : ''}<form novalidate><label>统一指定费用归属人<select name="person_id"><option value="">未指定</option>${targets.map(person => `<option value="${esc(person.id)}">${esc(person.label)}</option>`).join('')}</select></label><p data-bulk-target role="status">将上述选中记录设为未指定，金额保持。</p><p data-error role="alert" hidden></p><div class="actions"><button type="submit" class="primary" ${invalid.length ? 'disabled' : ''}>确认保存 ${selected.length} ${materials ? '份材料' : '笔费用'}归属</button><button type="button" data-refresh-confirmed hidden>刷新页面</button><button type="button" data-close>取消</button></div></form>`;
+    dialog.innerHTML = `<div class="dialoghead"><h2>${title}</h2><button type="button" data-close class="dialog-close" aria-label="关闭">×</button></div><p>仅修改本次勾选的 ${selected.length} 笔费用；费用合计 ¥ ${money(total)}${known.length < selected.length ? `，另有 ${selected.length - known.length} 份金额待确认` : ''}。</p><p>当前归属：${[...owners.values()].map(owner => `${esc(owner.label)} ${owner.count} 笔`).join('；')}。已指定 ${[...owners.keys()].filter(Boolean).length} 人${owners.has('') ? `，未指定 ${owners.get('').count} 笔` : ''}。</p><details class="reimbursement-bulk-records"><summary>查看本次勾选列表</summary><ul>${selected.map(record => `<li>${esc(record.title || record.name || '未命名记录')} · ${esc(label(record) || '未指定')} · ${Number.isSafeInteger(record.amount_cents) && !record.amount_pending ? '¥ ' + money(record.amount_cents) : '金额待确认'}</li>`).join('')}</ul></details><p class="muted">只改这些费用的人员归属，金额、报销分类、核对状态和原件保持；仅未核对草稿可指定归属，已退回合成台的费用请在材料中处理。</p>${invalid.length ? `<p class="reimbursement-bulk-invalid">${invalid.length} 份记录不符合当前条件，整组不能保存。请刷新并重新选择，未跳过任何记录。</p>` : ''}<form novalidate><label>统一指定费用归属人<select name="person_id"><option value="">未指定</option>${targets.map(person => `<option value="${esc(person.id)}">${esc(person.label)}</option>`).join('')}</select></label><p data-bulk-target role="status">将上述选中记录设为未指定，金额保持。</p><p data-error role="alert" hidden></p><div class="actions"><button type="submit" class="primary" ${invalid.length ? 'disabled' : ''}>确认保存 ${selected.length} 笔费用归属</button><button type="button" data-refresh-confirmed hidden>刷新页面</button><button type="button" data-close>取消</button></div></form>`;
     document.body.append(dialog); dialog.showModal();
     const form = dialog.querySelector('form'), select = form.elements.person_id, save = form.querySelector('[type=submit]'), errorTarget = form.querySelector('[data-error]'), retryRead = form.querySelector('[data-refresh-confirmed]');
     let busy = false, expired = false, committed = false, result = null;
     const targetPerson = () => targets.find(person => person.id === select.value);
-    const update = () => {const target = targetPerson(); save.disabled = busy || expired || committed || !!invalid.length || !!select.value && !target?.version; form.querySelector('[data-bulk-target]').textContent = `将上述 ${selected.length} ${materials ? '份材料' : '笔费用'}统一设为${target?.label || '未指定'}，金额保持。`;};
+    const update = () => {const target = targetPerson(); save.disabled = busy || expired || committed || !!invalid.length || !!select.value && !target?.version; form.querySelector('[data-bulk-target]').textContent = `将上述 ${selected.length} 笔费用统一设为${target?.label || '未指定'}，金额保持。`;};
     select.onchange = update; update();
     const close = () => {if (!busy) dialog.remove();}; dialog.querySelectorAll('[data-close]').forEach(button => button.onclick = close); dialog.oncancel = event => {event.preventDefault(); close();};
     const finish = async () => {await refresh(projectId); if (onSaved) await onSaved(result); else await load(); dialog.remove(); notify(result.message || '勾选记录的人员归属已保存，金额和原件保持。');};
@@ -352,10 +352,10 @@
       const target = targetPerson(); busy = true; dialog.querySelectorAll('button,select').forEach(control => control.disabled = true);
       try {
         if (projectId !== project()) throw Error('项目已变化，请关闭后重新选择。');
-        const versions = Object.fromEntries(selected.map(record => [record.id, materials ? record.revision : record.version]));
-        result = await api('reimbursement-people/' + (materials ? 'assign-materials' : 'assign-expenses'), {project_id: projectId, ids, ...(materials ? {revisions: versions} : {versions}), person_id: select.value, ...(target ? {target_version: target.version} : {})}); committed = true;
+        const versions = Object.fromEntries(selected.map(record => [record.id, record.version]));
+        result = await api('reimbursement-people/assign-expenses', {project_id: projectId, ids, versions, person_id: select.value, ...(target ? {target_version: target.version} : {})}); committed = true;
         if (result.person?.id !== select.value) throw Error('人员归属结果无法核对，请刷新页面。');
-        const returned = materials ? result.entries : result.items;
+        const returned = result.items;
         if (!Array.isArray(returned) || returned.length !== selected.length || returned.some(record => !ids.includes(record.id)) || new Set(returned.map(record => record.id)).size !== ids.length) throw Error('批量结果无法核对，请刷新页面。');
         await finish();
       } catch (error) {
@@ -364,18 +364,7 @@
       } finally {busy = false; if (dialog.isConnected) {dialog.querySelectorAll('button,select').forEach(control => control.disabled = false); select.disabled = committed; update();}}
     };
   }
-  const bulkAssignExpenses = (items, config) => bulkAssign(items, config);
-  const bulkAssignMaterials = (entries, config) => bulkAssign(entries, config, true);
-  function batchChoice(select, projectId) {
-    const people = activePeople(projectId), key = 'invoice-batch-person:' + projectId;
-    let selected = '';
-    try { selected = localStorage.getItem(key) || ''; } catch (_) { /* Optional preference. */ }
-    select.innerHTML = '<option value="">不指定</option>' + people.map(p => `<option value="${esc(p.id)}">${esc(p.label)}</option>`).join('');
-    select.value = people.some(p => p.id === selected) ? selected : '';
-    select.disabled = !projectId;
-    select.onchange = () => { try { localStorage.setItem(key, select.value); } catch (_) { /* Current batch still works. */ } };
-  }
-  window.reimbursementPeopleUI = {batchChoice, refresh, options, markup, label, choice, choiceControl, groupMarkup, newPerson, editExpense, activePeople, filterOptions, matchesPerson, bulkAssignExpenses, bulkAssignMaterials,
+  window.reimbursementPeopleUI = {refresh, options, markup, label, choice, choiceControl, groupMarkup, newPerson, editExpense, activePeople, filterOptions, matchesPerson, bulkAssignExpenses,
     people: () => cache.projectId === project() ? cache.people : [],
     hasPeople: () => cache.projectId === project() && cache.people.length > 0};
   const button = $('reimbursementPeople'); if (button) button.onclick = openSummary;

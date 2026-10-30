@@ -1,7 +1,7 @@
 'use strict';
 (() => {
  const dialog=document.createElement('dialog');dialog.id='intakeDialog';dialog.style.cssText='width: min(1200px,95vw);max-width:95vw';
- dialog.innerHTML='<div class="dialoghead"><h2>统一收件与待处理</h2><button data-close class="dialog-close" type="button" aria-label="关闭">×</button></div><p>材料已保存在本机。补充材料不增加金额，自动整理不会核对或提交。</p><div class="actions"><label>本批归属人<select id="intakeBatchPerson"><option value="">不指定</option></select></label><input id="intakeFiles" type="file" multiple accept=".pdf,.png,.jpg,.jpeg,.webp"><button id="claimInvoice">二维码／链接领票</button><button id="intakeMail">纳入已补收邮件</button><select id="intakeFilter"><option value="">全部收件</option><option>金额冲突</option><option>疑似重复</option><option>手写难辨</option></select><button id="intakeRefresh">刷新</button></div><p id="intakeSummary" role="status"></p><div id="intakeRows"></div>';
+ dialog.innerHTML='<div class="dialoghead"><h2>统一收件与待处理</h2><button data-close class="dialog-close" type="button" aria-label="关闭">×</button></div><p>材料已保存在本机。补充材料不增加金额，自动整理不会核对或提交。</p><div class="actions"><input id="intakeFiles" type="file" multiple accept=".pdf,.png,.jpg,.jpeg,.webp"><button id="claimInvoice">二维码／链接领票</button><button id="intakeMail">纳入已补收邮件</button><select id="intakeFilter"><option value="">全部收件</option><option>金额冲突</option><option>疑似重复</option><option>手写难辨</option></select><button id="intakeRefresh">刷新</button></div><p id="intakeSummary" role="status"></p><div id="intakeRows"></div>';
  document.body.append(dialog);
  const backgroundStatus=document.createElement('div');backgroundStatus.id='intakeBackgroundStatus';backgroundStatus.hidden=true;
  $('intakeSummary').after(backgroundStatus);
@@ -14,7 +14,7 @@
   $('intakeSummary').textContent=`已保存 ${entries.length} 份 · 新增费用 ${counts['新增费用']||0} · 补充材料 ${counts['补充材料']||0} · 重复文件 ${entries.filter(q=>q.status==='duplicate').length} · 归档 ${entries.filter(archived).length} · 已删除 ${entries.filter(q=>q.status==='deleted').length} · 待处理 ${entries.filter(q=>!['linked','duplicate','unused','archived','deleted','converted'].includes(q.status)).length}`;
   $('intakeRows').innerHTML=entries.filter(q=>!$('intakeFilter').value||($('intakeFilter').value==='归档'?archived(q):$('intakeFilter').value==='已删除'?q.status==='deleted':!inactive(q)&&q.issues.includes($('intakeFilter').value))).map(q=>`<article class="mailrow"><a target="_blank" rel="noopener" href="/intake-file/${esc(q.id)}">${esc(q.name)}</a><p>${esc(q.source)} · ${esc(q.status==='unused'?q.unused_reason||q.result:q.result)}${inactive(q)?'':' · '+esc(q.issues.join('、'))}</p>${inactive(q)?`<span class="badge neutral">${q.status==='deleted'?'已删除 · 可恢复':'归档 · 原件保留'}</span>`:q.item_id?`<a href="/?matter=${encodeURIComponent(q.item_id)}${projectScope?'&project='+encodeURIComponent(projectScope):''}" target="_blank">查看所属费用</a>`:`<button data-analyze="${esc(q.id)}">识别／重试</button><button data-claim="${esc(q.id)}">识别领票二维码</button><button data-resolve="${esc(q.id)}">对照原件处理</button>`}</article>`).join('');
  }
- async function open(){await refresh();window.reimbursementPeopleUI?.batchChoice($('intakeBatchPerson'),currentInvoiceProjectId());$('intakeMail').hidden=!!projectScope;dialog.showModal();void window.invoiceIntakeProgress?.refresh(projectScope);}
+ async function open(){await refresh();$('intakeMail').hidden=!!projectScope;dialog.showModal();void window.invoiceIntakeProgress?.refresh(projectScope);}
  window.openUnifiedIntake=open;
  if($('recognizeReceipt')){$('recognizeReceipt').onclick=()=>act(open);$('recognizeReceipt').textContent='＋ 收图片／PDF并整理';}
  dialog.querySelector('[data-close]').onclick=()=>dialog.close();$('intakeRefresh').onclick=()=>act(refresh);$('intakeFilter').onchange=draw;
@@ -23,7 +23,6 @@
   if(intakeUploadBusy)return;
   const files=[...$('intakeFiles').files];if(files.length>50)throw Error('每批最多50份');
   if(!files.length)return;
-  const batchPerson=$('intakeBatchPerson').value;
   const batch=crypto.randomUUID(),project=projectContext(),uploadProject=project?.id||projectScope||'',agent=window.manualInvoiceAgent;
   const organizer=uploadProject&&typeof agent?.shouldAutoOrganize==='function'&&typeof agent?.startReceived==='function'&&agent.shouldAutoOrganize(uploadProject)?agent:null;
   const background=!organizer&&window.invoiceIntakeProgress?.available();
@@ -35,7 +34,7 @@
     $('intakeSummary').textContent=`正在收件 ${index+1}/${files.length}：${file.name}`;
     try{
      const data=await new Promise((resolve,reject)=>{const r=new FileReader();r.onload=()=>resolve(r.result.split(',')[1]);r.onerror=reject;r.readAsDataURL(file);});
-     const q=await api('intake/receive',{name:file.name,data,project_id:uploadProject,batch,reimbursement_person_id:batchPerson});received++;
+     const q=await api('intake/receive',{name:file.name,data,project_id:uploadProject,batch});received++;
      if(q.duplicate||q.status==='duplicate')duplicates++;
      else if(organizer||background){if(typeof q.id==='string'&&q.id&&q.project_id===uploadProject&&!q.item_id&&['received','review'].includes(q.status))entryIds.add(q.id);}
      else{const prepared=await api('intake/prepare',{id:q.id});if(prepared.converted_to_pdf)converted++;if(prepared.entry?.status==='unused')unused++;else if(['failed','review'].includes(prepared.entry?.ai_analysis?.status))recognitionReviews++;}

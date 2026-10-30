@@ -184,7 +184,42 @@ class IntakeQueue:
             from invoice_print_layout.expense_projects import install_project_guards
             install_project_guards(db)
 
+    def mark_invoice_render_duplicates(self, *, qr_values: dict[str, str] | None = None) -> int:
+        """Hide confirmed render copies without moving or deleting either original."""
+        from invoice_print_layout.invoice_render_duplicates import invoice_render_pairs
+        with self.store.connect() as db:
+            originals = {row['id']: row['data'] for row in db.execute('SELECT id,data FROM intake_queue')}
+            entries = {key: json.loads(value) for key, value in originals.items()}
+            pairs = invoice_render_pairs(list(entries.values()), qr_values=qr_values)
+            marked = 0
+            for key, target in pairs:
+                intact = True
+                try:
+                    for member in (entries[key], entries[target]):
+                        path = Path(member['path']).resolve()
+                        if (not path.is_relative_to(self.store.workspace) or not path.is_file() or
+                                hashlib.sha256(path.read_bytes()).hexdigest() != member['digest']):
+                            intact = False
+                            break
+                except (OSError, RuntimeError, ValueError):
+                    intact = False
+                if not intact:
+                    continue
+                entry = entries[key]
+                entry.update(status='duplicate' if entry['status'] in {'received', 'review'} else entry['status'],
+                             duplicate_of=target, revision=entry['revision'] + 1,
+                             result='同批发票的图片重复件，原件保留，不单独计入材料或费用。')
+                marked += db.execute(
+                    'UPDATE intake_queue SET data=? WHERE id=? AND data=? '
+                    'AND EXISTS (SELECT 1 FROM intake_queue WHERE id=? AND data=?) '
+                    'AND NOT EXISTS (SELECT 1 FROM attachments WHERE digest=?) '
+                    'AND NOT EXISTS (SELECT 1 FROM automatic_ride_files WHERE digest=?)',
+                    (json.dumps(entry, ensure_ascii=False), key, originals[key], target,
+                     originals[target], entry['digest'], entry['digest'])).rowcount
+            return marked
+
     def list(self) -> list[dict[str, Any]]:
+        self.mark_invoice_render_duplicates()
         with self.store.connect() as db:
             return [self._visible_entry(json.loads(row['data']))
                     for row in db.execute('SELECT data FROM intake_queue ORDER BY rowid DESC')]
@@ -241,7 +276,7 @@ class IntakeQueue:
                         current_source.get('digest') != expected_source['digest'] or
                         current_source.get('project_id') != expected_source.get('project_id') or
                         current_source.get('status') not in {'received', 'review'} or
-                        current_source.get('item_id')):
+                        current_source.get('item_id') or current_source.get('duplicate_of')):
                     raise ValueError('二维码材料已变化，请刷新合成台后重试')
             previous = db.execute('SELECT data FROM intake_queue WHERE digest=?', (digest,)).fetchone()
             if previous:
@@ -276,7 +311,7 @@ class IntakeQueue:
     def _record_batch_claim(db: sqlite3.Connection, source: dict[str, Any], target: dict[str, Any]) -> None:
         # Creation and replacement linkage share receive's immediate transaction.
         # A parent cannot be archived in the gap between these two writes.
-        if target['status'] in INACTIVE_STATUSES:
+        if target.get('duplicate_of') or target['status'] in INACTIVE_STATUSES:
             raise ValueError('二维码对应发票已归档或删除，请在归档区处理')
         if target.get('project_id') and source.get('project_id') and target['project_id'] != source['project_id']:
             return  # Existing cross-project handling leaves the carrier manual.
@@ -302,7 +337,7 @@ class IntakeQueue:
         if self.ai.enabled or any(entry.get('reimbursement_person_id') for entry in self.list()):
             return self.prepare_batch_entry(key)
         data = self.get(key)
-        if data['status'] in {'linked', 'duplicate'} | INACTIVE_STATUSES:
+        if data.get('duplicate_of') or data['status'] in {'linked', 'duplicate'} | INACTIVE_STATUSES:
             return data
         original_fields = dict(data.get('fields') or {})
         manual = self._manual_keys(data)
@@ -312,7 +347,7 @@ class IntakeQueue:
             organize_rides(self.store, folder=self.folder)
             self.reconcile()
             data = self.get(key)
-            if data['status'] in {'linked', 'duplicate'} | INACTIVE_STATUSES:
+            if data.get('duplicate_of') or data['status'] in {'linked', 'duplicate'} | INACTIVE_STATUSES:
                 return data
         try:
             if path.suffix == '.pdf':
@@ -364,7 +399,7 @@ class IntakeQueue:
         with self.store.connect() as db:
             db.execute('BEGIN IMMEDIATE')
             current = self.get(key)
-            if current['revision'] != data['revision'] or current['status'] in INACTIVE_STATUSES:
+            if current.get('duplicate_of') or current['revision'] != data['revision'] or current['status'] in INACTIVE_STATUSES:
                 raise ValueError('收件已变化，请刷新')
             if data['status'] == 'unused' and hashlib.sha256(path.read_bytes()).hexdigest() != data['digest']:
                 raise ValueError('材料原件已变化，请重新上传')
@@ -385,7 +420,7 @@ class IntakeQueue:
         with self.store.connect() as db:
             db.execute('BEGIN IMMEDIATE')
             current = self.get(data['id'])
-            if current['revision'] != data['revision'] or current['status'] in INACTIVE_STATUSES:
+            if current.get('duplicate_of') or current['revision'] != data['revision'] or current['status'] in INACTIVE_STATUSES:
                 raise ValueError('收件已变化，请刷新后重试')
             current.update(status='review', qr_status='manual', claim_url=safe_url,
                            role='other', fields={}, issues=['领票待处理'], result=message,
@@ -404,8 +439,9 @@ class IntakeQueue:
         """
         from invoice_print_layout.glm_invoice_ai import LocalOnlyInvoiceAI
         local = IntakeQueue(self.store, ai=LocalOnlyInvoiceAI())
+        local.mark_invoice_render_duplicates()
         data = local.get(key)
-        if data['status'] in {'linked', 'duplicate', 'converted'} | INACTIVE_STATUSES:
+        if data.get('duplicate_of') or data['status'] in {'linked', 'duplicate', 'converted'} | INACTIVE_STATUSES:
             return data
         return (local._analyze_batch_pdf(data) if Path(data['path']).suffix.lower() == '.pdf'
                 else local._analyze_batch_image(data))
@@ -422,15 +458,20 @@ class IntakeQueue:
         from invoice_print_layout.mail_search import qr_value
         if type(force_ai) is not bool:
             raise ValueError('AI辅助识别选项须为布尔值')
+        self.mark_invoice_render_duplicates()
         data = self.get(key)
-        if data['status'] in {'linked', 'duplicate'} | INACTIVE_STATUSES:
+        if data.get('duplicate_of') or data['status'] in {'linked', 'duplicate'} | INACTIVE_STATUSES:
             return data
         if data.get('qr_status') == 'converted' and data.get('replacement_id'):
             replacement = self.get(data['replacement_id'])
-            return (replacement if not force_ai or replacement['status'] in {'linked', 'duplicate'} else
+            return (replacement if not force_ai or replacement.get('duplicate_of') or replacement['status'] in {'linked', 'duplicate'} else
                     self.prepare_batch_entry(replacement['id'], force_ai=force_ai))
         path = Path(data['path'])
         value = qr_value(path.read_bytes()) if path.suffix.lower() != '.pdf' else ''
+        if value and self.mark_invoice_render_duplicates(qr_values={key: value}):
+            data = self.get(key)
+            if data.get('duplicate_of') or data['status'] == 'duplicate':
+                return data
         if not value:
             # A previously decoded QR must not become a fictitious proof merely
             # because a later decoder attempt fails.
@@ -448,7 +489,7 @@ class IntakeQueue:
         current_source = self.get(key)
         if current_source.get('qr_status') == 'converted' and current_source.get('replacement_id') == replacement['id']:
             target = self.get(replacement['id'])
-            return (target if target['status'] in {'linked', 'duplicate'} | INACTIVE_STATUSES
+            return (target if target.get('duplicate_of') or target['status'] in {'linked', 'duplicate'} | INACTIVE_STATUSES
                     else self._analyze_batch_pdf(target, force_ai=force_ai))
         if (replacement.get('project_id') and data.get('project_id') and
                 replacement['project_id'] != data['project_id']):
@@ -459,12 +500,12 @@ class IntakeQueue:
             current = self.get(key)
             if (current['revision'] != data['revision'] or current['digest'] != data['digest'] or
                     current.get('project_id') != data.get('project_id') or current.get('item_id') != data.get('item_id') or
-                    current['status'] in {'linked', 'duplicate', 'converted'} | INACTIVE_STATUSES):
+                    current.get('duplicate_of') or current['status'] in {'linked', 'duplicate', 'converted'} | INACTIVE_STATUSES):
                 raise ValueError('收件已变化，请刷新后重试')
             target = self.get(replacement['id'])
             if target['revision'] != replacement['revision'] or target['digest'] != replacement['digest']:
                 raise ValueError('二维码对应发票已变化，请刷新后重试')
-            if target['status'] in INACTIVE_STATUSES:
+            if target.get('duplicate_of') or target['status'] in INACTIVE_STATUSES:
                 raise ValueError('二维码对应发票已归档或删除，请在归档区处理')
             source_ids = list(dict.fromkeys([*target.get('source_entry_ids', []), key]))
             target.update(source_entry_id=target.get('source_entry_id') or key, source_entry_ids=source_ids,
@@ -479,7 +520,7 @@ class IntakeQueue:
             for entry in (current, target):
                 db.execute('UPDATE intake_queue SET data=? WHERE id=?',
                            (json.dumps(entry, ensure_ascii=False), entry['id']))
-        return (self.get(target['id']) if target['status'] in {'linked', 'duplicate'}
+        return (self.get(target['id']) if target.get('duplicate_of') or target['status'] in {'linked', 'duplicate'}
                 else self._analyze_batch_pdf(self.get(target['id']), force_ai=force_ai))
 
     def _analyze_batch_pdf(self, data: dict[str, Any], *, force_ai: bool = False) -> dict[str, Any]:
@@ -968,7 +1009,7 @@ class IntakeQueue:
             if (current['revision'] != original['revision'] or
                     current.get('project_id') != original.get('project_id') or
                     current.get('item_id') != original.get('item_id') or
-                    current['status'] in {'linked', 'duplicate', 'converted'} | INACTIVE_STATUSES or
+                    current.get('duplicate_of') or current['status'] in {'linked', 'duplicate', 'converted'} | INACTIVE_STATUSES or
                     current['digest'] != original['digest']):
                 raise ValueError('收件已变化，请刷新')
             if (self.ai.enabled or data['status'] == 'unused' or
@@ -976,6 +1017,8 @@ class IntakeQueue:
                 raise ValueError('材料原件已变化，请重新上传')
             data['revision'] += 1
             db.execute('UPDATE intake_queue SET data=? WHERE id=?', (json.dumps(data, ensure_ascii=False), data['id']))
+        if self.mark_invoice_render_duplicates():
+            return self.get(data['id'])
         return data
 
     def _complete_local_special_fields(self, data: dict[str, Any], original: dict[str, Any], source: str) -> None:
@@ -1083,7 +1126,7 @@ class IntakeQueue:
                 entry = json.loads(row['data'])
                 if entry['revision'] != revisions[key]:
                     raise ValueError('收件已变化，请刷新')
-                if entry.get('item_id') or entry['status'] in {'linked', 'duplicate', 'converted'}:
+                if entry.get('item_id') or entry.get('duplicate_of') or entry['status'] in {'linked', 'duplicate', 'converted'}:
                     raise ValueError('材料已关联或已转换，不能标为无需使用')
                 if entry['status'] not in {'received', 'review', 'unused'} or not rail_payment_not_required(entry):
                     raise ValueError('材料不是已识别的铁路客运支付截图')
@@ -1346,7 +1389,7 @@ class IntakeQueue:
 
     def organize(self, key: str) -> dict[str, Any]:
         data = self.get(key)
-        if data['status'] != 'review':
+        if data.get('duplicate_of') or data['status'] != 'review':
             return data
         fields = data['fields']
         # Hidden expenses still own their invoice/order identities and originals.
@@ -1402,7 +1445,7 @@ class IntakeQueue:
         with self.store.connect() as db:
             db.execute('BEGIN IMMEDIATE')
             current = self.get(data['id'])
-            if current['revision'] != data['revision'] or current['status'] != 'review':
+            if current.get('duplicate_of') or current['revision'] != data['revision'] or current['status'] != 'review':
                 raise ValueError('收件已变化，请刷新')
             db.execute('UPDATE intake_queue SET data=? WHERE id=?',
                        (json.dumps(data, ensure_ascii=False), data['id']))
@@ -1450,7 +1493,7 @@ class IntakeQueue:
         with self.store.connect() as db:
             db.execute('BEGIN IMMEDIATE')
             data = self.get(key)
-            if data['status'] in {'linked', 'duplicate'}:
+            if data.get('duplicate_of') or data['status'] in {'linked', 'duplicate'}:
                 return data
             if data['status'] in {'archived', 'deleted', 'converted'}:
                 raise ValueError('材料已归档、删除或已转换，不能关联费用')
@@ -1536,7 +1579,7 @@ class IntakeQueue:
                     with self.store.connect() as db:
                         db.execute('BEGIN IMMEDIATE')
                         current = self.get(result['id'])
-                        if current['status'] not in INACTIVE_STATUSES:
+                        if not current.get('duplicate_of') and current['status'] not in INACTIVE_STATUSES:
                             current['mail_context'] = visible_context
                             current['revision'] += 1
                             db.execute('UPDATE intake_queue SET data=? WHERE id=?',
@@ -1552,7 +1595,7 @@ class IntakeQueue:
             db.execute('BEGIN IMMEDIATE')
             for row in db.execute('SELECT data FROM intake_queue').fetchall():
                 data = json.loads(row['data'])
-                if data['status'] in {'linked', 'duplicate', 'converted'} | INACTIVE_STATUSES:
+                if data.get('duplicate_of') or data['status'] in {'linked', 'duplicate', 'converted'} | INACTIVE_STATUSES:
                     continue
                 attached = db.execute('SELECT item_id FROM attachments WHERE digest=? UNION SELECT item_id FROM automatic_ride_files WHERE digest=?', (data['digest'], data['digest'])).fetchone()
                 if attached:

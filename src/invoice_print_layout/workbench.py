@@ -52,20 +52,25 @@ def now() -> str:
     return datetime.now().isoformat(timespec='seconds')
 
 
-def returned_material_state(db: sqlite3.Connection, item: dict[str, Any]) -> bool:
+def returned_material_state(db: sqlite3.Connection, item: dict[str, Any], *,
+                            history: list[dict[str, Any]] | None = None,
+                            groups: list[sqlite3.Row] | None = None) -> bool:
     """Recognize old withdrawal receipts without rewriting historical rows."""
     if item.get('returned_to_synthesis') is True:
         return True
     if (item.get('stage') != 'draft' or item.get('verified') or item.get('deleted') or
             item.get('merged_into') or item.get('material_match')):
         return False
-    event = db.execute('SELECT message FROM events WHERE item_id=? ORDER BY id DESC LIMIT 1', (item['id'],)).fetchone()
+    event = (db.execute('SELECT message FROM events WHERE item_id=? ORDER BY id DESC LIMIT 1', (item['id'],)).fetchone()
+             if history is None else history[-1] if history else None)
     prefixes = ('撤回材料匹配；', '撤回材料登记；', '撤回多对多合成，恢复原费用及附件归属')
     if not event or not str(event['message']).startswith(prefixes):
         return False
-    if not db.execute("SELECT 1 FROM sqlite_master WHERE name='material_matches'").fetchone():
-        return False
-    for row in db.execute('SELECT data FROM material_matches ORDER BY rowid DESC'):
+    if groups is None:
+        if not db.execute("SELECT 1 FROM sqlite_master WHERE name='material_matches'").fetchone():
+            return False
+        groups = db.execute('SELECT data FROM material_matches ORDER BY rowid DESC').fetchall()
+    for row in groups:
         group = json.loads(row['data'])
         if group.get('item_id') != item['id'] and item['id'] not in group.get('member_before', {}):
             continue
@@ -333,22 +338,26 @@ class ExpenseStore:
     def _read_item(self, db: sqlite3.Connection, row: sqlite3.Row, *,
                    projects: list[dict[str, Any]] | None = None,
                    entries: list[dict[str, Any]] | None = None,
+                   related: dict[str, Any] | None = None,
                    confirmation_sources: list[dict[str, Any]] | None = None) -> dict[str, Any]:
         data: dict[str, Any] = json.loads(row['data'])
         stored = dict(data)
         item_id = str(row['id'])
-        data['attachments'] = [dict(a) for a in db.execute('SELECT id,name,role,path FROM attachments WHERE item_id=?', (item_id,))]
+        attachments = (db.execute('SELECT id,name,role,path,digest FROM attachments WHERE item_id=?', (item_id,)).fetchall()
+                       if related is None else related['attachments'].get(item_id, []))
+        history = ([dict(event) for event in db.execute('SELECT id,at,message FROM events WHERE item_id=? ORDER BY id', (item_id,))]
+                   if related is None else related['history'].get(item_id, []))
+        data['attachments'] = [{key: a[key] for key in ('id', 'name', 'role', 'path')} for a in attachments]
         source_attachments = [dict(attachment) for attachment in data['attachments']]
-        attachment_digests = {a['id']: a['digest'] for a in db.execute(
-            'SELECT id,digest FROM attachments WHERE item_id=?', (item_id,))}
-        data['events'] = [dict(e) for e in db.execute('SELECT at,message FROM events WHERE item_id=? ORDER BY id DESC LIMIT 30', (item_id,))]
+        attachment_digests = {a['id']: a['digest'] for a in attachments}
+        data['events'] = [{key: event[key] for key in ('at', 'message')} for event in reversed(history[-30:])]
         # Old role-edit events did not name the attachment. Preserve all
         # still-unclassified proofs on such a matter rather than overriding
         # the user's choice from native text, even after the event list's
         # 30-row display window has moved past the edit.
-        manual_other = bool(db.execute('SELECT 1 FROM events WHERE item_id=? AND message=? LIMIT 1',
-                                      (item_id, '材料用途改为：' + ROLES['other'])).fetchone())
-        returned = returned_material_state(db, data)
+        manual_other = any(event['message'] == '材料用途改为：' + ROLES['other'] for event in history)
+        returned = returned_material_state(db, data, history=history,
+                                           groups=None if related is None else related['groups'])
         if entries is None:
             entries = ([json.loads(entry['data']) for entry in db.execute('SELECT data FROM intake_queue')]
                        if db.execute("SELECT 1 FROM sqlite_master WHERE name='intake_queue'").fetchone() else [])
@@ -365,7 +374,8 @@ class ExpenseStore:
         if data.get('reimbursement_person_id') or 'reimbursement_person_label' in data:
             data['reimbursement_person_label'] = current_person_label(
                 db, str(data.get('project_id') or ''), str(data.get('reimbursement_person_id') or ''),
-                str(data.get('reimbursement_person_label') or ''))
+                str(data.get('reimbursement_person_label') or ''),
+                people=None if related is None else related['people'])
         # The invoice display name is independent of the historical stored
         # amount/verification/version and the logistics directory's name.
         from invoice_print_layout.expense_projects import project_views
@@ -374,7 +384,9 @@ class ExpenseStore:
         project = next((row for row in projects if row['id'] == data.get('project_id')), None)
         if not project and not data.get('project_id'):
             from invoice_print_layout.project_registry import ProjectRegistry
-            canonical = next((row for row in ProjectRegistry(self.workspace / '后勤' / 'tasks.sqlite3').list()
+            canonical_projects = (ProjectRegistry(self.workspace / '后勤' / 'tasks.sqlite3').list()
+                                  if related is None else related['canonical_projects'])
+            canonical = next((row for row in canonical_projects
                               if row['name'] == data.get('project')), None)
             owners = [row for row in projects if row['id'] == canonical['id']] if canonical else [
                 row for row in projects if row['name'] == data.get('project')]
@@ -393,12 +405,13 @@ class ExpenseStore:
             explicit_manual_report_choice, legacy_auto_category_report_choice,
             legacy_manual_category_report_choice,
         )
-        history = [dict(event) for event in db.execute(
-            'SELECT id,at,message FROM events WHERE item_id=? ORDER BY id', (item_id,))]
         registration = None
-        if (matching.get('mode') == 'registration' and matching.get('group_id') and
-                db.execute("SELECT 1 FROM sqlite_master WHERE name='material_matches'").fetchone()):
-            group_row = db.execute('SELECT data FROM material_matches WHERE id=?', (matching['group_id'],)).fetchone()
+        if matching.get('mode') == 'registration' and matching.get('group_id'):
+            group_row = None
+            if related is not None:
+                group_row = related['groups_by_id'].get(matching['group_id'])
+            elif db.execute("SELECT 1 FROM sqlite_master WHERE name='material_matches'").fetchone():
+                group_row = db.execute('SELECT data FROM material_matches WHERE id=?', (matching['group_id'],)).fetchone()
             if group_row:
                 try:
                     registration = json.loads(group_row['data'])
@@ -436,9 +449,9 @@ class ExpenseStore:
                         attachment_digests[attachment['id']] not in manual_digests and
                         native_waybill_pdf(path, attachment_digests[attachment['id']])):
                     attachment['role'] = 'detail'
-        roles = {a['role'] for a in data['attachments'] if Path(a['path']).is_file()}
         for a in data['attachments']:
             a['available'] = Path(a.pop('path')).is_file()
+        roles = {a['role'] for a in data['attachments'] if a['available']}
         data.setdefault('material_basis', 'standard')
         data.setdefault('amount_pending', False)
         data.setdefault('deleted', False)
@@ -507,12 +520,43 @@ class ExpenseStore:
 
     def _read_items(self, db: sqlite3.Connection, rows: list[sqlite3.Row]) -> list[dict[str, Any]]:
         from invoice_print_layout.expense_projects import project_views
+        from invoice_print_layout.project_registry import ProjectRegistry
         if not rows:
             return []
         projects = project_views(self, db=db)
+        tables = {row['name'] for row in db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
         entries = ([json.loads(entry['data']) for entry in db.execute('SELECT data FROM intake_queue')]
-                   if db.execute("SELECT 1 FROM sqlite_master WHERE name='intake_queue'").fetchone() else [])
-        return [self._read_item(db, row, projects=projects, entries=entries) for row in rows]
+                   if 'intake_queue' in tables else [])
+        entries_by_item: dict[str, dict[int, dict[str, Any]]] = {}
+        entries_by_id = {}
+        for index, entry in enumerate(entries):
+            entries_by_item.setdefault(str(entry.get('item_id') or ''), {})[index] = entry
+            entries_by_id[str(entry.get('id') or '')] = (index, entry)
+        keys = list(dict.fromkeys(str(row['id']) for row in rows))
+        placeholders = ','.join('?' for _ in keys)
+        related: dict[str, Any] = {'attachments': {}, 'history': {}}
+        # Preserve the same (item_id, digest, role) index order as single reads.
+        for attachment in db.execute('SELECT id,item_id,name,role,path,digest FROM attachments WHERE item_id IN (' + placeholders + ')', keys):
+            related['attachments'].setdefault(attachment['item_id'], []).append(attachment)
+        for event in db.execute('SELECT id,item_id,at,message FROM events WHERE item_id IN (' + placeholders + ') ORDER BY id', keys):
+            related['history'].setdefault(event['item_id'], []).append({key: event[key] for key in ('id', 'at', 'message')})
+        related['groups'] = (db.execute('SELECT id,data FROM material_matches ORDER BY rowid DESC').fetchall()
+                             if 'material_matches' in tables else [])
+        related['groups_by_id'] = {group['id']: group for group in related['groups']}
+        related['people'] = ({(person['project_id'], person['id']): dict(person)
+                              for person in db.execute('SELECT * FROM reimbursement_people')}
+                             if 'reimbursement_people' in tables else {})
+        related['canonical_projects'] = ProjectRegistry(self.workspace / '后勤' / 'tasks.sqlite3').list()
+        result = []
+        for row in rows:
+            associated = dict(entries_by_item.get(row['id'], {}))
+            source = str(row['source'] or '')
+            if source.startswith('intake:') and source.removeprefix('intake:') in entries_by_id:
+                index, entry = entries_by_id[source.removeprefix('intake:')]
+                associated[index] = entry
+            result.append(self._read_item(db, row, projects=projects, related=related,
+                                         entries=[associated[index] for index in sorted(associated)]))
+        return result
 
     def remove(self, item_id: str, expected_version: str, *, restore: bool = False) -> dict[str, Any]:
         """Hide a draft reversibly, retaining its expense identity and every original."""

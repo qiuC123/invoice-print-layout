@@ -97,16 +97,17 @@ async function run(pw) {
     });
     assert.deepEqual(directoryChecks, {names: ['first.pdf', 'nested.webp', 'last.jpg'], reads: 6, cap: 201, failure: 'unreadable', fallback: 'fallback.png'});
     await screenshot('folder-button-and-hint');
-    await page.evaluate(() => {const select = document.getElementById('matchingBatchPerson'); select.add(new Option('合成人员', 'person1')); select.value = 'person1';});
+    assert.equal(await page.locator('#matchingBatchPerson, #matchingAssignPeople').count(), 0);
+    await page.evaluate(() => localStorage.setItem('invoice-batch-person:p1', 'person1'));
     await page.locator('#matchingFiles').setInputFiles(files(['selected.pdf'])); await done();
-    assert.equal(received().at(-1).body.reimbursement_person_id, 'person1');
+    assert.equal(Object.hasOwn(received().at(-1).body, 'reimbursement_person_id'), false);
     await drag('dragenter', undefined, '#matchingDeskDialog');
     assert.equal(await page.locator('#matchingDropOverlay').innerText(), '松开即收进「合成验收项目」');
     assert.equal(await page.locator('#matchingDropOverlay').evaluate(node => node.matches(':popover-open')), true);
     await screenshot('drop-overlay');
     await drag('drop', undefined, '#matchingDeskDialog'); await done();
     assert.deepEqual(received().slice(-2).map(row => row.body.name), ['drag-a.pdf', 'drag-b.PNG']);
-    assert.ok(received().slice(-2).every(row => row.body.project_id === 'p1' && row.body.reimbursement_person_id === 'person1'));
+    assert.ok(received().slice(-2).every(row => row.body.project_id === 'p1' && !Object.hasOwn(row.body, 'reimbursement_person_id')));
     await page.locator('#matchingClose').click();
     await drag('dragenter', ['main.webp']); await screenshot('main-page-drop-overlay');
     await drag('drop', ['main.webp']); await done();
@@ -193,6 +194,7 @@ async function run(pw) {
     assert.deepEqual(jobs.map(job => job.material_ids.length), [20, 20, 5]);
     assert.equal(new Set(jobs.flatMap(job => job.material_ids)).size, 45);
     assert.equal(await page.locator('.mia-pending-starts').innerText(), '');
+    assert.ok(received().every(row => !Object.hasOwn(row.body, 'reimbursement_person_id')), 'file, directory and drop intake never assign an owner');
     assert.deepEqual(errors, []);
     return {passed: true, recursive_directory: directoryChecks, auto_batches: [20, 20, 5], real_controller_batches: jobs.map(job => job.material_ids.length), receives: received().length, no_live_data: true};
   } finally {releaseProgress(); await browser.close(); await fs.rm(temp, {recursive: true, force: true});}

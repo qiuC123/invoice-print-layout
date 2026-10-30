@@ -20,13 +20,16 @@ def reject_inactive_digest(db: sqlite3.Connection, digest: str) -> None:
     if not db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='intake_queue'").fetchone():
         return
     row = db.execute('SELECT data FROM intake_queue WHERE digest=?', (digest,)).fetchone()
-    if row and json.loads(row['data']).get('status') in INACTIVE_STATUSES:
+    entry = json.loads(row['data']) if row else {}
+    if entry.get('duplicate_of'):
+        raise ValueError('材料是发票图片重复件，不能单独关联费用；请使用对应发票')
+    if entry.get('status') in INACTIVE_STATUSES:
         raise ValueError('材料已归档、删除或无需使用，不能关联费用；请先在归档区处理')
 
 
 def archive_capabilities(entry: dict[str, Any], *, linked: bool = False) -> dict[str, bool]:
     """Only unattached intake cards expose archive actions; expenses never do."""
-    safe = (not linked and not entry.get('item_id') and not entry.get('material_match_id') and
+    safe = (not linked and not entry.get('duplicate_of') and not entry.get('item_id') and not entry.get('material_match_id') and
             not entry.get('replacement_id') and entry.get('qr_status') != 'converted' and
             entry.get('role', 'other') in ARCHIVE_ROLES)
     status = entry.get('status')

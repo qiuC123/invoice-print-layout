@@ -53,8 +53,10 @@ class AutomaticCategory:
 
     def statuses(self, items: list[dict[str, Any]]) -> dict[str, Any]:
         result = {}
+        with self.store.connect() as db:
+            records = {row['item_id']: dict(row) for row in db.execute('SELECT * FROM category_attempts')}
         for item in items:
-            record = self.record(item['id'])
+            record = records.get(item['id'])
             previous = json.loads(record['result']) if record else {}
             if item.get('manual_report_choice'):
                 previous = {'status': 'manual', 'category': item['category'], 'source': 'human',

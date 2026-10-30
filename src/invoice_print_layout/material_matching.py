@@ -1,15 +1,18 @@
 """Explicit invoice/payment grouping; amounts match before any ledger change."""
 from __future__ import annotations
 
-from collections import Counter
+from collections import Counter, OrderedDict
+from collections.abc import Callable
 from bisect import insort
 from contextlib import nullcontext
 from itertools import combinations
+import copy
 import hashlib
 import json
 from pathlib import Path
 import re
 import sqlite3
+from threading import Lock
 from typing import Any, Protocol, cast
 from urllib.parse import quote
 import uuid
@@ -416,6 +419,10 @@ class MaterialMatching:
             raise ValueError('收件与账本必须属于同一工作区')
         self.store, self.intake = store, intake
         self.ai = ai
+        self._seller_cache: OrderedDict[str, str] = OrderedDict()
+        self._seller_lock = Lock()
+        self._suggestion_cache: OrderedDict[str, dict[str, Any]] = OrderedDict()
+        self._suggestion_lock = Lock()
         with store.connect() as db:
             db.execute('CREATE TABLE IF NOT EXISTS material_matches (id TEXT PRIMARY KEY, data TEXT NOT NULL)')
             db.execute('CREATE TABLE IF NOT EXISTS material_creation_batches '
@@ -469,6 +476,7 @@ class MaterialMatching:
 
     def _available(self, entry: dict[str, Any], project_id: str) -> bool:
         return (entry.get('project_id', '') in {'', project_id} and entry.get('status') in {'received', 'review'}
+                and not entry.get('duplicate_of')
                 and not entry.get('item_id') and entry.get('qr_status') not in {'manual', 'converted'}
                 and not rail_payment_not_required(entry))
 
@@ -483,9 +491,18 @@ class MaterialMatching:
             content = path.read_bytes()
             if hashlib.sha256(content).hexdigest() != entry['digest']:
                 return ''
+            with self._seller_lock:
+                if entry['digest'] in self._seller_cache:
+                    self._seller_cache.move_to_end(entry['digest'])
+                    return self._seller_cache[entry['digest']]
             with pymupdf.open(stream=content, filetype='pdf') as document:  # type: ignore[no-untyped-call]
                 sellers = {seller for page in document if (seller := positioned_invoice_seller(page))}
-            return next(iter(sellers)) if len(sellers) == 1 else ''
+            seller = next(iter(sellers)) if len(sellers) == 1 else ''
+            with self._seller_lock:
+                self._seller_cache[entry['digest']] = seller
+                if len(self._seller_cache) > 512:
+                    self._seller_cache.popitem(last=False)
+            return seller
         except (OSError, ValueError, RuntimeError):
             return ''
 
@@ -613,6 +630,41 @@ class MaterialMatching:
         return public
 
     def board(self, project_id: str) -> dict[str, Any]:
+        self.intake.mark_invoice_render_duplicates()
+        with self.store.connect() as db:
+            version = db.execute('PRAGMA data_version').fetchone()[0]
+            attachments = db.execute('SELECT item_id,role,path FROM attachments').fetchall()
+            voucher_items = {row['item_id'] for row in attachments if row['role'] in {'invoice', 'receipt'}}
+            paid_items = {row['item_id'] for row in attachments if row['role'] == 'payment'}
+            candidate_items = voucher_items - paid_items
+            # Only these expenses can enter _expense_card's competing pool after source loss.
+            paths = [Path(row['path']) for row in attachments if row['item_id'] in candidate_items]
+            registry = self.store.workspace / '后勤' / 'tasks.sqlite3'
+            paths.extend([registry, Path(str(registry) + '-wal')])
+
+            def source_versions() -> list[tuple[int, int, int, int] | None]:
+                result: list[tuple[int, int, int, int] | None] = []
+                for path in paths:
+                    try:
+                        stat = path.stat()
+                        result.append((stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns, stat.st_ino))
+                    except OSError:
+                        result.append(None)
+                return result
+
+            sources = source_versions()
+            items = self.store.list_items(include_deleted=True)
+
+            def current_items() -> list[dict[str, Any]]:
+                # Reuse only this request's view; concurrent DB or source edits force a fresh read.
+                if db.execute('PRAGMA data_version').fetchone()[0] == version and source_versions() == sources:
+                    return items
+                return self.store.list_items(include_deleted=True)
+
+            return self._board(project_id, items, current_items)
+
+    def _board(self, project_id: str, items: list[dict[str, Any]],
+               current_items: Callable[[], list[dict[str, Any]]]) -> dict[str, Any]:
         if project_id:
             self._project(project_id)
         result: dict[str, Any] = {'vouchers': [], 'payments': [], 'other': [], 'unused': [],
@@ -624,7 +676,7 @@ class MaterialMatching:
             groups = [_data(row['data']) for row in db.execute('SELECT data FROM material_matches ORDER BY rowid DESC')]
         for entry in entries:
             if ((project_id and entry.get('project_id', '') not in {'', project_id}) or entry.get('status') not in {'received', 'review', 'unused', 'archived', 'deleted'}
-                    or entry.get('item_id') or entry.get('qr_status') == 'converted' or entry['digest'] in attached):
+                    or entry.get('duplicate_of') or entry.get('item_id') or entry.get('qr_status') == 'converted' or entry['digest'] in attached):
                 continue
             card = self._queue_card(entry)
             if entry.get('status') == 'deleted':
@@ -640,7 +692,6 @@ class MaterialMatching:
             target = ('vouchers' if card['role'] in {'invoice', 'receipt'} else
                       'payments' if card['role'] == 'payment' else 'other')
             result[target].append(card)
-        items = self.store.list_items(include_deleted=True)
         by_id = {item['id']: item for item in items}
         for item in items:
             if item['deleted']:
@@ -663,7 +714,7 @@ class MaterialMatching:
         result['supplement_candidates'] = self._supplement_candidates(
             entries, groups, result['matches'], result['other'], items=by_id)
         if project_id:
-            suggestions = self._suggestions_from_board(result, project_id)
+            suggestions = self._board_suggestions(result, project_id, entries, current_items)
             result.update(suggestions=suggestions['suggestions'], suggestion_count=suggestions['suggestion_count'],
                           suggestions_truncated=suggestions['suggestions_truncated'],
                           suggestion_conflicts=[{**conflict, 'project_id': project_id}
@@ -677,7 +728,7 @@ class MaterialMatching:
             for project in known_projects:
                 if project['id'] not in available_projects:
                     continue
-                scan = self._suggestions_from_board(result, project['id'])
+                scan = self._board_suggestions(result, project['id'], entries, current_items)
                 suggestion_count += scan['suggestion_count']
                 suggestions_list.extend(scan['suggestions'][:max(0, 100 - len(suggestions_list))])
                 suggestion_conflicts.extend({**conflict, 'project_id': project['id'], 'project_name': project['name']}
@@ -688,6 +739,44 @@ class MaterialMatching:
             result.update(suggestions=suggestions_list, suggestion_count=suggestion_count,
                           suggestions_truncated=suggestion_count > len(suggestions_list),
                           suggestion_conflicts=suggestion_conflicts)
+        return result
+
+    def _board_suggestions(self, board: dict[str, Any], project_id: str, entries: list[dict[str, Any]],
+                           current_items: Callable[[], list[dict[str, Any]]]) -> dict[str, Any]:
+        cards = [*board['vouchers'], *board['payments'], *board['other']]
+        queue_ids = {card['id'] for card in cards if card['key'].startswith('q:')}
+        expense_ids = {card['id'] for card in cards if card['key'].startswith('e:')}
+        paths = [entry['path'] for entry in entries if entry['id'] in queue_ids]
+        with self.store.connect() as db:
+            owners = [tuple(row) for row in db.execute('SELECT id,source,data FROM expenses ORDER BY id')]
+            paths.extend(row['path'] for row in db.execute('SELECT item_id,path FROM attachments')
+                         if row['item_id'] in expense_ids)
+        sources = []
+        for value in paths:
+            try:
+                path = Path(value).resolve()
+                content = hashlib.sha256(path.read_bytes()).hexdigest() if path.is_relative_to(self.store.workspace) else 'outside'
+                sources.append((value, str(path), content))
+            except (OSError, ValueError, RuntimeError):
+                sources.append((value, '', 'unavailable'))
+        # Versions alone cannot detect replaced originals or newly spent transaction identities.
+        key = hashlib.sha256(json.dumps([project_id, board, entries, owners, sources],
+                                       ensure_ascii=False, sort_keys=True).encode()).hexdigest()
+        with self._suggestion_lock:
+            cached = self._suggestion_cache.get(key)
+            if cached is not None:
+                self._suggestion_cache.move_to_end(key)
+                result = copy.deepcopy(cached)
+        if cached is not None:
+            with self.store.connect() as db:
+                if self._rules_current_pool_snapshot(db, project_id, read_items=current_items) != self._rules_pool_snapshot(board, project_id):
+                    return self._suggestions_from_board(board, project_id, current_items=current_items)
+            return result
+        result = self._suggestions_from_board(board, project_id, current_items=current_items)
+        with self._suggestion_lock:
+            self._suggestion_cache[key] = copy.deepcopy(result)
+            if len(self._suggestion_cache) > 32:
+                self._suggestion_cache.popitem(last=False)
         return result
 
     def _supplement_candidates(self, entries: list[dict[str, Any]], groups: list[dict[str, Any]],
@@ -716,6 +805,8 @@ class MaterialMatching:
                     continue
                 for number in self._expense_numbers(db, item):
                     by_number.setdefault((item['project_id'], number), []).append(matching)
+            if not by_number:
+                return []
             for entry in entries:
                 if (entry['id'] not in available or not entry.get('project_id') or
                         entry.get('role') not in SUPPORT_ROLES or entry.get('qr_status') in {'manual', 'converted'}):
@@ -2203,12 +2294,12 @@ class MaterialMatching:
                 'descriptions': descriptions, 'order_number': order if order_trusted else '',
                 'name_conflict': name_conflict}
 
-    def _rules_invalid_payment(self, card: dict[str, Any]) -> bool:
+    def _rules_invalid_payment(self, card: dict[str, Any], *, db: sqlite3.Connection | None = None) -> bool:
         """Only established ineligible payments may leave the competing pool."""
         try:
-            with self.store.connect() as db:
-                entry = self._queue(db, card['id'])
-                self._check_entry(db, entry, card['project_id'], {card['id']: card['revision']}, {'payment'})
+            with nullcontext(db) if db is not None else self.store.connect() as connection:
+                entry = self._queue(connection, card['id'])
+                self._check_entry(connection, entry, card['project_id'], {card['id']: card['revision']}, {'payment'})
             status = (entry.get('fields') or {}).get('payment_status', '')
             text = re.sub(r'\s+', '', str(entry.get('text') or ''))
             return status in {'failed', 'refunded', 'unpaid', 'cancelled', 'canceled'} or any(
@@ -2227,20 +2318,25 @@ class MaterialMatching:
                 not card.get('payment_not_required') and
                 (card['key'].startswith('e:') or card['status'] in {'received', 'review'})}
 
-    def _rules_current_pool_snapshot(self, db: sqlite3.Connection, project_id: str) -> dict[str, Any]:
+    def _rules_current_pool_snapshot(self, db: sqlite3.Connection, project_id: str, *,
+                                     read_items: Callable[[], list[dict[str, Any]]] | None = None) -> dict[str, Any]:
         attached = {row['digest'] for row in db.execute('SELECT digest FROM attachments')}
         result: dict[str, Any] = {}
         for row in db.execute('SELECT data FROM intake_queue'):
             entry = _data(row['data'])
             if (entry.get('project_id') == project_id and entry.get('status') in {'received', 'review'} and
-                    not entry.get('item_id') and entry.get('qr_status') not in {'manual', 'converted'} and
+                    not entry.get('duplicate_of') and not entry.get('item_id') and entry.get('qr_status') not in {'manual', 'converted'} and
                     entry['digest'] not in attached and _material_role(entry) in {'invoice', 'receipt', 'payment', 'trip', 'trip_sheet', 'detail'} and
                     _identified_amount(entry) and not rail_payment_not_required(entry) and not _rail_invoice(entry)):
                 result['q:' + entry['id']] = entry['revision']
         # Revalidate against the caller's current read/guard transaction rather than
         # opening a second list_items connection. Keep the race check itself.
-        rows = db.execute('SELECT id,source,data FROM expenses ORDER BY rowid DESC').fetchall()
-        for item in self.store._read_items(db, rows):
+        if read_items is None:
+            rows = db.execute('SELECT id,source,data FROM expenses ORDER BY rowid DESC').fetchall()
+            items = self.store._read_items(db, rows)
+        else:
+            items = read_items()
+        for item in items:
             if item['deleted']:
                 continue
             if item.get('project_id') == project_id and (not item['complete'] or item.get('returned_to_synthesis')):
@@ -2249,7 +2345,8 @@ class MaterialMatching:
                     result[card['key']] = card['version']
         return result
 
-    def _suggestions_from_board(self, board: dict[str, Any], project_id: str) -> dict[str, Any]:
+    def _suggestions_from_board(self, board: dict[str, Any], project_id: str, *,
+                                current_items: Callable[[], list[dict[str, Any]]] | None = None) -> dict[str, Any]:
         """Find balanced choices without linking materials or creating expenses.
 
         Every amount competitor participates in ambiguity assessment, including
@@ -2275,20 +2372,21 @@ class MaterialMatching:
             conflicts.append({'reason': '材料池超过20份票据或32份付款，请分批人工匹配；未截断后猜测唯一'})
             return result
         eligible_payments = []
-        for card in payments:
-            if self._rules_invalid_payment(card):
-                conflicts.append({'payment_ids': [card['id']], 'reason': '付款含退款或非成功信息，不推荐合成'})
-            else:
-                eligible_payments.append(card)
         states: dict[str, dict[str, Any]] = {}
         blocked: dict[str, str] = {}
-        for card in [*vouchers, *eligible_payments]:
-            try:
-                states[card['key']] = self._rules_material_state(card, project_id, allow_name_review=True)
-            except ValueError as exc:
-                blocked[card['key']] = str(exc)
-                conflicts.append({'voucher_keys' if card in vouchers else 'payment_ids':
-                                  [card['key'] if card in vouchers else card['id']], 'reason': str(exc)})
+        with self.store.connect() as db:
+            for card in payments:
+                if self._rules_invalid_payment(card, db=db):
+                    conflicts.append({'payment_ids': [card['id']], 'reason': '付款含退款或非成功信息，不推荐合成'})
+                else:
+                    eligible_payments.append(card)
+            for card in [*vouchers, *eligible_payments]:
+                try:
+                    states[card['key']] = self._rules_material_state(card, project_id, db=db, allow_name_review=True)
+                except ValueError as exc:
+                    blocked[card['key']] = str(exc)
+                    conflicts.append({'voucher_keys' if card in vouchers else 'payment_ids':
+                                      [card['key'] if card in vouchers else card['id']], 'reason': str(exc)})
         # Read owners once. Duplicate materials remain in the full competing
         # pool, but a spent transaction is never offered as another expense.
         owners: dict[str, set[str]] = {}
@@ -2396,7 +2494,7 @@ class MaterialMatching:
         result['suggestion_count'] += len(transport)
         # A concurrent intake/edit must not yield an apparently current choice.
         with self.store.connect() as db:
-            if self._rules_current_pool_snapshot(db, project_id) != pool:
+            if self._rules_current_pool_snapshot(db, project_id, read_items=current_items) != pool:
                 conflicts.append({'reason': '材料池扫描期间已变化，请刷新待合成候选'})
                 result.update(suggestions=[], suggestion_count=0)
         result['suggested'] = result['suggestion_count']

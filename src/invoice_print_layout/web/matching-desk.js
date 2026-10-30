@@ -32,7 +32,6 @@ async function readDroppedMaterialFiles(transfer) {
   dialog.innerHTML = `
     <div class="matching-header"><div><small>材料合成台</small><h2>选择材料，确认创建报销项目</h2></div><button id="matchingClose" type="button" aria-label="关闭材料合成台" class="dialog-close">×</button></div>
     <div class="matching-toolbar">
-      <label>本批归属人<select id="matchingBatchPerson"><option value="">不指定</option></select></label>
       <button id="matchingUpload" type="button" class="primary">＋ 收材料</button>
       <input id="matchingFiles" type="file" accept=".pdf,.png,.jpg,.jpeg,.webp" multiple hidden>
       <button id="matchingImportFolder" type="button" aria-describedby="matchingFolderHint">导入文件夹</button>
@@ -41,7 +40,6 @@ async function readDroppedMaterialFiles(transfer) {
       <button id="matchingMail" type="button">补收邮件</button>
       <button id="matchingAuto" type="button">寻找合成组合</button>
       <button id="matchingAmountPair" type="button">按金额一键配对</button>
-      <button id="matchingAssignPeople" type="button" disabled>指定材料归属</button>
       <button id="matchingRefresh" type="button">刷新材料</button>
     </div>
     <p id="matchingFolderHint" class="muted matching-intake-hint">可以直接把文件或文件夹拖进来，包含子文件夹。导入文件夹时，浏览器会弹出“要上传这些文件吗”的确认，点上传即可；只会收 PDF 和图片（PNG、JPG、JPEG、WebP），每份最多 20MB，每次最多 200 个文件。</p>
@@ -208,24 +206,7 @@ async function readDroppedMaterialFiles(transfer) {
     if (!value) queueMicrotask(showBackgroundResult);
     window.lockSynthesisSuggestions?.(value);
     updateSupplementButtons();
-    updatePeopleButton();
     el('matchingClose').disabled = value && !opening;
-  }
-  function peopleSelectionError(cards) {
-    if (!projectId) return '先从侧栏选择项目。';
-    if (!cards.length) return '先选择属于同一个人的材料，再批量指定归属。';
-    if (cards.length > 200) return '每次最多指定200份材料，请分批选择。';
-    if (cards.some(card => !card.key?.startsWith('q:') || card.item_id)) return '已有费用请在待核对列表勾选后批量修改归属。';
-    if (cards.some(card => isQr(card) || !['received', 'review'].includes(card.status) || !Number.isSafeInteger(card.revision) || card.revision < 0)) return '所选材料已变化，请刷新后重新选择。';
-    if (cards.some(card => card.project_id && card.project_id !== projectId)) return '所选材料属于另一项目，请重新选择。';
-    return '';
-  }
-  function updatePeopleButton() {
-    const cards = [...currentVouchers(), ...currentPayments(), ...currentSupports()], button = el('matchingAssignPeople');
-    const error = peopleSelectionError(cards);
-    button.disabled = busy || !!error || !window.reimbursementPeopleUI?.bulkAssignMaterials;
-    button.title = error || '只修改选中材料的人员归属，不创建或合并费用。';
-    button.textContent = '指定材料归属' + (cards.length ? `（${cards.length}份）` : '');
   }
   function supportError() {
     if (!projectId) return '先选择一个项目，再补充材料。';
@@ -398,7 +379,6 @@ async function readDroppedMaterialFiles(transfer) {
     const target = el('matchingPreviewContent'); target.classList.toggle('matching-suggestion-preview', !!sourceSuggestion);
     dialog.querySelector('.matching-footer').classList.toggle('matching-review-actions', !!(vouchers.length + payments.length + supports.length));
     updateSupplementButtons();
-    updatePeopleButton();
     if (!vouchers.length && !payments.length && !supports.length) {
       fieldSelection = '';
       if (savedItem) {
@@ -561,7 +541,6 @@ async function readDroppedMaterialFiles(transfer) {
     const supported = files.filter(file => /\.(pdf|png|jpe?g|webp)$/i.test(file.name) && file.size <= 20 * 1024 * 1024);
     const skipped = files.length - supported.length;
     files = supported;
-    const batchPerson = el('matchingBatchPerson').value;
     const uploadProject = projectId, agent = window.manualInvoiceAgent;
     const organizer = uploadProject && typeof agent?.shouldAutoOrganize === 'function' && typeof agent?.startReceived === 'function' && agent.shouldAutoOrganize(uploadProject) ? agent : null;
     const background = !organizer && window.invoiceIntakeProgress?.available();
@@ -577,7 +556,7 @@ async function readDroppedMaterialFiles(transfer) {
         el('matchingProgressText').textContent = `正在收材料 ${index + 1}/${files.length}`;
         try {
           const data = await new Promise((resolve, reject) => {const reader = new FileReader(); reader.onload = () => resolve(reader.result.split(',')[1]); reader.onerror = reject; reader.readAsDataURL(file);});
-          const entry = await api('intake/receive', {name: file.name, data, project_id: uploadProject, batch, reimbursement_person_id: batchPerson}); received++;
+          const entry = await api('intake/receive', {name: file.name, data, project_id: uploadProject, batch}); received++;
           if (entry.duplicate || entry.status === 'duplicate') duplicates++;
           else if (organizer || background) {
             if (typeof entry.id === 'string' && entry.id && entry.project_id === uploadProject && !entry.item_id && ['received', 'review'].includes(entry.status)) entryIds.add(entry.id);
@@ -685,38 +664,6 @@ async function readDroppedMaterialFiles(transfer) {
   el('matchingClose').onclick = closeMatching;
   dialog.addEventListener('cancel', event => {event.preventDefault(); closeMatching();});
   el('matchingRefresh').onclick = () => mutation(async () => {await refreshBoard(); void window.invoiceIntakeProgress?.refresh(projectId); message('材料已刷新；失效的选择已清除。');});
-  el('matchingAssignPeople').onclick = async () => {
-    if (busy) return;
-    const cards = [...currentVouchers(), ...currentPayments(), ...currentSupports()], error = peopleSelectionError(cards);
-    if (error) {message(error, true); return;}
-    const selectedProject = projectId, fields = el('matchingProjectType') ? readFields() : null;
-    const selectedVouchers = [...voucherKeys], selectedPayments = [...paymentIds], selectedSupports = [...supportIds];
-    try {
-      await window.reimbursementPeopleUI.bulkAssignMaterials(cards.map(card => ({...card, id: queueId(card)})), {
-        projectId: selectedProject,
-        onSaved: async result => {
-          if (projectId !== selectedProject || projectId !== currentInvoiceProjectId()) throw Error('归属已保存，请在材料所属项目刷新查看。');
-          lock(true);
-          try {
-            const preserved = {...fields, reimbursement_person_id: result.person?.id || ''};
-            await refreshBoard(true, preserved);
-            // Assignment changes revisions without changing the selected originals.
-            const available = card => card && !peopleSelectionError([card]);
-            voucherKeys = new Set(selectedVouchers.filter(key => available(board.vouchers.find(card => card.key === key))));
-            paymentIds = new Set(selectedPayments.filter(id => available(board.payments.find(card => queueId(card) === id))));
-            supportIds = new Set(selectedSupports.filter(id => {
-              const card = board.other.find(card => queueId(card) === id);
-              return available(card) && isCreateSupport(card);
-            }));
-            sourceSuggestion = null; needsSelectionConfirmation = false; savedItem = null;
-            drawPools(); renderSelection(preserved);
-            await refreshLedger();
-            message(result.message || `已更新 ${cards.length} 份材料归属；金额、用途和原件保留，尚未创建费用。`);
-          } finally {lock(false);}
-        }
-      });
-    } catch (failure) {message(failure.message || '无法打开材料归属选择，请重试。', true);}
-  };
   el('matchingUpload').onclick = () => {if (!busy) el('matchingFiles').click();};
   el('matchingFiles').onchange = () => uploadFiles([...el('matchingFiles').files]);
   el('matchingImportFolder').onclick = () => {if (!busy) el('matchingFolder').click();};
@@ -842,7 +789,6 @@ async function readDroppedMaterialFiles(transfer) {
         if (!state.token) await load();
         if (!current()) return;
         projectId = currentInvoiceProjectId();
-        window.reimbursementPeopleUI?.batchChoice(el('matchingBatchPerson'), projectId);
         if (suggestion && suggestion.project_id !== projectId) throw Error('请先进入这组建议所属的项目。');
         await refreshBoard(false);
         if (!current()) return;

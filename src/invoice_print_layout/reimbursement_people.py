@@ -17,11 +17,13 @@ def _display_label(person: dict[str, Any]) -> str:
     return str(person.get('display_label') or person['label'])
 
 
-def _canonical_person(db: sqlite3.Connection, project_id: str, person_id: str) -> dict[str, Any]:
+def _canonical_person(db: sqlite3.Connection, project_id: str, person_id: str, *,
+                      people: dict[tuple[str, str], dict[str, Any]] | None = None) -> dict[str, Any]:
     seen: set[str] = set()
     while person_id and person_id not in seen:
         seen.add(person_id)
-        row = db.execute('SELECT * FROM reimbursement_people WHERE id=? AND project_id=?', (person_id, project_id)).fetchone()
+        row = (db.execute('SELECT * FROM reimbursement_people WHERE id=? AND project_id=?', (person_id, project_id)).fetchone()
+               if people is None else people.get((project_id, person_id)))
         if row is None:
             raise ValueError('费用归属人不属于当前项目，请重新选择')
         person = dict(row)
@@ -80,11 +82,12 @@ def common_person(records: list[dict[str, Any]]) -> dict[str, str]:
 
 
 def current_person_label(db: sqlite3.Connection, project_id: str, person_id: str,
-                         fallback: str = '') -> str:
-    if not person_id or not db.execute("SELECT 1 FROM sqlite_master WHERE name='reimbursement_people'").fetchone():
+                         fallback: str = '', *,
+                         people: dict[tuple[str, str], dict[str, Any]] | None = None) -> str:
+    if not person_id or (people is None and not db.execute("SELECT 1 FROM sqlite_master WHERE name='reimbursement_people'").fetchone()):
         return fallback
     try:
-        return _display_label(_canonical_person(db, project_id, person_id))
+        return _display_label(_canonical_person(db, project_id, person_id, people=people))
     except ValueError:
         return fallback
 

@@ -68,15 +68,8 @@ async function run(pw) {
       await page.evaluate(()=>window.reimbursementPeopleUI.refresh('p1'));
       if (kind === 'matching') await page.evaluate(() => window.openMaterialMatching());
       else await page.evaluate(() => window.openUnifiedIntake());
-      const personSelect=page.locator(kind==='matching'?'#matchingBatchPerson':'#intakeBatchPerson');
-      assert.equal(await personSelect.inputValue(),'');
-      if(person){
-        await personSelect.selectOption(person);
-        if(kind==='matching'){await page.locator('#matchingClose').click();await page.evaluate(()=>window.openMaterialMatching());}
-        else {await page.locator('#intakeDialog [data-close]').click();await page.evaluate(()=>window.openUnifiedIntake());}
-        assert.equal(await personSelect.inputValue(),person,'last choice survives closing and reopening the upload entry');
-        assert.equal(await page.evaluate(()=>localStorage.getItem('invoice-batch-person:p2')),null,'choices stay per project');
-      }
+      assert.equal(await page.locator('#matchingBatchPerson, #intakeBatchPerson').count(), 0);
+      if (person) await page.evaluate(value => localStorage.setItem('invoice-batch-person:p1', value), person);
       if (resume) {
         await page.locator('#matchingBackgroundStatus [data-resume-intake]').waitFor();
         assert.equal(writes.length, 0, 'a restart/page load must never start recognition');
@@ -92,7 +85,7 @@ async function run(pw) {
         const closableMs = performance.now() - start;
         assert.ok(closableMs < 5000, `window should be closable before OCR is released: ${closableMs}ms`);
         assert.equal(entries.length, 20);
-        assert.ok(writes.filter(w=>w.route==='/api/intake/receive').every(w=>w.body.reimbursement_person_id===person));
+        assert.ok(writes.filter(w=>w.route==='/api/intake/receive').every(w=>!Object.hasOwn(w.body,'reimbursement_person_id')));
         const enqueue = writes.filter(write => write.route === '/api/intake/enqueue');
         assert.equal(enqueue.length, 1); assert.equal(enqueue[0].body.ids.length, 20);
         assert.ok(writes.slice(0, 20).every(write => write.route === '/api/intake/receive'));
