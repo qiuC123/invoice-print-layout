@@ -110,7 +110,8 @@ function harness(options = {}) {
     click() { this.dispatchEvent({type: 'click', target: this, bubbles: true}); }
   }
   const document = new Target(), window = new Target();
-  Object.assign(document, {readyState: 'loading', URL: pageUrl, baseURI: pageUrl,
+  // Keep these synchronous CSS contracts hidden; the real-browser suite covers runtime recovery.
+  Object.assign(document, {hidden: true, readyState: 'loading', URL: pageUrl, baseURI: pageUrl,
     createElement: tag => new Element(tag), createTextNode: text => Object.assign(new Element('span'), {textContent: text})});
   document.documentElement = new Element('html'); document.documentElement.className = 'invoice-assistant';
   document.head = document.documentElement.appendChild(new Element('head'));
@@ -120,7 +121,8 @@ function harness(options = {}) {
   document.getElementById = id => document.querySelector('#' + id);
   document.getElementsByTagName = tag => document.querySelectorAll(tag);
   const schedule = (fn, delay = 0) => { const id = nextTimer++; timers.set(id, {at: now + Number(delay), fn}); return id; };
-  const location = new URL(pageUrl); location.reload = () => forbidden.push('reload');
+  let reloads = 0;
+  const location = new URL(pageUrl); location.reload = () => reloads++;
   const localStorage = {
     getItem(key) { if (options.storageDenied) throw new Error('storage denied'); return storage.get(key) ?? null; },
     setItem(key, value) { if (options.storageDenied) throw new Error('storage denied'); storage.set(key, String(value)); storageWrites.push([key, String(value)]); },
@@ -156,7 +158,7 @@ function harness(options = {}) {
   const loads = except => { for (const link of links) if (link !== except && new URL(link.href).origin === origin) emit(link, 'load'); };
   const count = link => requests.filter(item => item.node === link).length;
   const noBusinessEffects = () => { assert.deepEqual(forbidden, []); assert.deepEqual(document.head.children, originalOrder, 'existing cascade node order is retained'); };
-  return {document, window, links, select, requests, storageWrites, storage, timers, domReady, windowLoad, emit, advance, loads, count, noBusinessEffects};
+  return {document, window, links, select, requests, storageWrites, storage, timers, domReady, windowLoad, emit, advance, loads, count, noBusinessEffects, reloads: () => reloads};
 }
 
 const cases = {};
@@ -170,9 +172,10 @@ cases['permanent-failure'] = () => {
   const h = harness(), bad = h.links[0]; h.loads(bad); h.domReady(); h.windowLoad();
   for (let step = 0; step < 8; step++) { h.emit(bad, 'error'); h.advance(10000); }
   assert.equal(h.count(bad), 3, 'automatic recovery has at most two retries');
-  assert.equal(h.document.documentElement.dataset.workbenchAssets, 'error');
+  assert.equal(h.document.documentElement.dataset.workbenchAssets, 'recovering');
   const status = h.document.getElementById('workbenchAssetStatus'); assert.ok(status && !status.hidden, 'permanent failures are visible');
-  assert.ok(status.querySelectorAll('button').some(button => button.textContent.includes('重新加载样式'))); h.noBusinessEffects();
+  assert.ok(status.querySelectorAll('button').some(button => button.textContent === '立即重试')); h.noBusinessEffects();
+  assert.equal(h.reloads(), 0, 'hidden page must not automatically reload');
 };
 cases['delayed-success'] = () => {
   const h = harness(), delayed = h.links[0]; h.loads(delayed); h.domReady(); h.advance(4000); h.emit(delayed, 'load'); h.windowLoad(); h.advance(30000);
@@ -190,10 +193,9 @@ cases['manual-recovery'] = () => {
   const h = harness(), bad = h.links[0]; h.loads(bad); h.domReady(); h.windowLoad();
   for (let step = 0; step < 3; step++) { h.emit(bad, 'error'); h.advance(10000); }
   const status = h.document.getElementById('workbenchAssetStatus'); assert.ok(status);
-  const button = status.querySelectorAll('button').find(node => node.textContent.includes('重新加载样式')); assert.ok(button);
-  button.click(); h.advance(1000); assert.equal(h.count(bad), 4, 'explicit recovery requests only the failed style once');
-  h.emit(bad, 'load'); h.advance(30000); assert.equal(h.document.documentElement.dataset.workbenchAssets, 'ready');
-  assert.equal(h.count(bad), 4); for (const good of h.links.slice(1)) assert.equal(h.count(good), 1); h.noBusinessEffects();
+  const button = status.querySelectorAll('button').find(node => node.textContent === '立即重试'); assert.ok(button);
+  button.click(); h.advance(1000); assert.equal(h.reloads(), 1, 'explicit recovery reloads the entire page');
+  assert.equal(h.count(bad), 3); for (const good of h.links.slice(1)) assert.equal(h.count(good), 1); h.noBusinessEffects();
 };
 cases['cross-origin'] = () => {
   const h = harness({crossOrigin: true}), foreign = h.links.at(-1); h.loads(); h.domReady(); h.windowLoad(); h.emit(foreign, 'error'); h.advance(30000);

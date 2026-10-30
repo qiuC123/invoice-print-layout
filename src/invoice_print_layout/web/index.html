@@ -26,6 +26,53 @@
 
   const entries = new Map(), retryLimit = 2, timeoutMs = 5000;
   let parsed = false;
+  const recoveryKey = 'invoice-workbench-asset-reloads';
+  let recovering = false, recovered = false, manualReason = '', recoveryTimer = null, recoveryRequest = null;
+  const scheduleRecovery = () => {
+    if (!recovering || recovered || document.hidden || recoveryTimer !== null || recoveryRequest) return;
+    recoveryTimer = setTimeout(checkRecovery, 3000);
+  };
+  const checkRecovery = async () => {
+    recoveryTimer = null;
+    if (document.hidden) return;
+    const controller = new AbortController();
+    recoveryRequest = controller;
+    const deadline = setTimeout(() => controller.abort(), 2000);
+    try {
+      const response = await fetch('/api/runtime', {cache: 'no-store', signal: controller.signal});
+      if (!response.ok || controller.signal.aborted || document.hidden) return;
+      recovered = true;
+      const active = document.activeElement;
+      if (document.querySelector('dialog[open]') || (active && (active.matches('input,textarea,select') || active.isContentEditable))) return;
+      try {
+        const count = Number(sessionStorage.getItem(recoveryKey) || 0);
+        if (!Number.isInteger(count) || count < 0 || count >= 3) {
+          manualReason = '自动刷新已达上限，请手动刷新。';
+          return;
+        }
+        sessionStorage.setItem(recoveryKey, String(count + 1));
+        if (sessionStorage.getItem(recoveryKey) !== String(count + 1)) throw new Error('Reload count was not saved');
+      } catch (_) {
+        // Without a persistent counter, reloading could loop forever.
+        manualReason = '无法保存自动刷新次数，请手动刷新。';
+        return;
+      }
+      location.reload();
+    } catch (_) { /* The service may still be starting. */ }
+    finally {
+      clearTimeout(deadline);
+      recoveryRequest = null;
+      render();
+      scheduleRecovery();
+    }
+  };
+  const recover = () => { recovering = true; render(); scheduleRecovery(); };
+  document.addEventListener('visibilitychange', () => {
+    clearTimeout(recoveryTimer);
+    recoveryTimer = null;
+    if (document.hidden) { if (recoveryRequest) recoveryRequest.abort(); }
+    else scheduleRecovery();
+  });
   const loaded = link => {
     try { return Boolean(link.sheet && link.sheet.cssRules.length); }
     catch (_) { return false; }
@@ -36,10 +83,13 @@
     entry.deadline = entry.retryTimer = null;
   };
   const render = () => {
-    const failed = [...entries.values()].some(entry => entry.failed);
+    const failed = recovering || [...entries.values()].some(entry => entry.failed);
     const pending = [...entries.values()].some(entry => !entry.done && !entry.failed);
     const retrying = [...entries.values()].some(entry => !entry.done && entry.tries > 0);
-    root.dataset.workbenchAssets = failed ? 'error' : retrying ? 'retrying' : parsed && !pending ? 'ready' : 'loading';
+    root.dataset.workbenchAssets = recovering ? 'recovering' : failed ? 'error' : retrying ? 'retrying' : parsed && !pending ? 'ready' : 'loading';
+    if (!recovering && root.dataset.workbenchAssets === 'ready') {
+      try { sessionStorage.removeItem(recoveryKey); } catch (_) { /* Storage refusal must not break a healthy page. */ }
+    }
     if (!document.body) return;
     let status = document.getElementById('workbenchAssetStatus');
     if (failed && !status) {
@@ -48,24 +98,18 @@
       status.setAttribute('role', 'status');
       status.style.cssText = 'position:fixed;top:12px;left:50%;transform:translateX(-50%);z-index:10000;max-width:90vw;padding:12px 16px;border:1px solid #c9a66b;border-radius:8px;background:#fff8e8;color:#342b1e;font:14px/1.6 "Microsoft YaHei",sans-serif;box-shadow:0 3px 14px #0002';
       const text = document.createElement('span');
-      text.textContent = '页面样式加载未完成，请检查连接后重试。';
       const button = document.createElement('button');
       button.type = 'button';
-      button.textContent = '重新加载样式';
       button.style.cssText = 'margin-left:12px;padding:5px 10px;border:1px solid #b59a6d;border-radius:5px;background:white;color:#342b1e;cursor:pointer';
-      button.addEventListener('click', () => {
-        entries.forEach(entry => {
-          if (!entry.failed) return;
-          entry.failed = false;
-          entry.tries = 0;
-          retry(entry);
-        });
-        render();
-      });
+      button.addEventListener('click', () => location.reload());
       status.append(text, button);
       document.body.append(status);
     }
-    if (status) status.hidden = !failed;
+    if (status) {
+      status.hidden = !failed;
+      status.querySelector('span').textContent = recovered ? '工作台已恢复。' + manualReason : '页面没加载完整，正在等待工作台服务…';
+      status.querySelector('button').textContent = recovered ? '刷新' : '立即重试';
+    }
   };
   const succeed = entry => { clear(entry); entry.done = true; entry.failed = false; render(); };
   const arm = entry => { entry.deadline = setTimeout(() => retry(entry), timeoutMs); };
@@ -73,7 +117,7 @@
     if (entry.done || entry.failed || entry.retryTimer !== null) return;
     if (loaded(entry.link)) { succeed(entry); return; }
     clear(entry);
-    if (entry.tries >= retryLimit) { entry.failed = true; render(); return; }
+    if (entry.tries >= retryLimit) { entry.failed = true; recover(); return; }
     entry.tries += 1;
     entry.retryTimer = setTimeout(() => {
       entry.retryTimer = null;
@@ -90,7 +134,7 @@
     if (!link || link.tagName !== 'LINK' || link.rel !== 'stylesheet') return null;
     let url;
     try { url = new URL(link.href, location.href); } catch (_) { return null; }
-    if (url.origin !== location.origin || !url.pathname.endsWith('.css')) return null;
+    if (url.origin !== location.origin) return null;
     let entry = entries.get(link);
     if (!entry) {
       entry = {link, original: url.href, tries: 0, done: false, failed: false, deadline: null, retryTimer: null};
@@ -100,7 +144,12 @@
     return entry;
   };
   document.addEventListener('load', event => { const entry = watch(event.target); if (entry && loaded(entry.link)) succeed(entry); }, true);
-  document.addEventListener('error', event => { const entry = watch(event.target); if (entry) retry(entry); }, true);
+  document.addEventListener('error', event => {
+    const target = event.target;
+    if (target && target.tagName === 'SCRIPT' && target.src && new URL(target.src, location.href).origin === location.origin) recover();
+    const entry = watch(target);
+    if (entry) retry(entry);
+  }, true);
   const observer = new MutationObserver(records => records.forEach(record => record.addedNodes.forEach(node => {
     watch(node);
     if (node.querySelectorAll) node.querySelectorAll('link[rel="stylesheet"]').forEach(watch);
