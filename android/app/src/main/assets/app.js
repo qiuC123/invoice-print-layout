@@ -1,6 +1,6 @@
 'use strict';
 const $=id=>document.getElementById(id), escape=value=>String(value??'').replace(/[&<>"']/g,ch=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]));
-const pending=new Map();let sequence=0,state={projects:[],materials:[],expenses:[],reports:[]},project=localStorage.getItem('project')||'',tab='materials',selected=new Set(),busy=false;
+const pending=new Map();let sequence=0,state={projects:[],materials:[],expenses:[],reports:[]},project=localStorage.getItem('project')||'',tab='receipts',selected=new Set(),busy=false;
 const categories=['材料采购','酒店','高铁','外卖','餐饮','打车','顺丰','其他'],roles={invoice:'发票',receipt:'收据／购买明细',purchase:'购买明细',order:'订单记录',payment:'付款凭证',trip:'行程单',detail:'运单／其他明细',other:'其他附件'};
 const money=value=>(Number(value||0)/100).toFixed(2);
 function api(method,args={}){return new Promise((resolve,reject)=>{const id=String(++sequence);pending.set(id,{resolve,reject});Native.invoke(JSON.stringify({id,method,args}));});}

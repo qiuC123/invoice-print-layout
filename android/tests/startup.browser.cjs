@@ -15,12 +15,15 @@ async function run(pw){
     }};
    });
    await context.route('http://invoice-android.test/**',async route=>{
-    const asset=new URL(route.request().url()).pathname.slice(1)||'index.html';assert.ok(['index.html','style.css','app.js','workbench.js'].includes(asset));
+    const asset=new URL(route.request().url()).pathname.slice(1)||'index.html';assert.ok(['index.html','style.css','app.js','workbench.js','receipts.js'].includes(asset));
     if(asset==='workbench.js'&&delay)await new Promise(resolve=>setTimeout(resolve,delay));
     await route.fulfill({contentType:asset.endsWith('.css')?'text/css':asset.endsWith('.js')?'text/javascript':'text/html',body:await fs.readFile(path.join(source,asset))});
    });
    const page=await context.newPage();page.on('pageerror',error=>errors.push(error.message));
    await page.goto('http://invoice-android.test/index.html');
+   await page.getByRole('button',{name:'＋ 拍照收票',exact:true}).waitFor();
+   assert.equal(await page.locator('nav button.active').getAttribute('data-tab'),'receipts');
+   await page.locator('nav [data-tab=materials]').click();
    await page.getByText('还没有材料',{exact:true}).waitFor();
    assert.deepEqual(await page.evaluate(()=>window.__startup),[{ready:'interactive',features:true}]);
    await page.getByRole('button',{name:'拍照',exact:true}).waitFor();
