@@ -109,7 +109,10 @@ async function run(pw){
   failDelete=true;await page.locator('[data-todo-id="todo1"] .todo-delete').click();await page.waitForSelector('#logisticsError:not([hidden])');assert.equal(await page.locator('[data-todo-id="todo1"]').count(),1);
   await page.locator('[data-todo-id="todo1"] .todo-delete').click();await page.getByRole('button',{name:'撤销删除',exact:true}).waitFor();assert.equal(await page.locator('[data-todo-id="todo1"]').count(),0);
   await page.getByRole('button',{name:'撤销删除',exact:true}).focus();await page.mouse.move(0,0);await page.clock.fastForward(16000);assert.equal(await page.locator('#logisticsNotice').isVisible(),true);
+  // Freeze elapsed wall time while checking either side of the 15-second boundary.
+  await page.clock.pauseAt(await page.evaluate(()=>Date.now()+1000));
   await page.locator('#scheduledTasks').focus();await page.clock.fastForward(14999);assert.equal(await page.locator('#logisticsNotice').isVisible(),true);await page.clock.fastForward(2);assert.equal(await page.locator('#logisticsNotice').isHidden(),true);
+  await page.clock.resume();
   await page.reload();await page.waitForFunction(()=>document.getElementById('logisticsTasks').textContent.includes('暂无符合'));assert.equal(await page.locator('[data-todo-id="todo1"]').count(),0);
   await page.locator('#scheduledTasks').click();await page.locator('[data-todo-id="todo2"] .todo-delete').click();await page.getByRole('button',{name:'撤销删除',exact:true}).waitFor();assert.equal(await page.locator('[data-todo-id="todo2"]').count(),0);assert.equal(todos[1].schedule.enabled,false);
   await page.getByRole('button',{name:'撤销删除',exact:true}).click();await page.locator('[data-todo-id="todo2"]').waitFor();assert.match(await page.locator('[data-todo-id="todo2"]').innerText(),/已暂停/);

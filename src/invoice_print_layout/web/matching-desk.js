@@ -301,6 +301,8 @@ async function readDroppedMaterialFiles(transfer) {
   }
   const archiveButton = card => materialButton(card, 'archive', '归档', card.key?.startsWith('e:') ? card.can_archive === true : card.can_archive ??
     (!['unused', 'archived', 'deleted', 'linked', 'duplicate', 'converted'].includes(card.status)));
+  const intakeNoteMarkup = card => typeof card.intake_note === 'string' && card.intake_note.trim() ?
+    `<small class="matching-intake-note" title="${escape(card.intake_note)}">备注：${escape(card.intake_note)}</small>` : '';
   function archivedMarkup(card, deleted = false) {
     const expense = card.key?.startsWith('e:');
     const restore = deleted ? materialButton(card, 'restore-deleted', '恢复到归档', expense ? card.can_restore_deleted === true : card.can_restore_deleted ?? true) :
@@ -308,6 +310,7 @@ async function readDroppedMaterialFiles(transfer) {
     const remove = deleted ? '' : materialButton(card, 'delete', '删除', expense ? card.can_delete === true : card.can_delete ?? ['unused', 'archived'].includes(card.status));
     return `<article class="matching-other-card" data-archived-key="${escape(card.key || '')}">${proof(card)}<strong>${escape(materialTitle(card))}</strong><b>${currency(card.amount_cents)}</b>
       ${window.reimbursementPeopleUI?.markup(card) || ''}
+      ${intakeNoteMarkup(card)}
       ${card.fields?.merchant ? `<p>商家：${escape(card.fields.merchant)}</p>` : ''}
       ${card.status === 'unused' || card.unused_reason ? `<p>${escape(card.unused_reason || '高铁支付截图无需参与合成。')}</p>` : ''}
       <div class="matching-material-actions">${restore}${remove}</div></article>`;
@@ -323,6 +326,7 @@ async function readDroppedMaterialFiles(transfer) {
       <span class="matching-card-image">${thumbnail ? `<img src="${escape(thumbnail)}" alt="" loading="lazy">` : '<span>PDF</span>'}</span>
       <strong>${escape(title)}</strong><b>${currency(card.amount_cents)}</b>
       ${window.reimbursementPeopleUI?.markup(card) || ''}
+      ${intakeNoteMarkup(card)}
       ${transactionMarkup(card, pool, title)}
       ${goods && !duplicatePaymentPurpose ? `<small>用途：${escape(goods)}</small>` : ''}
       ${pool === 'voucher' && card.key?.startsWith('e:') ? '<small>已有费用 · 补入／合并</small>' : ''}
@@ -347,6 +351,7 @@ async function readDroppedMaterialFiles(transfer) {
     el('matchingOther').innerHTML = board.other.map(card => isCreateSupport(card) ? cardMarkup(card, 'support') : `<article class="matching-other-card">
       ${proof(card)}<strong>${escape(materialTitle(card))}</strong><b>${currency(card.amount_cents)}</b>
       ${window.reimbursementPeopleUI?.markup(card) || ''}
+      ${intakeNoteMarkup(card)}
       <p>${isQr(card) ? '待领票：这份二维码截图还不是发票 PDF。原件已保留，可重试领取。' : '购买凭证用途尚未确认，请先确认用途，再作为票据或补充材料选择。'}</p>
       ${isQr(card) && card.claim_message ? `<p class="muted">${escape(publicClaimText(card.claim_message))}</p>` : ''}
       ${(card.issues || []).length ? `<p class="muted">${escape(card.issues.join('、'))}</p>` : ''}

@@ -21,6 +21,7 @@ from invoice_print_layout.storage import ensure_workspace
 from invoice_print_layout.reliability import read_json, save_json
 from invoice_print_layout.workbench_runtime import APP_MODES, runtime_info, source_build_id
 from invoice_print_layout.phone_link import PhoneLink, drain_rejected_body
+from invoice_print_layout.receipt_devices import ReceiptDevices
 from invoice_print_layout.automatic_category import AutomaticCategory
 from invoice_print_layout.automatic_rides import organize_rides
 from invoice_print_layout.expense_projects import ExpenseProjects
@@ -151,7 +152,7 @@ def classify_intake(intake: IntakeQueue, values: dict[str, Any]) -> dict[str, An
 
 
 def make_server(workspace: Path, port: int = 8765, *, mode: str = 'workbench',
-                imap_factory: ImapFactory | None = None) -> ThreadingHTTPServer:
+                imap_factory: ImapFactory | None = None, device_port: int = 8769) -> ThreadingHTTPServer:
     if mode not in APP_MODES:
         raise ValueError('Unsupported application mode')
     store = ExpenseStore(workspace)
@@ -323,7 +324,7 @@ def make_server(workspace: Path, port: int = 8765, *, mode: str = 'workbench',
                     project_id = parse_qs(urlparse(self.path).query).get('project_id', [''])[0]
                     self.respond({'items': todos.list(project_id), 'photo_groups': site_photos.settings(project_id)['groups']})
                 elif path == '/api/phone-link':
-                    self.respond(phone_link.status(include_addresses=True))
+                    self.respond({**phone_link.status(include_addresses=True), 'receipt_app': receipt_devices.status()})
                 elif path == '/api/runtime':
                     self.respond(runtime)
                 elif path == '/api/intake':
@@ -472,6 +473,10 @@ def make_server(workspace: Path, port: int = 8765, *, mode: str = 'workbench',
                     return
                 if mode == 'invoice' and workbench_only(path):
                     self.respond({'error': '操作不存在'}, 404)
+                    return
+                if path in {'/api/phone-link/devices/pair', '/api/phone-link/devices/revoke'}:
+                    self.respond(receipt_devices.start_pairing() if path.endswith('/pair') else
+                                 receipt_devices.revoke(body.get('device_id')))
                     return
                 if path in {'/api/phone-link/start', '/api/phone-link/stop', '/api/phone-link/rotate', '/api/phone-link/connect'}:
                     if path.endswith('/start'):
@@ -641,6 +646,10 @@ def make_server(workspace: Path, port: int = 8765, *, mode: str = 'workbench',
                         result = reimbursement_people.create(
                             body.get('project_id', ''), body.get('label', body.get('name', '')),
                             external_sender_id=body.get('external_sender_id', ''), remark=body.get('remark', ''))
+                    elif path == '/api/reimbursement-people/main-person':
+                        result = reimbursement_people.set_main_person(
+                            body.get('project_id'), body.get('person_id'), body.get('expected_revision'),
+                            body.get('expected_version', ''))
                     elif path == '/api/reimbursement-people/rename':
                         result = reimbursement_people.rename(body.get('project_id'), body.get('person_id'),
                                                              body.get('expected_version'), body.get('label'))
@@ -875,6 +884,7 @@ def make_server(workspace: Path, port: int = 8765, *, mode: str = 'workbench',
         next_schedule_check = 0.0
 
         def server_close(self) -> None:
+            receipt_devices.close()
             background_intake.close()
             mail_agent.close()
             invoice_agent.close()
@@ -882,6 +892,7 @@ def make_server(workspace: Path, port: int = 8765, *, mode: str = 'workbench',
             super().server_close()
 
         def service_actions(self) -> None:
+            receipt_devices.tick()
             invoice_agent.kick()
             if runtime['ready']:
                 mail_agent.kick()
@@ -907,6 +918,8 @@ def make_server(workspace: Path, port: int = 8765, *, mode: str = 'workbench',
     phone_link = PhoneLink(Handler, token, analyze_phone_material, workspace)
     server = WorkbenchServer(('127.0.0.1', port), Handler)
     server.daemon_threads = False  # server_close waits for in-flight writes/exports.
+    receipt_devices = ReceiptDevices(intake, background_intake, invoice_agent, write_lock, port=device_port)
+    receipt_devices.sync_listener()
     return server
 
 

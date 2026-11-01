@@ -143,7 +143,8 @@ def test_invoice_startup_and_read_do_not_migrate_or_reorganize_existing_expenses
             assert status == 200 and state['items'] == before
             assert state['projects'] == [{**project, 'reimbursement_status': 'unreimbursed',
                                           'reimbursement_revision': 0, 'pinned': False,
-                                          'project_revision': 0, 'start_date': '', 'end_date': ''}
+                                          'project_revision': 0, 'start_date': '', 'end_date': '',
+                                          'main_person_id': ''}
                                          for project in before_projects]
             assert state['app_mode'] == 'invoice' and state['logistics_available'] is False
         assert client.json('GET', '/api/intake')[0] == 200
@@ -165,14 +166,15 @@ def test_invoice_project_creation_is_shared_and_does_not_create_logistics_tables
         # The invoice facade adds view-only menu metadata to its response; the
         # shared directory retains exactly its original project payload shape.
         invoice_fields = {'pinned', 'project_revision', 'reimbursement_status', 'reimbursement_revision',
-                          'start_date', 'end_date'}
+                          'start_date', 'end_date', 'main_person_id'}
         listed_project = {key: value for key, value in project.items() if key not in invoice_fields}
         assert project == {**listed_project, 'pinned': False, 'project_revision': 0,
                            'reimbursement_status': 'unreimbursed', 'reimbursement_revision': 0,
-                           'start_date': '', 'end_date': ''}
+                           'start_date': '', 'end_date': '', 'main_person_id': ''}
         assert client.json('GET', '/api/state')[1]['projects'] == [
             {**listed_project, 'reimbursement_status': 'unreimbursed', 'reimbursement_revision': 0,
-             'pinned': False, 'project_revision': 0, 'start_date': '', 'end_date': ''}]
+             'pinned': False, 'project_revision': 0, 'start_date': '', 'end_date': '',
+             'main_person_id': ''}]
         assert client.json('POST', '/api/projects', {'name': 'Synthetic project'})[0] == 400
         assert client.json('POST', '/api/projects', {'name': 'Other', 'site_name': ['invalid']})[0] == 400
         status, expense = client.json('POST', '/api/create', {

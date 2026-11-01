@@ -49,13 +49,13 @@ def test_old_metadata_migration_is_idempotent_and_preserves_existing_rows(tmp_pa
     ExpenseProjects(ExpenseStore(tmp_path))
     with store.connect() as db:
         columns = {row['name']: dict(row) for row in db.execute('PRAGMA table_info(expense_project_metadata)')}
-        assert len(columns) == 9
-        for name in ('start_date', 'end_date'):
+        assert len(columns) == 10
+        for name in ('start_date', 'end_date', 'main_person_id'):
             assert columns[name]['type'] == 'TEXT' and columns[name]['notnull'] == 1
             assert columns[name]['dflt_value'] == "''"
         after = [tuple(row) for row in db.execute('SELECT * FROM expense_project_metadata ORDER BY rowid')]
         assert [row[:7] for row in after] == before
-        assert [row[7:] for row in after] == [('', ''), ('', '')]
+        assert [row[7:] for row in after] == [('', '', ''), ('', '', '')]
         assert [tuple(row) for row in db.execute('SELECT * FROM synthetic_peer')] == [('untouched', 'synthetic payload')]
     assert registry.list() == raw_registry
     assert [(row['id'], row['start_date'], row['end_date']) for row in directory.list()] == [(first['id'], '', '')]

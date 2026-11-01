@@ -63,7 +63,8 @@ def test_people_response_shares_export_reads_and_rechecks_references(
     exports.mkdir(exist_ok=True)
     document = exports / 'synthetic.json'
     document.write_text(json.dumps({'project_id': project, 'person_id': people[0]['id']}), encoding='utf-8')
-    expected = {'project_id': project, 'people': domain.list(project),
+    expected = {'project_id': project, 'main_person_id': '', 'project_revision': 0,
+                'people': domain.list(project),
                 'retired_people': domain.list(project, retired=True), 'summary': domain.summary(project)}
     read_text = Path.read_text
     reads: list[Path] = []

@@ -245,7 +245,9 @@ class IntakeQueue:
         return result
 
     def receive(self, name: str, payload: bytes, *, source: str = 'upload', project_id: str = '', batch: str = '',
-                reimbursement_person_id: str = '', expected_source: dict[str, Any] | None = None) -> dict[str, Any]:
+                reimbursement_person_id: str = '', expected_source: dict[str, Any] | None = None,
+                confirmed_fields: dict[str, str] | None = None, intake_note: str = '', captured_at: str = '',
+                device_upload: tuple[str, str] | None = None) -> dict[str, Any]:
         name = Path(name.replace('\\', '/')).name
         if not payload or len(payload) > MAX_BYTES:
             raise ValueError('附件须为20MB以内文件')
@@ -269,6 +271,13 @@ class IntakeQueue:
             assert_material_not_permanently_deleted(db, digest)
             from invoice_print_layout.reimbursement_people import validate_person
             person = validate_person(db, project_id, reimbursement_person_id)
+            if device_upload:
+                prior_upload = db.execute('SELECT entry_id,status FROM receipt_device_uploads WHERE device_id=? AND client_id=?',
+                                          device_upload).fetchone()
+                if prior_upload:
+                    prior_entry = json.loads(db.execute('SELECT data FROM intake_queue WHERE id=?',
+                                                       (prior_upload['entry_id'],)).fetchone()['data'])
+                    return {**prior_entry, 'duplicate': prior_upload['status'] == 'duplicate'}
             if expected_source is not None:
                 parent = db.execute('SELECT data FROM intake_queue WHERE id=?', (expected_source['id'],)).fetchone()
                 current_source = json.loads(parent['data']) if parent else {}
@@ -283,6 +292,8 @@ class IntakeQueue:
                 prior = json.loads(previous['data'])
                 if expected_source is not None:
                     self._record_batch_claim(db, expected_source, prior)
+                if device_upload:
+                    self._record_device_upload(db, device_upload, prior['id'], 'duplicate')
                 return {**prior, 'duplicate': True}
             attached = db.execute('SELECT item_id FROM attachments WHERE digest=?', (digest,)).fetchone()
             if not target.exists():
@@ -297,15 +308,35 @@ class IntakeQueue:
                     'status': 'duplicate' if attached else 'received', 'revision': 0,
                     'item_id': attached['item_id'] if attached else '', 'fields': {}, 'role': 'other',
                     'issues': [], 'text': '', 'result': '重复文件' if attached else '已保存，等待识别'}
-            if reimbursement_person_id:
+            if reimbursement_person_id or device_upload:
                 data.update(person)
+            if confirmed_fields is not None:
+                data.update(fields=dict(confirmed_fields), manual_fields=sorted(confirmed_fields),
+                            field_sources=dict.fromkeys(confirmed_fields, 'manual'))
+            if intake_note:
+                data['intake_note'] = intake_note
+            if captured_at:
+                data['captured_at'] = captured_at
             if expected_source is not None:
                 from invoice_print_layout.reimbursement_people import person_fields
                 data.update(person_fields(expected_source))
+                manual = {key: value for key, value in expected_source.get('fields', {}).items()
+                          if key in self._manual_keys(expected_source)}
+                if manual:
+                    data.update(fields=manual, manual_fields=sorted(manual), field_sources=dict.fromkeys(manual, 'manual'))
+                if expected_source.get('intake_note'):
+                    data['intake_note'] = expected_source['intake_note']
             db.execute('INSERT INTO intake_queue VALUES (?,?,?)', (data['id'], digest, json.dumps(data, ensure_ascii=False)))
+            if device_upload:
+                self._record_device_upload(db, device_upload, data['id'], 'duplicate' if attached else 'received')
             if expected_source is not None:
                 self._record_batch_claim(db, expected_source, data)
         return data
+
+    @staticmethod
+    def _record_device_upload(db: sqlite3.Connection, identity: tuple[str, str], entry_id: str, status: str) -> None:
+        db.execute('INSERT INTO receipt_device_uploads(device_id,client_id,entry_id,status,dispatch_state) VALUES (?,?,?,?,?)',
+                   (*identity, entry_id, status, 'pending' if status == 'received' else 'done'))
 
     @staticmethod
     def _record_batch_claim(db: sqlite3.Connection, source: dict[str, Any], target: dict[str, Any]) -> None:

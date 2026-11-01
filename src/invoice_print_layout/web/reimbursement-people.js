@@ -38,7 +38,7 @@
     const seen = new Set();
     const people = (result.people || []).filter(person => person.id && person.label && person.label !== '未指定' && (!person.state || person.state === 'active') && (!person.project_id || person.project_id === projectId) && !seen.has(person.id) && seen.add(person.id));
     const retiredPeople = (result.retired_people || []).filter(person => person.id && person.state === 'retired' && (!person.project_id || person.project_id === projectId));
-    cache = {projectId, people, retiredPeople, summary: result.summary || null};
+    cache = {projectId, people, retiredPeople, summary: result.summary || null, mainPersonId: result.main_person_id || '', projectRevision: result.project_revision};
     document.dispatchEvent(new CustomEvent('reimbursement-people-changed', {detail: {projectId, people}}));
     const button = $('reimbursementPeople');
     if (button) {button.hidden = false; button.disabled = false;}
@@ -194,6 +194,25 @@
       } finally {busy = false; if (form.isConnected) {input.disabled = committed; update();}}
     };
   }
+  async function setMainPerson(person, button, onChanged) {
+    const projectId = project(), mainId = cache.mainPersonId, expectedRevision = cache.projectRevision;
+    if (button.disabled) return;
+    const target = button.closest('th'), errorTarget = target.querySelector('[data-main-person-error]');
+    button.disabled = true; errorTarget.hidden = true;
+    let committed = false, expired = false;
+    try {
+      const personId = mainId === person.id ? '' : person.id;
+      if (projectId !== project()) throw Error('项目已变化，请刷新人员金额。');
+      const result = await api('reimbursement-people/main-person', {project_id: projectId, person_id: personId, expected_revision: expectedRevision, ...(personId ? {expected_version: person.version} : {})});
+      committed = true;
+      if (result.project_id !== projectId || result.main_person_id !== personId) throw Error('主负责人结果无法确认，请刷新人员金额。');
+      await onChanged(); notify(result.message || '主负责人已保存。');
+    } catch (error) {
+      expired = error.status === 409 || error.status === 403 || /版本|变化|项目/.test(error.message);
+      errorTarget.textContent = committed ? '主负责人已保存；刷新失败，请点击刷新金额。' : error.message;
+      errorTarget.hidden = false;
+    } finally {if (button.isConnected) button.disabled = committed || expired;}
+  }
   const allocationStage = item => ['submitted', 'reimbursed'].includes(item.stage) ? 'packaged' : item.ready ? 'ready' : 'pending';
   const allocationLabels = {all: '登记费用', pending: '待核对', ready: '可提交', packaged: '已制包'};
   function allocationDetails(data, projectId, personId, scope) {
@@ -271,8 +290,9 @@
         closeNamePopup?.();
         content.innerHTML = `<p>本项目统一使用同一张公司报销表。这里按费用归属人记录金额，供统一结算时核对。点击姓名直接编辑并保存，或从姓名下拉选择已有人员归并；点击笔数或金额查看对应费用明细。</p><div class="reimbursement-summary-total"><strong>登记合计 ¥ ${money(summary.total_cents || 0)}</strong><span>${summary.expense_count || 0} 笔费用</span></div><div class="reimbursement-summary-table"><table><thead><tr><th>费用归属人</th><th>笔数</th><th>登记金额</th><th>待核对</th><th>可提交</th><th>已制包</th></tr></thead><tbody>${rows.map(row => {
           const person = cache.people.find(value => value.id === row.person_id);
-          return `<tr data-person-row="${esc(row.person_id || '')}"><th>${person ? `<form data-inline-person="${esc(person.id)}" class="reimbursement-person-name" novalidate><div class="reimbursement-name-combo"><input name="label" role="combobox" aria-label="修改或选择 ${esc(person.label)} 姓名" aria-autocomplete="list" aria-haspopup="listbox" aria-expanded="false" aria-controls="person-name-list-${esc(person.id)}" value="${esc(person.label)}" maxlength="100" autocomplete="off" ${person.version ? '' : 'disabled'}><button type="button" data-name-toggle tabindex="-1" aria-label="显示全部人员" ${person.version ? '' : 'disabled'}><svg width="12" height="12" viewBox="0 0 12 12" aria-hidden="true" focusable="false"><path d="m3 4.5 3 3 3-3" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg></button><ul id="person-name-list-${esc(person.id)}" role="listbox" aria-label="本项目已有人员" hidden></ul></div><p data-name-hint class="reimbursement-person-message" hidden></p><button type="submit" hidden>保存</button><p data-error role="alert" hidden></p></form>${person.can_retire === true ? `<details class="reimbursement-name-menu"><summary aria-label="${esc(person.label)} 姓名菜单">⋯</summary><button type="button" data-retire-person="${esc(person.id)}">移除空人员</button></details>` : ''}` : esc(row.label || '未指定')}</th><td>${summaryNumber(row, 'all', true)}</td><td>${summaryNumber(row, 'all')}</td><td>${summaryNumber(row, 'pending')}</td><td>${summaryNumber(row, 'ready')}</td><td>${summaryNumber(row, 'packaged')}</td></tr>`;
+          return `<tr data-person-row="${esc(row.person_id || '')}"><th>${person ? `<form data-inline-person="${esc(person.id)}" class="reimbursement-person-name" novalidate><div class="reimbursement-name-combo"><input name="label" role="combobox" aria-label="修改或选择 ${esc(person.label)} 姓名" aria-autocomplete="list" aria-haspopup="listbox" aria-expanded="false" aria-controls="person-name-list-${esc(person.id)}" value="${esc(person.label)}" maxlength="100" autocomplete="off" ${person.version ? '' : 'disabled'}><button type="button" data-name-toggle tabindex="-1" aria-label="显示全部人员" ${person.version ? '' : 'disabled'}><svg width="12" height="12" viewBox="0 0 12 12" aria-hidden="true" focusable="false"><path d="m3 4.5 3 3 3-3" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg></button><ul id="person-name-list-${esc(person.id)}" role="listbox" aria-label="本项目已有人员" hidden></ul></div><p data-name-hint class="reimbursement-person-message" hidden></p><button type="submit" hidden>保存</button><p data-error role="alert" hidden></p></form>${cache.mainPersonId === person.id ? '<small class="reimbursement-person-label">主负责人</small>' : ''}<button type="button" data-main-person="${esc(person.id)}" ${person.version && Number.isInteger(cache.projectRevision) ? '' : 'disabled'}>${cache.mainPersonId === person.id ? '取消主负责人' : '设为主负责人'}</button><p data-main-person-error class="reimbursement-person-message" role="alert" hidden></p>${person.can_retire === true ? `<details class="reimbursement-name-menu"><summary aria-label="${esc(person.label)} 姓名菜单">⋯</summary><button type="button" data-retire-person="${esc(person.id)}">移除空人员</button></details>` : ''}` : esc(row.label || '未指定')}</th><td>${summaryNumber(row, 'all', true)}</td><td>${summaryNumber(row, 'all')}</td><td>${summaryNumber(row, 'pending')}</td><td>${summaryNumber(row, 'ready')}</td><td>${summaryNumber(row, 'packaged')}</td></tr>`;
         }).join('') || '<tr><td colspan="6">尚未登记费用。</td></tr>'}</tbody></table></div><p class="muted">同一笔费用只计算一次，发票与付款截图不会重复计费。未创建的材料不计入金额；已制包表示报销文件已生成，尚不代表公司款项到账。</p>${cache.retiredPeople.length ? `<details class="reimbursement-retired"><summary>已移除人员 · ${cache.retiredPeople.length} 人</summary>${cache.retiredPeople.map(person => `<div><span>${esc(person.label)}</span>${person.can_restore && person.version ? `<button type="button" data-restore-person="${esc(person.id)}">恢复到名单</button>` : ''}</div>`).join('')}</details>` : ''}<div class="actions"><button type="button" data-new-person>选择或新增人员</button><button type="button" data-refresh-people>刷新金额</button></div>`;
+        for (const button of content.querySelectorAll('[data-main-person]')) button.onclick = () => setMainPerson(cache.people.find(person => person.id === button.dataset.mainPerson), button, draw);
         content.querySelector('[data-new-person]').onclick = () => newPerson({projectId, onCreated: draw});
         content.querySelector('[data-refresh-people]').onclick = draw;
         for (const button of content.querySelectorAll('[data-person-details]')) button.onclick = () => {

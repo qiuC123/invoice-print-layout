@@ -26,6 +26,7 @@ def project_views(store: ExpenseStore, *, db: sqlite3.Connection | None = None) 
              'project_revision': meta.get(project['id'], {}).get('revision', 0),
              'start_date': meta.get(project['id'], {}).get('start_date', ''),
              'end_date': meta.get(project['id'], {}).get('end_date', ''),
+             'main_person_id': meta.get(project['id'], {}).get('main_person_id', ''),
              'reimbursement_status': labels.get(project['id'], {}).get('status', 'unreimbursed'),
              'reimbursement_revision': labels.get(project['id'], {}).get('revision', 0)}
             for project in projects if not meta.get(project['id'], {}).get('permanently_deleted')]
@@ -120,10 +121,10 @@ class ExpenseProjects:
                        'permanently_deleted INTEGER NOT NULL DEFAULT 0, updated_at TEXT NOT NULL, '
                        'deleted_data TEXT NOT NULL DEFAULT \'{}\')')
             columns = {row['name'] for row in db.execute('PRAGMA table_info(expense_project_metadata)')}
-            if not {'start_date', 'end_date'}.issubset(columns):
+            if not {'start_date', 'end_date', 'main_person_id'}.issubset(columns):
                 db.execute('BEGIN IMMEDIATE')
                 columns = {row['name'] for row in db.execute('PRAGMA table_info(expense_project_metadata)')}
-                for column in ('start_date', 'end_date'):
+                for column in ('start_date', 'end_date', 'main_person_id'):
                     if column not in columns:
                         db.execute(f"ALTER TABLE expense_project_metadata ADD COLUMN {column} TEXT NOT NULL DEFAULT ''")
             db.execute('CREATE TABLE IF NOT EXISTS expense_project_deleted_materials ('
@@ -188,15 +189,15 @@ class ExpenseProjects:
     def _write_meta(db: sqlite3.Connection, project: dict[str, Any], *, deleted: bool = False,
                     deleted_data: dict[str, Any] | None = None) -> None:
         db.execute('INSERT INTO expense_project_metadata '
-                   '(project_id,display_name,pinned,revision,permanently_deleted,updated_at,deleted_data,start_date,end_date) '
-                   'VALUES (?,?,?,?,?,?,?,?,?) '
+                   '(project_id,display_name,pinned,revision,permanently_deleted,updated_at,deleted_data,start_date,end_date,main_person_id) '
+                   'VALUES (?,?,?,?,?,?,?,?,?,?) '
                    'ON CONFLICT(project_id) DO UPDATE SET display_name=excluded.display_name,pinned=excluded.pinned,'
                    'revision=excluded.revision,permanently_deleted=excluded.permanently_deleted,'
                    'updated_at=excluded.updated_at,deleted_data=excluded.deleted_data,'
-                   'start_date=excluded.start_date,end_date=excluded.end_date',
+                   'start_date=excluded.start_date,end_date=excluded.end_date,main_person_id=excluded.main_person_id',
                    (project['id'], project['name'], int(project['pinned']), project['project_revision'] + 1,
                     int(deleted), now(), json.dumps(deleted_data or {}, ensure_ascii=False),
-                    project['start_date'], project['end_date']))
+                    project['start_date'], project['end_date'], project.get('main_person_id', '')))
 
     def set_period(self, project_id: str, start_date: str, end_date: str, expected_revision: Any) -> dict[str, Any]:
         self._validate_period(start_date, end_date)

@@ -39,6 +39,49 @@ Candidate = tuple[tuple[str, ...], tuple[str, ...]]
 TRANSACTION_FIELDS = ('shopping_platform', 'shop_name', 'payment_channel')
 
 
+def _mail_subject_note(subject: Any) -> str:
+    if not isinstance(subject, str):
+        return ''
+    return re.sub(r'^(?:(?:转发|轉發|回复|回覆|答复|答覆|fwd|fw|re)\s*[:：]\s*)+',
+                  '', subject.strip(), flags=re.IGNORECASE).strip()
+
+
+def _mail_intake_notes(db: sqlite3.Connection, entries: list[dict[str, Any]]) -> dict[str, str]:
+    if not any(entry.get('source') in {'mail_agent', 'hotel_qr'} for entry in entries):
+        return {}
+    by_id = {entry['id']: entry for entry in entries}
+    notes: dict[str, str] = {}
+    if db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='mail_agent_messages'").fetchone():
+        for row in db.execute('SELECT id,data FROM mail_agent_messages'):
+            try:
+                message = json.loads(row['data'])
+            except (ValueError, TypeError):
+                continue
+            if not isinstance(message, dict) or not isinstance(message.get('material_ids'), list):
+                continue
+            note = _mail_subject_note(message.get('subject'))
+            for key in message['material_ids']:
+                entry = by_id.get(key) if isinstance(key, str) else None
+                if (entry and entry.get('source') in {'mail_agent', 'hotel_qr'} and entry.get('batch') == row['id'] and
+                        entry.get('project_id') == message.get('project_id') and note):
+                    notes[key] = note
+    for entry in entries:
+        if entry.get('source') != 'hotel_qr' or entry['id'] in notes:
+            continue
+        parents = entry.get('source_entry_ids') or []
+        parent_ids = [entry.get('source_entry_id'), *(parents if isinstance(parents, list) else [])]
+        subjects = set()
+        for key in parent_ids:
+            parent = by_id.get(key) if isinstance(key, str) else None
+            if parent and parent.get('source') == 'mail' and parent.get('project_id', '') in {'', entry.get('project_id')}:
+                note = _mail_subject_note((parent.get('mail_context') or {}).get('subject'))
+                if note:
+                    subjects.add(note)
+        if len(subjects) == 1:
+            notes[entry['id']] = subjects.pop()
+    return notes
+
+
 def _transaction_fields(record: dict[str, Any]) -> dict[str, str]:
     fields = record.get('fields') or record
     parsed = extract_transaction_evidence(str(record.get('text') or ''), str(record.get('role') or ''), fields)
@@ -543,7 +586,11 @@ class MaterialMatching:
             **visible_fields, 'title': visible_fields.get('title') or Path(entry['name']).stem})
         return {**person_fields(entry), 'key': 'q:' + entry['id'], 'id': entry['id'], 'name': entry['name'],
                 'kind': 'qr_claim' if entry.get('qr_status') == 'manual' else role,
-                'fields': visible_fields, 'qr_status': entry.get('qr_status', ''), 'qr_check': entry.get('qr_check'),
+                'fields': visible_fields,
+                'intake_note': entry.get('intake_note') or (
+                    _mail_subject_note((entry.get('mail_context') or {}).get('subject'))
+                    if entry.get('source') == 'mail' else ''),
+                'qr_status': entry.get('qr_status', ''), 'qr_check': entry.get('qr_check'),
                 'company_check': entry.get('company_check'),
                 'claim_message': str(entry.get('result', '')) if entry.get('qr_status') == 'manual' else '',
                 'ai_analysis': {name: value for name, value in (entry.get('ai_analysis') or {}).items()
@@ -674,11 +721,13 @@ class MaterialMatching:
             attached = {row['digest'] for row in db.execute('SELECT digest FROM attachments UNION SELECT digest FROM automatic_ride_files')}
             entries = [_data(row['data']) for row in db.execute('SELECT data FROM intake_queue ORDER BY rowid DESC')]
             groups = [_data(row['data']) for row in db.execute('SELECT data FROM material_matches ORDER BY rowid DESC')]
+            mail_notes = _mail_intake_notes(db, entries)
         for entry in entries:
             if ((project_id and entry.get('project_id', '') not in {'', project_id}) or entry.get('status') not in {'received', 'review', 'unused', 'archived', 'deleted'}
                     or entry.get('duplicate_of') or entry.get('item_id') or entry.get('qr_status') == 'converted' or entry['digest'] in attached):
                 continue
             card = self._queue_card(entry)
+            card['intake_note'] = card['intake_note'] or mail_notes.get(entry['id'], '')
             if entry.get('status') == 'deleted':
                 result['deleted'].append(card)
                 continue

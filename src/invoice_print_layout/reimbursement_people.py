@@ -141,7 +141,9 @@ class ReimbursementPeople:
     """Explicit material/expense assignments and conserved per-person totals."""
 
     def __init__(self, store: ExpenseStore):
+        from invoice_print_layout.expense_projects import ExpenseProjects
         self.store = store
+        self.projects = ExpenseProjects(store)
         with store.connect() as db:
             db.execute('''CREATE TABLE IF NOT EXISTS reimbursement_people (
                 id TEXT PRIMARY KEY, project_id TEXT NOT NULL, label TEXT NOT NULL,
@@ -233,14 +235,44 @@ class ReimbursementPeople:
         """Reuse reference scans within this response, never across later requests."""
         with self.store.connect() as db:
             project = self._project(db, project_id)
+            metadata = self.projects._active(db, project)
             rows = db.execute("SELECT * FROM reimbursement_people WHERE project_id=? AND state IN ('active','retired') ORDER BY rowid",
                               (project,)).fetchall()
             references = self._reference_sources(db) if rows else {}
             views = [self._view(db, dict(row), references=references) for row in rows]
         people = [person for person in views if person['state'] == 'active']
-        return {'project_id': project, 'people': people,
+        return {'project_id': project, 'main_person_id': metadata['main_person_id'],
+                'project_revision': metadata['project_revision'], 'people': people,
                 'retired_people': [person for person in views if person['state'] == 'retired'],
                 'summary': self._summary(project, people)}
+
+    def set_main_person(self, project_id: Any, person_id: Any, expected_revision: Any,
+                        expected_version: Any = '') -> dict[str, Any]:
+        with self.store.connect() as db:
+            db.execute('BEGIN IMMEDIATE')
+            project = self._project(db, project_id)
+            metadata = self.projects._active(db, project)
+            self.projects._check_revision(metadata, expected_revision)
+            if not isinstance(person_id, str):
+                raise ValueError('请选择有效主负责人，或取消设置')
+            if person_id:
+                person = self._management_person(db, project, person_id, expected_version)
+                if person['state'] != 'active':
+                    raise ValueError('请选择当前项目中在用的主负责人')
+            if metadata['main_person_id'] != person_id:
+                metadata['main_person_id'] = person_id
+                self.projects._write_meta(db, metadata)
+            saved = self.projects._active(db, project)
+        return {'project_id': project, 'main_person_id': saved['main_person_id'],
+                'project_revision': saved['project_revision'],
+                'message': '主负责人已设置。' if person_id else '主负责人已取消。'}
+
+    def _follow_main_person(self, db: sqlite3.Connection, project_id: str,
+                            source_ids: set[str], target_id: str) -> None:
+        metadata = self.projects._active(db, project_id)
+        if metadata['main_person_id'] in source_ids:
+            metadata['main_person_id'] = target_id
+            self.projects._write_meta(db, metadata)
 
     def create(self, project_id: Any, label: Any, external_sender_id: Any = '', remark: Any = '') -> dict[str, Any]:
         if any(not isinstance(value, str) for value in (label, external_sender_id, remark)):
@@ -322,6 +354,7 @@ class ReimbursementPeople:
             if source['id'] == target['id'] or source['state'] != 'active' or target['state'] != 'active':
                 raise ValueError('请选择当前项目中另一名有效人员，不能归并自己或已停用人员')
             source_ids = self._source_ids(db, project, source['id'])
+            self._follow_main_person(db, project, source_ids, target['id'])
             aliases = list(dict.fromkeys([*json.loads(target['aliases']), *json.loads(source['aliases']),
                                          source['label'], _display_label(source)]))
             db.execute('UPDATE reimbursement_people SET aliases=?,revision=revision+1 WHERE id=?',
@@ -346,6 +379,8 @@ class ReimbursementPeople:
                     raise ValueError('仅可恢复已停用人员')
             elif not view['can_retire']:
                 raise ValueError('人员已有费用或材料，请选择已有人员归并；仅空人员可移除')
+            if not restore:
+                self._follow_main_person(db, project, {person_id}, '')
             db.execute('UPDATE reimbursement_people SET state=?,revision=revision+1 WHERE id=?',
                        ('active' if restore else 'retired', person_id))
             result = self._view(db, dict(db.execute('SELECT * FROM reimbursement_people WHERE id=?', (person_id,)).fetchone()))
