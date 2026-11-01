@@ -30,6 +30,7 @@ MAX_BODY = 29 * 1024 * 1024
 PAIR_SECONDS = 600
 SOCKET_TIMEOUT = 10.0
 DISPATCH_RETRY_SECONDS = 15
+ADDRESS_REFRESH_SECONDS = 300
 
 
 class DeviceError(ValueError):
@@ -64,6 +65,11 @@ class ReceiptDevices:
         self.error = ''
         self.pairing_expires_at = 0.0
         self.listener_dirty = False
+        self.confirmation_due: float | None = None
+        self.addresses: tuple[str, ...] = ()
+        self.address_lock = threading.Lock()
+        self.address_worker: threading.Thread | None = None
+        self.address_refresh_at = 0.0
         with self.store.connect() as db:
             db.execute('''CREATE TABLE IF NOT EXISTS receipt_devices (
                 id TEXT PRIMARY KEY, name TEXT NOT NULL, key_hash TEXT UNIQUE NOT NULL,
@@ -76,6 +82,11 @@ class ReceiptDevices:
                 id INTEGER PRIMARY KEY CHECK(id=1), code TEXT NOT NULL,
                 expires_at REAL NOT NULL, failures INTEGER NOT NULL)''')
             db.execute("INSERT OR IGNORE INTO receipt_device_pairing VALUES (1,'',0,0)")
+            columns = {row['name'] for row in db.execute('PRAGMA table_info(receipt_devices)')}
+            for column, definition in (('confirmed', 'INTEGER NOT NULL DEFAULT 1'),
+                                       ('confirmation_expires_at', 'REAL NOT NULL DEFAULT 0')):
+                if column not in columns:
+                    db.execute(f'ALTER TABLE receipt_devices ADD COLUMN {column} {definition}')
             columns = {row['name'] for row in db.execute('PRAGMA table_info(receipt_device_uploads)')}
             for column, definition in (('qr_checked', 'INTEGER NOT NULL DEFAULT 0'),
                                        ('retry_at', 'REAL NOT NULL DEFAULT 0')):
@@ -83,17 +94,36 @@ class ReceiptDevices:
                     db.execute(f'ALTER TABLE receipt_device_uploads ADD COLUMN {column} {definition}')
             self.dispatch_due: float | None = db.execute(
                 "SELECT MIN(retry_at) FROM receipt_device_uploads WHERE dispatch_state='pending'").fetchone()[0]
+        self.refresh_addresses()
 
-    def urls(self) -> list[str]:
+    def refresh_addresses(self, *, force: bool = False) -> None:
+        with self.address_lock:
+            if self.closed.is_set() or self.address_worker and self.address_worker.is_alive():
+                return
+            if not force and time.time() < self.address_refresh_at:
+                return
+            self.address_refresh_at = time.time() + ADDRESS_REFRESH_SECONDS
+            self.address_worker = threading.Thread(target=self._refresh_addresses, name='receipt-addresses', daemon=True)
+            self.address_worker.start()
+
+    def _refresh_addresses(self) -> None:
+        try:
+            addresses = tuple(row['address'] for row in phone_link.addresses() if phone_link.lan_address(row['address']))
+        except OSError:
+            return  # Keep the last usable addresses until the next background refresh.
+        with self.address_lock:
+            self.addresses = addresses
+
+    def urls(self, local_address: str = '') -> list[str]:
         server = self.server
         port = server.server_port if server else self.port
-        return [f'http://{row["address"]}:{port}' for row in phone_link.addresses()
-                if phone_link.lan_address(row['address'])]
+        addresses = self.addresses or ((local_address,) if allowed_source(local_address) else ())
+        return [f'http://{address}:{port}' for address in addresses]
 
     def status(self) -> dict[str, Any]:
         with self.lock, self.store.connect() as db:
             devices = [dict(row) for row in db.execute(
-                'SELECT id,name,paired_at,last_seen_at,revoked_at FROM receipt_devices ORDER BY rowid')]
+                'SELECT id,name,paired_at,last_seen_at,revoked_at,confirmed FROM receipt_devices ORDER BY rowid')]
             attention = db.execute("SELECT COUNT(*) FROM receipt_device_uploads WHERE dispatch_state='attention'").fetchone()[0]
             pairing = db.execute('SELECT * FROM receipt_device_pairing WHERE id=1').fetchone()
             server = self.server
@@ -120,7 +150,7 @@ class ReceiptDevices:
         self.sync_listener()
         return self.status()
 
-    def pair(self, body: dict[str, Any]) -> dict[str, Any]:
+    def pair(self, body: dict[str, Any], local_address: str = '') -> dict[str, Any]:
         name, code = body.get('device_name'), body.get('code')
         if not isinstance(name, str) or not name.strip() or len(name) > 60:
             raise DeviceError('请填写60字以内的手机名称')
@@ -131,10 +161,14 @@ class ReceiptDevices:
                      and secrets.compare_digest(code, pairing['code']))
             if valid:
                 key, device_id = secrets.token_urlsafe(32), uuid.uuid4().hex
-                db.execute('INSERT INTO receipt_devices VALUES (?,?,?,?,?,?)',
-                           (device_id, name.strip(), hashlib.sha256(key.encode()).hexdigest(), now(), now(), ''))
+                expires = time.time() + PAIR_SECONDS
+                db.execute('''INSERT INTO receipt_devices
+                    (id,name,key_hash,paired_at,last_seen_at,revoked_at,confirmed,confirmation_expires_at)
+                    VALUES (?,?,?,?,?,?,0,?)''',
+                           (device_id, name.strip(), hashlib.sha256(key.encode()).hexdigest(), now(), '', '', expires))
                 db.execute("UPDATE receipt_device_pairing SET code='',expires_at=0 WHERE id=1")
-                self.listener_dirty = True
+                self.confirmation_due = min(self.confirmation_due or expires, expires)
+                # Leave the current pairing window open for the first authenticated request.
             else:
                 db.execute('UPDATE receipt_device_pairing SET failures=failures+1 WHERE id=1')
                 if pairing['failures'] >= 4:
@@ -144,17 +178,22 @@ class ReceiptDevices:
                     self.pairing_expires_at = time.time()
         if not valid:
             raise DeviceError('配对码错误、已过期或已使用，请在电脑重新配对', 'bad_code')
-        return {'device_id': device_id, 'device_key': key, 'server_name': socket.gethostname(), 'urls': self.urls()}
+        return {'device_id': device_id, 'device_key': key, 'server_name': socket.gethostname(), 'urls': self.urls(local_address)}
 
     def authenticate(self, authorization: str) -> str:
         if not authorization.startswith('Bearer ') or not authorization[7:]:
             raise DeviceError('手机尚未配对或已撤销，请重新配对', 'unpaired', 401)
-        with self.store.connect() as db:
-            row = db.execute("SELECT id FROM receipt_devices WHERE key_hash=? AND revoked_at=''",
-                             (hashlib.sha256(authorization[7:].encode()).hexdigest(),)).fetchone()
+        with self.lock, self.store.connect() as db:
+            db.execute('BEGIN IMMEDIATE')
+            row = db.execute("""SELECT id,confirmed FROM receipt_devices WHERE key_hash=? AND revoked_at=''
+                AND (confirmed=1 OR confirmation_expires_at>?)""",
+                             (hashlib.sha256(authorization[7:].encode()).hexdigest(), time.time())).fetchone()
             if not row:
                 raise DeviceError('手机尚未配对或已撤销，请重新配对', 'unpaired', 401)
-            db.execute('UPDATE receipt_devices SET last_seen_at=? WHERE id=?', (now(), row['id']))
+            db.execute('UPDATE receipt_devices SET last_seen_at=?,confirmed=1,confirmation_expires_at=0 WHERE id=?',
+                       (now(), row['id']))
+            if not row['confirmed']:
+                self.listener_dirty = True
             return str(row['id'])
 
     def revoke(self, device_id: Any) -> dict[str, Any]:
@@ -167,10 +206,10 @@ class ReceiptDevices:
         self.sync_listener()
         return self.status()
 
-    def catalog(self) -> dict[str, Any]:
+    def catalog(self, local_address: str = '') -> dict[str, Any]:
         projects = sorted((p for p in self.projects.list() if p['reimbursement_status'] == 'unreimbursed'),
                           key=lambda p: not p['pinned'])
-        return {'server_time': datetime.now().astimezone().isoformat(timespec='seconds'), 'urls': self.urls(),
+        return {'server_time': datetime.now().astimezone().isoformat(timespec='seconds'), 'urls': self.urls(local_address),
                 'categories': list(CATEGORIES), 'projects': [
                     {**{key: p.get(key, '') for key in ('id', 'name', 'start_date', 'end_date', 'main_person_id')},
                      'people': [{'id': person['id'], 'label': person['label']} for person in self.people.list(p['id'])]}
@@ -243,16 +282,20 @@ class ReceiptDevices:
     def sync_listener(self) -> None:
         with self.lifecycle_lock:
             with self.lock, self.store.connect() as db:
+                db.execute('DELETE FROM receipt_devices WHERE confirmed=0 AND confirmation_expires_at<=?', (time.time(),))
+                self.confirmation_due = db.execute(
+                    'SELECT MIN(confirmation_expires_at) FROM receipt_devices WHERE confirmed=0').fetchone()[0]
                 pairing = db.execute('SELECT expires_at FROM receipt_device_pairing WHERE id=1').fetchone()
                 self.listener_dirty = False
                 self.pairing_expires_at = pairing['expires_at'] if pairing['expires_at'] > time.time() else 0.0
                 wanted = not self.closed.is_set() and (pairing['expires_at'] > time.time() or bool(db.execute(
-                    "SELECT 1 FROM receipt_devices WHERE revoked_at='' LIMIT 1").fetchone()))
+                    "SELECT 1 FROM receipt_devices WHERE confirmed=1 OR revoked_at!='' LIMIT 1").fetchone()))
             if wanted and self.server is None:
                 try:
                     self.server = DeviceServer(('0.0.0.0', self.port), self._handler())
                     self.worker = threading.Thread(target=self.server.serve_forever, name='receipt-devices', daemon=True)
                     self.worker.start()
+                    self.refresh_addresses(force=True)
                     self.error = ''
                 except OSError:
                     self.error = f'收票 App 端口 {self.port} 无法监听，请检查端口占用后重新配对或重启'
@@ -267,8 +310,11 @@ class ReceiptDevices:
     def tick(self) -> None:
         if self.closed.is_set():
             return
-        if self.listener_dirty or self.pairing_expires_at and self.pairing_expires_at <= time.time():
+        if (self.listener_dirty or self.pairing_expires_at and self.pairing_expires_at <= time.time()
+                or self.confirmation_due is not None and self.confirmation_due <= time.time()):
             self.sync_listener()
+        if self.server is not None:  # Enumerating adapters costs ~5 s of PowerShell; skip while closed.
+            self.refresh_addresses()
         self.kick_dispatch()
 
     def kick_dispatch(self) -> None:
@@ -353,6 +399,8 @@ class ReceiptDevices:
         self.sync_listener()
         if self.dispatch_worker:
             self.dispatch_worker.join()
+        if self.address_worker:
+            self.address_worker.join()
 
     def _handler(self) -> type[BaseHTTPRequestHandler]:
         controller = self
@@ -399,7 +447,7 @@ class ReceiptDevices:
                     path = urlparse(self.path).path
                     pairing = path == '/device/v1/pair' and self.command == 'POST'
                     if self.command == 'GET' and path == '/device/v1/catalog':
-                        self.respond(controller.catalog())
+                        self.respond(controller.catalog(self.connection.getsockname()[0]))
                         return
                     if self.command != 'POST' or path not in {'/device/v1/pair', '/device/v1/receipts'}:
                         raise DeviceError('接口不存在', 'not_found', 404)
@@ -417,7 +465,8 @@ class ReceiptDevices:
                     body = json.loads(raw)
                     if not isinstance(body, dict):
                         raise DeviceError('请求须为 JSON 对象')
-                    self.respond(controller.pair(body) if pairing else controller.upload(self.device_id, body))
+                    self.respond(controller.pair(body, self.connection.getsockname()[0]) if pairing
+                                 else controller.upload(self.device_id, body))
                 except DeviceError as exc:
                     if not body_read:
                         phone_link.drain_rejected_body(self)

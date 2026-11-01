@@ -1,0 +1,5 @@
+gradle.afterProject { p ->
+    if (p.path == ':app') {
+        p.android.sourceSets.androidTest.java.srcDir(new File(p.rootDir, 'tests/receipt-e2e'))
+    }
+}

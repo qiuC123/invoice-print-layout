@@ -34,7 +34,7 @@ async function run(pw) {
     }
     if (url.pathname.endsWith('/devices/revoke')) {
       assert.deepEqual(body, {device_id: 'synthetic-phone'});
-      app = {...app, enabled: false, devices: app.devices.map(device => ({...device, revoked_at: '2026-11-01T12:40:00+08:00'}))};
+      app = {...app, enabled: true, devices: app.devices.map(device => ({...device, revoked_at: '2026-11-01T12:40:00+08:00'}))};
       return json(app);
     }
     if (url.pathname.endsWith('/start')) {
@@ -74,8 +74,11 @@ async function run(pw) {
     await screenshot('synthetic-app-pairing'); cases.push('recoverable pairing failure, leading-zero 8 digit code, QR, 10 minute expiry, listener and LAN addresses');
 
     app = {...app, qr: '', code: '', expires_in: 0, devices: [
-      {id: 'synthetic-phone', name: '合成手机 <demo>', paired_at: '2026-11-01T12:00:00+08:00', last_seen_at: '2026-11-01T12:30:00+08:00', revoked_at: ''},
+      {id: 'synthetic-phone', name: '合成手机 <demo>', confirmed: 0, paired_at: '2026-11-01T12:00:00+08:00', last_seen_at: '2026-11-01T12:30:00+08:00', revoked_at: ''},
       {id: 'old-phone', name: '已撤销合成手机', paired_at: '2026-11-01T11:00:00+08:00', last_seen_at: '', revoked_at: '2026-11-01T11:30:00+08:00'}]};
+    await appButton('刷新设备状态').click();
+    await section().getByText('等待手机确认', {exact: false}).waitFor();
+    app.devices[0].confirmed = 1;
     await appButton('刷新设备状态').click();
     await section().getByText('合成手机 <demo> · 配对：2026-11-01T12:00:00+08:00 · 最近连接：2026-11-01T12:30:00+08:00', {exact: false}).waitFor();
     assert.equal(await section().getByText('已撤销合成手机', {exact: false}).count(), 0);
@@ -94,7 +97,7 @@ async function run(pw) {
     await panel().getByRole('alert').filter({hasText: '合成连接失败，请重试'}).waitFor();
     assert.equal(await section().getByRole('button', {name: '撤销 合成手机 <demo>', exact: true}).isEnabled(), true);
     await section().getByRole('button', {name: '撤销 合成手机 <demo>', exact: true}).click();
-    await section().getByText('尚未监听', {exact: true}).waitFor();
+    await section().getByText('正在监听 · 端口 8769', {exact: true}).waitFor();
     await section().getByText('暂无已配对设备。', {exact: true}).waitFor();
     assert.equal(await section().locator('[data-app-revoke]').count(), 0);
     await panel().getByLabel('连接方式', {exact: true}).selectOption('remote');
@@ -103,18 +106,18 @@ async function run(pw) {
     assert.equal(await section().locator('[data-app-revoke]').count(), 0);
     await section().getByText('暂无已配对设备。', {exact: true}).waitFor();
     cases.push('browser LAN/remote mode switches preserve current App pairing code and never restore a revoked device');
-    cases.push('revoke failure can retry; last paired device disappears and listener closed state displayed');
+    cases.push('revoke failure can retry; pending confirmation visible; revoked last device hidden while listener stays open');
 
     await panel().getByRole('button', {name: '开启手机连接', exact: true}).click();
     await panel().getByText('同一 Wi-Fi 连接已开启 · 已配对 0 台', {exact: true}).waitFor();
     assert.equal(await panel().getByLabel('手机配对链接', {exact: true}).inputValue(), phone.pair_url);
-    await section().getByText('尚未监听', {exact: true}).waitFor();
+    await section().getByText('正在监听 · 端口 8769', {exact: true}).waitFor();
     await panel().getByRole('button', {name: '更新二维码', exact: true}).click();
     await page.waitForFunction(() => document.querySelector('[data-link]').value.endsWith('#synthetic-browser-rotated'));
     await panel().getByRole('button', {name: '关闭手机连接', exact: true}).click();
     await panel().getByRole('button', {name: '开启手机连接', exact: true}).waitFor();
-    await section().getByText('尚未监听', {exact: true}).waitFor();
-    app = {...app, error: '8769 端口已被占用'};
+    await section().getByText('正在监听 · 端口 8769', {exact: true}).waitFor();
+    app = {...app, enabled: false, error: '8769 端口已被占用'};
     await appButton('刷新设备状态').click();
     await section().getByText('尚未监听 · 8769 端口已被占用', {exact: true}).waitFor();
     await screenshot('synthetic-app-listener-error');

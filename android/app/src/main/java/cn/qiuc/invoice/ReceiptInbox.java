@@ -39,7 +39,9 @@ final class ReceiptInbox implements AutoCloseable {
         if(!b.getString("device_key").matches("[A-Za-z0-9_-]{43}"))throw new IOException("电脑返回的凭据无效");
         JSONArray addresses=urls(b.getJSONArray("urls"));
         commit(prefs.edit().putString("key",secrets.seal(b.getString("device_key"))).putString("device_id",b.getString("device_id")).putString("urls",addresses.toString()).putString("server_name",b.getString("server_name")).putBoolean("needs_pairing",false).remove("catalog").putString("last_connected",now()).putString("connection_error",""));
-        sync(false);return state();
+        try{if(!refreshCatalog(b.getString("device_key")))throw new IOException("目录认证失败");}
+        catch(Exception error){unpair();throw new IOException("配对未完成，请在电脑重新生成配对码",error);}
+        uploadPending(false,b.getString("device_key"));return state();
     }
     void unpair()throws IOException{commit(prefs.edit().remove("key").remove("device_id").remove("urls").remove("catalog").remove("server_name").remove("last_connected").remove("connection_error").remove("needs_pairing"));}
     static String now(){return LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss"));}
@@ -75,12 +77,19 @@ final class ReceiptInbox implements AutoCloseable {
         if(!prefs.contains("key")||prefs.getBoolean("needs_pairing",false))return;
         String key=secrets.unseal(prefs.getString("key",""));
         try{
-            Reply catalog=request(new JSONArray(prefs.getString("urls","[]")),"catalog",null,key);
-            if(catalog.status==401){unauthorized();return;}
-            if(catalog.status!=200)throw new IOException(catalog.body.optString("error","目录刷新失败"));
-            JSONObject data=catalog.body;data.getJSONArray("projects");data.getJSONArray("categories");
-            commit(prefs.edit().putString("catalog",data.toString()).putString("urls",urls(data.getJSONArray("urls")).toString()).putString("last_connected",now()).putString("connection_error",""));
+            if(!refreshCatalog(key))return;
         }catch(IOException error){commit(prefs.edit().putString("connection_error",safe(error)));}
+        uploadPending(force,key);
+    }
+    private boolean refreshCatalog(String key)throws Exception{
+        Reply catalog=request(new JSONArray(prefs.getString("urls","[]")),"catalog",null,key);
+        if(catalog.status==401){unauthorized();return false;}
+        if(catalog.status!=200)throw new IOException(catalog.body.optString("error","目录刷新失败"));
+        JSONObject data=catalog.body;data.getJSONArray("projects");data.getJSONArray("categories");
+        commit(prefs.edit().putString("catalog",data.toString()).putString("urls",urls(data.getJSONArray("urls")).toString()).putString("last_connected",now()).putString("connection_error",""));
+        return true;
+    }
+    private void uploadPending(boolean force,String key)throws Exception{
         JSONArray rows=store.list(false);
         for(int i=0;i<rows.length();i++){
             if(Thread.currentThread().isInterrupted())return;
@@ -102,11 +111,16 @@ final class ReceiptInbox implements AutoCloseable {
     private void unauthorized()throws IOException{commit(prefs.edit().putBoolean("needs_pairing",true).putString("connection_error","配对已失效，请重新配对电脑"));}
     static String safe(Exception e){String message=e.getMessage();return message==null?"连接未完成，请重试":message.substring(0,Math.min(message.length(),160));}
     private record Reply(int status,JSONObject body){}
+    static HttpURLConnection connection(String address,String route)throws IOException{
+        HttpURLConnection c=(HttpURLConnection)new URL(address+"/device/v1/"+route).openConnection(Proxy.NO_PROXY);
+        c.setInstanceFollowRedirects(false);c.setConnectTimeout(5000);c.setReadTimeout(route.equals("receipts")?60000:15000);
+        return c;
+    }
     private Reply request(JSONArray addresses,String route,JSONObject body,String key)throws Exception{
         IOException last=new IOException("连不上电脑，票据已留在手机");
         for(String address:strings(urls(addresses))){
-            HttpURLConnection c=(HttpURLConnection)new URL(address+"/device/v1/"+route).openConnection(Proxy.NO_PROXY);
-            c.setInstanceFollowRedirects(false);c.setConnectTimeout(1800);c.setReadTimeout(4000);c.setRequestMethod(body==null?"GET":"POST");c.setRequestProperty("Content-Type","application/json; charset=utf-8");if(!key.isEmpty())c.setRequestProperty("Authorization","Bearer "+key);
+            HttpURLConnection c=connection(address,route);
+            c.setRequestMethod(body==null?"GET":"POST");c.setRequestProperty("Content-Type","application/json; charset=utf-8");if(!key.isEmpty())c.setRequestProperty("Authorization","Bearer "+key);
             try{
                 if(body!=null){byte[] bytes=body.toString().getBytes(StandardCharsets.UTF_8);if(bytes.length>29L*1024*1024)throw new IOException("图片请求超过29MB");c.setDoOutput(true);try(OutputStream out=c.getOutputStream()){out.write(bytes);}}
                 int status=c.getResponseCode();InputStream stream=status>=400?c.getErrorStream():c.getInputStream();JSONObject response=new JSONObject();if(stream!=null)try(InputStream in=stream;ByteArrayOutputStream out=new ByteArrayOutputStream()){byte[] block=new byte[8192];int count;while((count=in.read(block))!=-1){if(out.size()+count>1024*1024)throw new IOException("电脑响应过大");out.write(block,0,count);}if(out.size()>0)response=new JSONObject(out.toString(StandardCharsets.UTF_8.name()));}

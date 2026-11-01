@@ -50,6 +50,21 @@ public class ReceiptInstrumentedTest {
         JSONObject d=inbox.defaults("2026-11-01T10:00:00","酒店");assertEquals("synthetic-project",d.getString("project_id"));assertEquals("lead",d.getJSONObject("people_defaults").getString("synthetic-project"));assertEquals("other-lead",d.getJSONObject("people_defaults").getString("synthetic-other"));
         inbox.unpair();assertFalse(inbox.state().getBoolean("paired"));
     }
+    @Test public void requestTimeoutsMatchPairCatalogAndUploadBudgets()throws Exception{
+        for(String route:List.of("pair","catalog","receipts")){
+            HttpURLConnection c=ReceiptInbox.connection(base,route);
+            try{assertEquals(5000,c.getConnectTimeout());assertEquals(route.equals("receipts")?60000:15000,c.getReadTimeout());assertFalse(c.getInstanceFollowRedirects());}
+            finally{c.disconnect();}
+        }
+    }
+    @Test public void catalogFailureAfterPairingRequiresNewDesktopCode()throws Exception{
+        mode("catalog_failure");
+        try{pair();fail("pair must fail when initial catalog fails");}
+        catch(IOException error){assertEquals("配对未完成，请在电脑重新生成配对码",error.getMessage());}
+        assertFalse(inbox.state().getBoolean("paired"));
+        assertEquals(0,inbox.catalog().getJSONArray("projects").length());
+        mode("normal");pair();assertTrue(inbox.state().getBoolean("paired"));
+    }
     @Test public void disconnectedSaveAndRecoveryPreserveEveryFieldAndOriginalBytes()throws Exception{
         pair();mode("disconnected");String id=save();inbox.sync(true);assertEquals("pending",row().getString("status"));assertTrue(row().getLong("next_try")>System.currentTimeMillis());
         inbox.close();inbox=new ReceiptInbox(context);assertEquals(id,row().getString("client_id"));assertEquals(2,inbox.catalog().getJSONArray("projects").length());mode("normal");inbox.sync(true);assertEquals("received",row().getString("status"));

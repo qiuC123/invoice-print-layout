@@ -90,6 +90,9 @@ class Handler(BaseHTTPRequestHandler):
             self.respond(401, {"error": "设备已撤销", "code": "unpaired"})
             return
         if self.path == "/device/v1/catalog":
+            if STATE["mode"] == "catalog_failure":
+                self.respond(503, {"error": "合成目录失败", "code": "unavailable"})
+                return
             self.respond(200, {"server_time": datetime.now().astimezone().isoformat(), "urls": addresses,
                                 "categories": CATEGORIES, "projects": [
                                     {"id": "synthetic-project", "name": "收票验收项目", "start_date": "2020-01-01", "end_date": "",

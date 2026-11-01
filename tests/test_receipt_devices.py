@@ -61,7 +61,9 @@ def devices(tmp_path: Path, monkeypatch: Any) -> Any:
 
 def pair(service: ReceiptDevices) -> dict[str, Any]:
     status = service.start_pairing()
-    return service.pair({'code': status['code'], 'device_name': 'Synthetic phone'})
+    device = service.pair({'code': status['code'], 'device_name': 'Synthetic phone'})
+    service.authenticate('Bearer ' + device['device_key'])
+    return device
 
 
 def test_pair_once_hash_only_expiry_and_wrong_code_limit(devices: Any) -> None:
@@ -119,6 +121,92 @@ def test_catalog_active_projects_sidebar_order_people_main_person(devices: Any) 
     assert [p['id'] for p in value['projects']] == [second['id'], project]
     assert value['projects'][1]['people'] == [{'id': owner['id'], 'label': owner['label']}]
     assert value['projects'][1]['main_person_id'] == owner['id']
+
+
+def test_background_address_cache_and_socket_fallback_do_not_block_requests(devices: Any, monkeypatch: Any) -> None:
+    service, _, _ = devices
+    service.address_worker.join()
+    entered, release = threading.Event(), threading.Event()
+    calls: list[str] = []
+    def enumerate_addresses() -> list[dict[str, str]]:
+        calls.append(threading.current_thread().name)
+        entered.set()
+        assert release.wait(5)
+        return [{'address': '192.168.1.8'}, {'address': '8.8.8.8'}]
+    monkeypatch.setattr(receipt_devices.phone_link, 'addresses', enumerate_addresses)
+    service.addresses = ()
+    service.address_refresh_at = 0
+    assert service.server is None
+    service.tick()  # Closed listener: no adapter enumeration.
+    assert not entered.wait(0.3) and calls == []
+    status = service.start_pairing()  # Opening the listener refreshes addresses in the background.
+    assert entered.wait(1)
+    try:
+        port = service.server.server_port
+        started = time.perf_counter()
+        code, device = request(port, '/device/v1/pair', {'code': status['code'], 'device_name': 'Synthetic fallback'},
+                               Host='8.8.8.8:8769')
+        assert code == 200 and device['urls'] == [f'http://127.0.0.1:{port}']
+        code, catalog = request(port, '/device/v1/catalog', Authorization='Bearer ' + device['device_key'])
+        assert code == 200 and catalog['urls'] == device['urls']
+        assert time.perf_counter() - started < 1
+        assert calls == ['receipt-addresses']
+    finally:
+        release.set()
+        service.address_worker.join()
+    assert service.urls('127.0.0.1') == [f'http://192.168.1.8:{port}']
+    service.tick()
+    assert len(calls) == 1
+    service.address_refresh_at = 0
+    service.tick()
+    service.address_worker.join()
+    assert len(calls) == 2
+
+
+def test_unconfirmed_device_first_authentication_and_ten_minute_cleanup(devices: Any, monkeypatch: Any) -> None:
+    service, _, _ = devices
+    clock = [time.time()]
+    monkeypatch.setattr(receipt_devices, 'time', SimpleNamespace(time=lambda: clock[0]))
+    status = service.start_pairing()
+    pending = service.pair({'code': status['code'], 'device_name': 'Pending synthetic'})
+    assert service.status()['devices'][0]['confirmed'] == 0
+    service.sync_listener()
+    assert service.server is None  # Pending devices do not retain the listener.
+    clock[0] += receipt_devices.PAIR_SECONDS - 1
+    service.tick()
+    assert len(service.status()['devices']) == 1
+    clock[0] += 1
+    with pytest.raises(DeviceError) as expired:
+        service.authenticate('Bearer ' + pending['device_key'])
+    assert expired.value.status == 401
+    service.tick()
+    assert service.status()['devices'] == [] and service.confirmation_due is None
+    confirmed = pair(service)
+    assert service.status()['devices'][0]['confirmed'] == 1
+    clock[0] += receipt_devices.PAIR_SECONDS
+    service.tick()
+    assert service.server is not None
+    assert service.authenticate('Bearer ' + confirmed['device_key']) == confirmed['device_id']
+
+
+def test_legacy_device_schema_migrates_as_confirmed(devices: Any) -> None:
+    service, _, _ = devices
+    device = pair(service)
+    service.close()
+    with service.store.connect() as db:
+        db.execute('ALTER TABLE receipt_devices DROP COLUMN confirmed')
+        db.execute('ALTER TABLE receipt_devices DROP COLUMN confirmation_expires_at')
+    restarted = ReceiptDevices(service.intake, service.background, service.agent, threading.Lock(), port=0)
+    try:
+        restarted.sync_listener()
+        assert restarted.status()['devices'][0]['confirmed'] == 1
+        restarted.revoke(device['device_id'])
+        assert restarted.server is not None
+        code, rejected = request(restarted.server.server_port, '/device/v1/catalog',
+                                 Authorization='Bearer ' + device['device_key'])
+        assert code == 401 and rejected['code'] == 'unpaired'
+    finally:
+        restarted.close()
 
 
 def test_upload_manual_fields_null_idempotency_and_content_duplicates(devices: Any, monkeypatch: Any) -> None:
@@ -191,7 +279,7 @@ def test_pending_pairing_and_failed_attempts_survive_restart(devices: Any) -> No
         fresh = restarted.start_pairing()
         paired = restarted.pair({'code': fresh['code'], 'device_name': 'Fresh code'})
         restarted.revoke(paired['device_id'])
-        assert restarted.server is None
+        assert restarted.server is not None
     finally:
         restarted.close()
 
@@ -462,16 +550,15 @@ def test_real_http_pair_catalog_upload_security_and_shutdown(devices: Any, monke
     with monkeypatch.context() as scope:
         scope.setattr(receipt_devices, 'allowed_source', lambda _: False)
         assert request(port, '/device/v1/catalog', **auth)[0] == 403
-    # Keep a fresh pairing open so a revoked key can be checked over real HTTP.
-    service.start_pairing()
+    # Revoking the last device keeps the real listener available to return 401.
     service.revoke(paired['device_id'])
     assert request(port, '/device/v1/catalog', **auth)[0] == 401
     with service.store.connect() as db:
         db.execute('UPDATE receipt_device_pairing SET expires_at=0')
     service.sync_listener()
-    assert service.server is None
-    with pytest.raises(OSError):
-        socket.create_connection(('127.0.0.1', port), timeout=.2)
+    assert service.server is not None
+    code, rejected = request(port, '/device/v1/catalog', **auth)
+    assert code == 401 and rejected['code'] == 'unpaired'
 
 
 def test_body_limit_and_malformed_json(devices: Any) -> None:
