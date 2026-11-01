@@ -578,6 +578,32 @@ def test_body_limit_and_malformed_json(devices: Any) -> None:
     conn.close()
 
 
+def test_receipt_app_status_skips_phone_status_and_checks_source(devices: Any, monkeypatch: Any) -> None:
+    service, _, _ = devices
+    paired = pair(service)
+    service.close()
+    server = workbench_web.make_server(service.store.workspace, 0, mode='invoice', device_port=0)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        def slow_status(*args: Any, **kwargs: Any) -> Any:
+            pytest.fail('receipt-app must not call browser phone status')
+
+        with monkeypatch.context() as scope:
+            scope.setattr(workbench_web.PhoneLink, 'status', slow_status)
+            code, status = request(server.server_port, '/api/phone-link/receipt-app')
+            assert code == 200
+            assert status['enabled'] is True
+            assert status['devices'][0]['id'] == paired['device_id']
+            assert 'receipt_app' not in status
+            for headers in ({'Origin': 'https://untrusted.invalid'}, {'Host': 'untrusted.invalid'}):
+                assert request(server.server_port, '/api/phone-link/receipt-app', **headers)[0] == 403
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join()
+
+
 def test_occupied_device_port_does_not_prevent_desktop_start(devices: Any) -> None:
     service, _, _ = devices
     paired = pair(service)

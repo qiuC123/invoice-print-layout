@@ -11,7 +11,7 @@ async function run(pw) {
   const qr = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScLbtAAAAABJRU5ErkJggg==';
   let app = {enabled: false, port: 8769, urls: [], devices: [], expires_in: 0, error: ''};
   let phone = {enabled: false, addresses: [{address: '192.168.1.8', label: '合成 Wi-Fi'}], remote: {installed: false, ready: false}};
-  let failure = '', readFailure = false;
+  let failure = '', readFailure = false, phoneDelay = 0, phoneReturned = false;
   page.on('pageerror', error => errors.push(error.message));
   await page.route(origin + '/**', async route => {
     const request = route.request(), url = new URL(request.url());
@@ -22,8 +22,14 @@ async function run(pw) {
     const body = request.method() === 'POST' ? request.postDataJSON() : null;
     calls.push({path: url.pathname, body});
     if (!body) {
-      if (readFailure) {readFailure = false; return json({error: '设备状态暂不可用'}, 503);}
-      return json({...phone, receipt_app: app});
+      if (url.pathname.endsWith('/receipt-app')) {
+        if (readFailure) {readFailure = false; return json({error: '设备状态暂不可用'}, 503);}
+        return json(app);
+      }
+      assert.equal(url.pathname, '/api/phone-link');
+      const snapshot = {...phone, receipt_app: app};
+      if (phoneDelay) await new Promise(resolve => setTimeout(resolve, phoneDelay));
+      await json(snapshot); phoneReturned = true; return;
     }
     assert.equal(request.headers()['x-workbench-token'], 'synthetic-device-token');
     if (failure === url.pathname) {failure = ''; return json({error: '合成连接失败，请重试'}, 503);}
@@ -123,6 +129,28 @@ async function run(pw) {
     await screenshot('synthetic-app-listener-error');
     await panel().getByRole('button', {name: '完成', exact: true}).click(); await panel().waitFor({state: 'detached'});
     cases.push('existing browser start/QR rotation/stop still work independently; listener error visible');
+
+    app = {...app, enabled: true, error: '', code: '', qr: '', devices: [
+      {id: 'synthetic-phone', name: '合成手机 <demo>', confirmed: 1, paired_at: '2026-11-01T12:00:00+08:00', last_seen_at: '', revoked_at: ''}]};
+    phoneDelay = 3000; phoneReturned = false;
+    await page.getByRole('button', {name: '手机连接', exact: true}).click();
+    await appButton('配对新手机').waitFor({timeout: 1000});
+    await section().getByRole('button', {name: '撤销 合成手机 <demo>', exact: true}).waitFor({timeout: 1000});
+    assert.equal(phoneReturned, false);
+    assert.equal(await panel().locator('[data-content]').innerText(), '正在读取连接状态…');
+    assert.equal(await appButton('配对新手机').isEnabled(), true);
+    await screenshot('synthetic-app-before-slow-phone');
+    await appButton('配对新手机').click();
+    await section().getByLabel('收票 App 配对码', {exact: true}).waitFor({timeout: 1000});
+    assert.equal(phoneReturned, false);
+    await panel().getByRole('button', {name: '开启手机连接', exact: true}).waitFor();
+    assert.equal(phoneReturned, true);
+    assert.equal(await section().getByLabel('收票 App 配对码', {exact: true}).inputValue(), '01234567');
+    await panel().getByLabel('连接方式', {exact: true}).selectOption('remote');
+    assert.equal(await section().getByLabel('收票 App 配对码', {exact: true}).inputValue(), '01234567');
+    await screenshot('synthetic-app-after-stale-phone');
+    await panel().getByRole('button', {name: '完成', exact: true}).click(); await panel().waitFor({state: 'detached'});
+    cases.push('App list and enabled pairing appear within 1s while phone GET takes 3s; pairing before phone response survives its stale receipt_app and mode switch');
     assert.deepEqual(errors, []);
     const result = {status: 'PASS', cases, requests: calls.length};
     if (evidence) await fs.writeFile(path.join(evidence, 'result.json'), JSON.stringify(result, null, 2));

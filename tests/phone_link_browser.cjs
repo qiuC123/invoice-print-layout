@@ -19,6 +19,9 @@ const root = path.join(__dirname, '..', 'src', 'invoice_print_layout', 'web');
     assert.ok(pathname.startsWith('/api/phone-link'), pathname);
     const body = request.method() === 'POST' ? request.postDataJSON() : null;
     calls.push({path: pathname, body});
+    if (pathname === '/api/phone-link/receipt-app') {
+      await route.fulfill({contentType: 'application/json', body: JSON.stringify({enabled: false, devices: []})});return;
+    }
     if (body) {
       assert.equal(request.headers()['x-workbench-token'], 'desktop-test-token');
       if (fail) {await route.fulfill({status: 400, contentType: 'application/json', body: JSON.stringify({error: '连接暂未完成，请重试'})});return;}

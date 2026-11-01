@@ -325,6 +325,8 @@ def make_server(workspace: Path, port: int = 8765, *, mode: str = 'workbench',
                     self.respond({'items': todos.list(project_id), 'photo_groups': site_photos.settings(project_id)['groups']})
                 elif path == '/api/phone-link':
                     self.respond({**phone_link.status(include_addresses=True), 'receipt_app': receipt_devices.status()})
+                elif path == '/api/phone-link/receipt-app':
+                    self.respond(receipt_devices.status())
                 elif path == '/api/runtime':
                     self.respond(runtime)
                 elif path == '/api/intake':
