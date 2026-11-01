@@ -21,11 +21,16 @@ import java.util.concurrent.*;
 public final class MainActivity extends Activity {
     private WebView web; private Ledger ledger; private LocalRecognition recognition;private Workbench workbench;private ReportService reports;private PortableBackup backups;private OptionalServices services;
     private final ExecutorService worker=Executors.newSingleThreadExecutor();
+    private final ExecutorService receiptNetwork=Executors.newSingleThreadExecutor(),receiptOcr=Executors.newSingleThreadExecutor();
+    private final Map<String,File> receiptCaptures=new ConcurrentHashMap<>();
+    private final Map<String,JSONObject> receiptResults=new ConcurrentHashMap<>();
+    private String receiptCapturedAt="";
     private String importRequest="",importProject="",exportRequest="";private File exportFile,cameraFile,restoreFile;
     private final List<Uri> shared=Collections.synchronizedList(new ArrayList<>());
     @Override public void onCreate(Bundle state) {
         super.onCreate(state);PDFBoxResourceLoader.init(this);ledger=new Ledger(this);recognition=new LocalRecognition(this);workbench=new Workbench(ledger);reports=new ReportService(this,ledger);backups=new PortableBackup(this,ledger);services=new OptionalServices(this);
-        if(state!=null){importRequest=state.getString("importRequest","");importProject=state.getString("importProject","");String camera=state.getString("cameraFile","");if(!camera.isEmpty())cameraFile=new File(camera);}
+        ReceiptUploadJob.schedule(this);
+        if(state!=null){receiptCapturedAt=state.getString("receiptCapturedAt","");importRequest=state.getString("importRequest","");importProject=state.getString("importProject","");String camera=state.getString("cameraFile","");if(!camera.isEmpty())cameraFile=new File(camera);}
         web=new WebView(this);web.setBackgroundColor(Color.rgb(247,248,250));WebSettings settings=web.getSettings();settings.setJavaScriptEnabled(true);settings.setDomStorageEnabled(true);settings.setAllowFileAccess(false);settings.setAllowContentAccess(false);settings.setMixedContentMode(WebSettings.MIXED_CONTENT_NEVER_ALLOW);
         web.setWebViewClient(new WebViewClient(){@Override public boolean shouldOverrideUrlLoading(WebView view,WebResourceRequest request){return true;}});
         web.addJavascriptInterface(new Bridge(),"Native");web.setWebChromeClient(new WebChromeClient());
@@ -35,7 +40,7 @@ public final class MainActivity extends Activity {
         container.setOnApplyWindowInsetsListener((v,insets)->{if(Build.VERSION.SDK_INT>=30){android.graphics.Insets bars=insets.getInsets(WindowInsets.Type.systemBars()|WindowInsets.Type.ime());v.setPadding(bars.left,bars.top,bars.right,bars.bottom);}else v.setPadding(insets.getSystemWindowInsetLeft(),insets.getSystemWindowInsetTop(),insets.getSystemWindowInsetRight(),insets.getSystemWindowInsetBottom());return insets;});
         web.loadUrl("file:///android_asset/index.html");readShare(getIntent());
     }
-    @Override public void onSaveInstanceState(Bundle state){super.onSaveInstanceState(state);state.putString("importRequest",importRequest);state.putString("importProject",importProject);if(cameraFile!=null)state.putString("cameraFile",cameraFile.getAbsolutePath());}
+    @Override public void onSaveInstanceState(Bundle state){super.onSaveInstanceState(state);state.putString("receiptCapturedAt",receiptCapturedAt);state.putString("importRequest",importRequest);state.putString("importProject",importProject);if(cameraFile!=null)state.putString("cameraFile",cameraFile.getAbsolutePath());}
     @Override protected void onNewIntent(Intent intent){super.onNewIntent(intent);readShare(intent);web.evaluateJavascript("window.refresh?.()",null);}
     private void readShare(Intent intent) {
         if(Intent.ACTION_SEND.equals(intent.getAction())) { Uri uri=intent.getParcelableExtra(Intent.EXTRA_STREAM);if(uri!=null)shared.add(uri); }
@@ -46,10 +51,12 @@ public final class MainActivity extends Activity {
         runOnUiThread(()->{if(!isDestroyed())web.evaluateJavascript("window.receiveNative("+response+")",null);});
     }
     public final class Bridge {
-        @JavascriptInterface public void invoke(String request) { worker.execute(()->{
+        @JavascriptInterface public void invoke(String request) {
+            try{JSONObject r=new JSONObject(request);if(r.getString("method").startsWith("receipt")){receiptInvoke(r);return;}}catch(JSONException ignored){}
+            worker.execute(()->{
             String id="";try {JSONObject req=new JSONObject(request);id=req.getString("id");String method=req.getString("method");JSONObject args=req.optJSONObject("args");if(args==null)args=new JSONObject();Object result;
                 switch(method) {
-                    case "state": result=ledger.state(args.optString("project_id")).put("shared_count",shared.size()).put("settings",workbench.settings()).put("services",services.status()).put("custom_template",reports.template()!=null);break;
+                    case "state": result=ledger.state(args.optString("project_id")).put("shared_count",shared.size()).put("settings",workbench.settings()).put("services",services.status()).put("custom_template",reports.template()!=null).put("receipt_inbox",receiptState());break;
                     case "project": result=ledger.project(args.getString("name"));break;
                     case "reimbursement": ledger.reimbursement(args.getString("id"),args.getBoolean("value"));result=true;break;
                     case "role": ledger.materialRole(args.getString("id"),args.getString("role"));result=true;break;
@@ -91,7 +98,10 @@ public final class MainActivity extends Activity {
     private void createDocument(String mime,String name){runOnUiThread(()->{Intent intent=new Intent(Intent.ACTION_CREATE_DOCUMENT).addCategory(Intent.CATEGORY_OPENABLE).setType(mime).putExtra(Intent.EXTRA_TITLE,name);startActivityForResult(intent,11);});}
     @Override protected void onActivityResult(int request,int result,Intent data) {
         super.onActivityResult(request,result,data);
-        if(request==10){String callback=importRequest,project=importProject;importRequest="";importProject="";
+        if(request==15||request==16){String callback=importRequest;importRequest="";File photo=cameraFile;cameraFile=null;
+            if(result!=RESULT_OK||photo==null||!photo.isFile()){if(photo!=null)photo.delete();reply(callback,false,null);return;}
+            worker.execute(()->{try{if(request==16){JSONArray codes=PhoneIntake.qr(photo);String value="";for(int i=0;i<codes.length();i++){String code=codes.getString(i);if(code.startsWith("invoicepair:")){ReceiptRules.pairing(code);value=code;break;}}if(value.isEmpty())throw new IOException("未识别到收票配对二维码，请重新拍摄或手动输入");reply(callback,value,null);}else reply(callback,receiptPhoto(photo,receiptCapturedAt),null);}catch(Exception error){photo.delete();reply(callback,null,message(error));}finally{if(request==16)photo.delete();}});
+        }else if(request==10){String callback=importRequest,project=importProject;importRequest="";importProject="";
             if(result!=RESULT_OK||data==null){reply(callback,new JSONArray(),null);return;}
             List<Uri> uris=new ArrayList<>();if(data.getClipData()!=null){for(int i=0;i<data.getClipData().getItemCount();i++)uris.add(data.getClipData().getItemAt(i).getUri());}else if(data.getData()!=null)uris.add(data.getData());
             worker.execute(()->{JSONArray results=new JSONArray();for(Uri uri:uris)try{results.put(importOne(uri,project));}catch(Exception error){try{results.put(new JSONObject().put("error",message(error)));}catch(JSONException ignored){}}reply(callback,results,null);});
@@ -100,6 +110,41 @@ public final class MainActivity extends Activity {
         } else if(request==11){String callback=exportRequest;exportRequest="";File file=exportFile;exportFile=null;
             if(result!=RESULT_OK||data==null||data.getData()==null){if(file!=null&&file.getName().startsWith("backup-")&&file.getName().endsWith(".zip"))file.delete();reply(callback,false,null);return;}Uri uri=data.getData();worker.execute(()->{try(InputStream in=new FileInputStream(file);OutputStream out=getContentResolver().openOutputStream(uri)){if(out==null)throw new IOException("目标文件无法写入");byte[] block=new byte[65536];int n;while((n=in.read(block))!=-1)out.write(block,0,n);reply(callback,true,null);}catch(Exception error){reply(callback,null,message(error));}finally{if(file!=null&&file.getName().startsWith("backup-")&&file.getName().endsWith(".zip"))file.delete();}});
         }
+    }
+    private JSONObject receiptState()throws Exception{synchronized(ReceiptInbox.LOCK){try(ReceiptInbox inbox=new ReceiptInbox(this)){return inbox.state();}}}
+    private void receiptSync(){receiptSync(false);}
+    private void receiptSync(boolean force){if(receiptNetwork.isShutdown())return;receiptNetwork.execute(()->{try(ReceiptInbox inbox=new ReceiptInbox(this)){synchronized(ReceiptInbox.SYNC_LOCK){inbox.sync(force);}}catch(Exception ignored){}runOnUiThread(()->{if(!isDestroyed())web.evaluateJavascript("window.refresh?.()",null);});});}
+    @Override protected void onResume(){super.onResume();receiptSync(true);}
+    private JSONObject receiptPhoto(File photo,String captured)throws Exception{
+        BitmapFactory.Options options=new BitmapFactory.Options();options.inJustDecodeBounds=true;BitmapFactory.decodeFile(photo.getAbsolutePath(),options);if(options.outWidth<=0||options.outHeight<=0)throw new IOException("照片不可读取，请重拍");
+        String token=UUID.randomUUID().toString();receiptCaptures.put(token,photo);JSONObject defaults;
+        try(ReceiptInbox inbox=new ReceiptInbox(this)){defaults=inbox.defaults(captured,"其他");}
+        receiptOcr.execute(()->{try(LocalRecognition local=new LocalRecognition(this)){String text=local.read(photo,false);Map<String,String> fields=Rules.parse(text);String category=Rules.categoryFromGoods(text);JSONObject recognized=new JSONObject().put("done",true).put("amount",fields.getOrDefault("amount","")).put("category",category);if(receiptCaptures.containsKey(token))receiptResults.put(token,recognized);}catch(Exception error){try{if(receiptCaptures.containsKey(token))receiptResults.put(token,new JSONObject().put("done",true).put("warning","本地识别未完成，可手工确认"));}catch(JSONException ignored){}}});
+        return new JSONObject().put("token",token).put("captured_at",captured).put("defaults",defaults).put("thumbnail",ReceiptInbox.thumbnail(photo));
+    }
+    private void receiptInvoke(JSONObject request)throws JSONException{
+        String method=request.getString("method"),id=request.getString("id");JSONObject args=request.optJSONObject("args");JSONObject a=args==null?new JSONObject():args;
+        boolean network=method.equals("receiptPair")||method.equals("receiptSync")||method.equals("receiptUnpair");
+        (network?receiptNetwork:worker).execute(()->{try{Object value;
+            if(network){synchronized(ReceiptInbox.SYNC_LOCK){try(ReceiptInbox inbox=new ReceiptInbox(this)){if(method.equals("receiptPair")){ReceiptRules.Pairing pairing=a.has("qr")?ReceiptRules.pairing(a.getString("qr")):ReceiptRules.pairing("invoicepair:1?code="+a.getString("code")+"&url="+java.net.URLEncoder.encode(a.getString("url"),"UTF-8"));value=inbox.pair(pairing,Build.MODEL);}else if(method.equals("receiptUnpair")){inbox.unpair();value=true;}else{inbox.sync(true);value=true;}}}}
+            else synchronized(ReceiptInbox.LOCK){try(ReceiptInbox inbox=new ReceiptInbox(this)){switch(method){
+                case "receiptState":value=inbox.state();break;
+                case "receiptThumbnail":value=inbox.thumbnail(a.getString("id"));break;
+                case "receiptOcr":value=receiptResults.getOrDefault(a.getString("token"),new JSONObject().put("done",false));break;
+                case "receiptCamera":case "receiptQrCamera":{
+                    if(!importRequest.isEmpty())throw new IllegalArgumentException("请先完成当前拍照或文件选择");importRequest=id;receiptCapturedAt=ReceiptInbox.now();File directory=new File(getCacheDir(),"camera");if(!directory.isDirectory()&&!directory.mkdirs())throw new IOException("无法创建相机目录");cameraFile=new File(directory,"receipt-"+UUID.randomUUID()+".jpg");Uri output=FileProvider.getUriForFile(this,getPackageName()+".files",cameraFile);int requestCode=method.equals("receiptCamera")?15:16;
+                    runOnUiThread(()->{try{startActivityForResult(new Intent(android.provider.MediaStore.ACTION_IMAGE_CAPTURE).putExtra(android.provider.MediaStore.EXTRA_OUTPUT,output).addFlags(Intent.FLAG_GRANT_WRITE_URI_PERMISSION|Intent.FLAG_GRANT_READ_URI_PERMISSION),requestCode);}catch(ActivityNotFoundException error){importRequest="";reply(id,null,"未找到系统相机");}});return;
+                }
+                case "receiptSave":{String token=a.getString("token");File photo=receiptCaptures.get(token);if(photo==null)throw new IllegalArgumentException("照片已取消，请重新拍摄");value=inbox.save(photo,a.getString("captured_at"),a);receiptCaptures.remove(token);receiptResults.remove(token);photo.delete();receiptSync();break;}
+                case "receiptCancel":{String token=a.getString("token");File photo=receiptCaptures.remove(token);receiptResults.remove(token);if(photo!=null)photo.delete();value=true;break;}
+                case "receiptEdit":inbox.edit(a.getString("id"),a);value=true;receiptSync();break;
+                case "receiptDelete":inbox.delete(a.getString("id"));value=true;break;
+                case "receiptDefaults":value=inbox.defaults(a.getString("captured_at"),"其他");break;
+                case "receiptUnpair":inbox.unpair();value=true;break;
+                default:throw new IllegalArgumentException("不支持的收票操作");
+            }}}
+            reply(id,value,null);if(network)runOnUiThread(()->{if(!isDestroyed())web.evaluateJavascript("window.refresh?.()",null);});
+        }catch(Exception error){reply(id,null,message(error));}});
     }
     private JSONObject importOne(Uri uri,String project) throws Exception {
         boolean known=false;JSONArray projects=ledger.state(project).getJSONArray("projects");for(int i=0;i<projects.length();i++)known|=projects.getJSONObject(i).getString("id").equals(project)&&!projects.getJSONObject(i).getBoolean("deleted");if(!known)throw new IllegalArgumentException("请先选择当前项目");
@@ -135,5 +180,5 @@ public final class MainActivity extends Activity {
         }catch(Exception error){dialog.dismiss();Toast.makeText(this,message(error),Toast.LENGTH_LONG).show();}}
         else {try{Bitmap bitmap=ImageFiles.read(file,2000);image.setImageBitmap(bitmap);dialog.setOnDismissListener(v->bitmap.recycle());}catch(IOException error){dialog.dismiss();Toast.makeText(this,message(error),Toast.LENGTH_LONG).show();}}
     }
-    @Override protected void onDestroy(){worker.execute(()->{recognition.close();ledger.close();});worker.shutdown();super.onDestroy();}
+    @Override protected void onDestroy(){receiptNetwork.shutdown();receiptOcr.execute(()->{for(File file:receiptCaptures.values())file.delete();receiptCaptures.clear();receiptResults.clear();});receiptOcr.shutdown();worker.execute(()->{recognition.close();ledger.close();});worker.shutdown();super.onDestroy();}
 }

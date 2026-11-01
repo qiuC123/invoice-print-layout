@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<network-security-config>
+    <!-- shortcut: paired IPs are dynamic (gated by ReceiptInbox), use domain rules when PC supports HTTPS. -->
+    <base-config cleartextTrafficPermitted="true" />
+    <domain-config cleartextTrafficPermitted="false">
+        <domain includeSubdomains="true">open.bigmodel.cn</domain>
+        <domain includeSubdomains="true">api.typesafe.ai</domain>
+        <domain includeSubdomains="true">163.com</domain>
+        <domain includeSubdomains="true">chinatax.gov.cn</domain>
+    </domain-config>
+</network-security-config>

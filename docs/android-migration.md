@@ -82,6 +82,41 @@ node scripts/mobile-mcp-call.mjs mobile_take_screenshot '{"device":"emulator-556
 
 `scripts/mobile-mcp-call.mjs` 为本地验收入口，截图保存在指定私有证据目录。`MOBILE_MCP_ROOT`、`ANDROID_HOME`、`ANDROID_AVD_HOME` 可覆盖本机默认路径。
 
+## F22-C：收票箱（0.3.0-dev / versionCode 4，2026-11-01）
+
+首次打开默认进入底部“收票”。系统相机拍照后立即打开确认框，随包 ML Kit 在手机本地识别，调用既有 Rules 预填金额与类别；后到的结果不会覆盖已经编辑的字段。确认金额、类别、项目、所属人及可选备注后，原图和 UUID 写入独立的 `receipt-inbox/` 私有目录及 `receipt-inbox.sqlite3`，不进入手机账本、迁移或报表。取消会丢弃未保存照片。只显示最近30天记录，较早的待上传记录仍在队列中。
+
+设置“连接电脑收票”支持系统相机拍 `invoicepair:1?...` 配对二维码及地址/8位码手输。按接口 v1 使用 `/device/v1/pair`、`catalog`、`receipts`；只连接私有 IPv4/回环地址的 8769 端口，不跟随重定向，不使用代理。设备 Key 复用 OptionalServices 的 Android Keystore AES-GCM 加密方式，不传给网页层。连上后缓存项目、人员、主负责人、类别及地址；从未连接时仍可保存，待补选项目后上传。
+
+项目默认取拍摄日期唯一匹配，其次上次仍有效项目、目录首项；类别取明确识别结果、上次类别、“其他”；人员取项目主负责人、该项目上次人员、空白。切换项目同时切换人员。保存、回前台时尝试上传，系统 JobScheduler 以网络约束和15分钟周期重试（实际执行时间由 Android 调度）。网络/其他错误保留并指数退避；401 要重新配对；409 停止自动上传并要求重选；重传保留 client_id。20 MiB 以下上传原图字节，更大时仅缩小上传副本，不改手机原图。
+
+明文配置的偏差：Android 的 network security config 是静态 XML，不能加入运行时才知道的配对 IP。因此 XML base-config 允许 HTTP，实际电脑请求由 ReceiptInbox 严格限制为已保存或用户正配对的局域网地址和 8769 端口。既有 GLM/Jev/邮件/税务域名显式禁止明文，原有 HTTPS/IMAPS 调用、WebView CSP 和禁用混合内容保持不变。这里不是操作系统层面的动态 IP 白名单，参见 [Android 官方配置说明](https://developer.android.com/privacy-and-security/security-config)。
+
+### 合成联调与构建
+
+先启动标准库假电脑（不连接真实 8765，不用真实材料）：
+
+```powershell
+$env:PYTHONDONTWRITEBYTECODE='1'
+./.venv/Scripts/python.exe android/tests/fake_computer.py --state android/build/fake-computer.json
+```
+
+默认模拟器 URL 为 `http://10.0.2.2:8769`。若本机代理接管该地址，可按实际宿主机局域网 IPv4 启动假服务，例如 `--host 0.0.0.0 --url http://192.168.1.5:8769`，并设置设备测试 URL（地址仅为本次合成验收环境，不写入 App）：
+
+```powershell
+Set-Item 'Env:ORG_GRADLE_PROJECT_android.testInstrumentationRunnerArguments.receipt_url' 'http://192.168.1.5:8769'
+$env:ANDROID_SERIAL='emulator-5560'
+./android/build-debug.ps1 -SdkRoot E:/Tools/Android/sdk `
+  -JavaHome 'E:/Tools/Android/jdk21/jdk-21.0.12.1+1' `
+  -GradleHome E:/Tools/Android/gradle/gradle-8.11.1 -ConnectedTests
+```
+
+`android/gradle.properties` 已设置 `android.injected.androidTest.leaveApksInstalledAfterRun=true`，防止 AGP 测试结束后自动卸载调试 App。旧默认行为在本轮首次测试后确实卸载过调试包，其原有私有数据无法确认/恢复；没有重置模拟器或操作其他模拟器。后续运行须保留该配置，且不要使用 `pm clear`、卸载或 wipe-data。该默认行为来源见 [Google 问题记录](https://issuetracker.google.com/issues/295039976)。
+
+新增 ReceiptRulesTest、ReceiptInstrumentedTest、ReceiptUiInstrumentedTest 及 `android/tests/receipts.browser.cjs`。设备 UI 测试注入合成照片，实际经过本地 OCR、网页确认、SQLite、断连和自动上传；截图保存在模拟器调试 App 的 `cache/receipt-ui-evidence/`，须在数据仍存在时用 `adb exec-out run-as` 取回。最终结果与截图以本次交付 README 为准，不能据此声称已与并行开发的真实电脑端或真机联调。
+
+浏览器回归仍可将 `require('playwright')` 传给三个 `*.browser.cjs` 导出的函数；需使用本机已有 Chromium，并把临时目录设在 `android/build/`。桌面完整 pytest 可加载 `-p desktop_guard`（将 `android/tests` 加入 PYTHONPATH），该审计插件会阻止读取正式 workspace 和连接 8765。
+
 ## 参考
 
 - [Mobile MCP](https://github.com/mobile-next/mobile-mcp)

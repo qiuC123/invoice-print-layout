@@ -38,7 +38,7 @@ async function run(pw){
  },fixture);
  await context.route('http://invoice-android.test/**',async route=>{
   const asset=new URL(route.request().url()).pathname.slice(1)||'index.html';
-  assert.ok(['index.html','style.css','app.js','workbench.js'].includes(asset));
+  assert.ok(['index.html','style.css','app.js','workbench.js','receipts.js'].includes(asset));
   const type=asset.endsWith('.css')?'text/css':asset.endsWith('.js')?'text/javascript':'text/html';
   await route.fulfill({contentType:type,body:await fs.readFile(path.join(source,asset))});
  });
@@ -47,9 +47,9 @@ async function run(pw){
  const isSettings=async()=>{assert.equal(await page.locator('#dialog').isVisible(),false);assert.equal(await page.locator('#settingsPage').isVisible(),true);assert.equal(await page.locator('nav button.active').getAttribute('data-tab'),'settings');};
  const open=async(key,title)=>{await page.locator(`[data-setting=${key}]`).click();assert.equal(await page.locator('#dialogTitle').innerText(),title);assert.equal(await page.locator('#dialog').isVisible(),true);};
  try{
-  await page.goto('http://invoice-android.test/');await page.locator('#project option[value=p1]').waitFor({state:'attached'});
+  await page.goto('http://invoice-android.test/');await page.locator('nav [data-tab=materials]').click();await page.locator('#project option[value=p1]').waitFor({state:'attached'});
   await page.locator('nav [data-tab=reports]').click();await settings();
-  assert.equal(await page.locator('[data-setting]').count(),8);assert.equal(await page.locator('#manage').count(),0);
+  assert.equal(await page.locator('[data-setting]').count(),9);assert.equal(await page.locator('#manage').count(),0);
   assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true);cases.push('full-page grouped settings with fixed navigation');
   for(const [key,title]of[['projects','项目管理'],['people','人员管理'],['template','公司报销模板'],['backup','备份与恢复'],['services','可选联网服务'],['mail','163 邮箱收件'],['claim','二维码领票'],['experience','分类经验']]){
    await open(key,title);await page.locator('#closeDialog').click();await isSettings();

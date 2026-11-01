@@ -63,6 +63,7 @@ function renderSettings(){
    ['template','公司报销模板',state.custom_template?'已导入公司模板':'使用内置标准模板']
   ]],
   ['收件与识别',[
+   ['receiptPair','连接电脑收票','配对电脑，离线收票后自动上传'],
    ['services','识别与联网服务','GLM、Jev 与 163 邮箱配置'],
    ['mail','163 邮箱收件','按日期读取发票与行程附件'],
    ['claim','二维码领票链接','领取正式 PDF 发票']
@@ -74,7 +75,7 @@ function renderSettings(){
  ];
  const row=([action,title,description])=>`<button type="button" class="settings-row" data-setting="${action}"><span class="settings-copy"><strong>${title}</strong><span>${description}</span></span><span class="settings-chevron" aria-hidden="true">›</span></button>`;
  $('settingsContent').innerHTML=groups.map(([title,items])=>`<section class="settings-group"><h2>${title}</h2><div class="settings-list">${items.map(row).join('')}${title==='数据与外观'?`<label class="settings-row settings-theme"><span class="settings-copy"><strong>外观主题</strong><span>沿用电脑版配色</span></span><select id="settingsTheme" aria-label="外观主题"><option value="light">浅色</option><option value="dark">深色</option></select></label>`:''}</div></section>`).join('');
- const actions={projects:projectsDialog,people:peopleDialog,template:templateDialog,backup:backupDialog,services:servicesDialog,mail:mailDialog,claim:claimDialog,experience:experienceDialog};
+ const actions={receiptPair:receiptPairDialog,projects:projectsDialog,people:peopleDialog,template:templateDialog,backup:backupDialog,services:servicesDialog,mail:mailDialog,claim:claimDialog,experience:experienceDialog};
  document.querySelectorAll('[data-setting]').forEach(button=>button.onclick=()=>actions[button.dataset.setting]());
  $('settingsTheme').value=document.documentElement.dataset.theme;
  $('settingsTheme').onchange=()=>{const theme=$('settingsTheme').value;document.documentElement.dataset.theme=theme;localStorage.setItem('theme',theme);};
