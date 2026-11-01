@@ -1,11 +1,13 @@
-param(
+﻿param(
     [string]$Workspace = (Join-Path $PSScriptRoot '..\workspace'),
     [ValidateRange(1, 65535)][int]$Port = 8765,
     [ValidateSet('workbench', 'invoice')][string]$Mode = 'workbench',
     [switch]$NoBrowser,
+    [switch]$EnsureRunning,
     [switch]$BrowserTab
 )
 $ErrorActionPreference = 'Stop'
+try {
 $project = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 # Bind module resolution to this checkout, even when a worktree shares a venv.
 $env:PYTHONPATH = (Join-Path $project 'src') + [IO.Path]::PathSeparator + $env:PYTHONPATH
@@ -67,6 +69,10 @@ function Assert-WorkbenchRuntime($runtime) {
 
 $runtime = Read-WorkbenchRuntime
 $knownAppIds = @('invoice-print-layout.workbench', 'invoice-print-layout.invoice-assistant')
+if ($EnsureRunning -and $null -ne $runtime) {
+    if ($runtime.app_id -eq $expected.app_id -and $runtime.workspace_id -eq $expected.workspace_id) { return }
+    throw 'Port belongs to another service or workspace; no process was stopped.'
+}
 if ($null -ne $runtime -and $runtime.app_id -in $knownAppIds -and $runtime.workspace_id -eq $expected.workspace_id -and ($runtime.app_id -ne $expected.app_id -or $runtime.build_id -ne $expected.build_id -or ($runtime.app_mode -and $runtime.app_mode -ne $Mode)) -and $runtime.capabilities -contains 'graceful_shutdown') {
     $state = (Invoke-WebRequest "$url/api/state" -UseBasicParsing -TimeoutSec 2).Content | ConvertFrom-Json
     Invoke-WebRequest "$url/api/shutdown" -Method Post -Headers @{'X-Workbench-Token'=$state.token} -ContentType 'application/json' -Body '{}' -UseBasicParsing -TimeoutSec 5 | Out-Null
@@ -93,4 +99,20 @@ if (-not $NoBrowser) {
         Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
     if (-not $BrowserTab -and $edge) { Start-Process -FilePath $edge -ArgumentList "--app=$url" }
     else { Start-Process $url }
+}
+} catch {
+    if (-not $EnsureRunning) { throw }
+    try {
+        $logDirectory = Join-Path $Workspace '工作台'
+        New-Item -ItemType Directory -Path $logDirectory -Force | Out-Null
+        $log = Join-Path $logDirectory 'startup.log'
+        if ((Test-Path -LiteralPath $log) -and (Get-Item -LiteralPath $log).Length -gt 245760) {
+            $tail = Get-Content -LiteralPath $log -Encoding UTF8 -Raw
+            Set-Content -LiteralPath $log -Value $tail.Substring([Math]::Max(0, $tail.Length - 65536)) -Encoding UTF8
+        }
+        $reason = $_.Exception.Message
+        if ($reason.Length -gt 4096) { $reason = $reason.Substring(0, 4096) }
+        Add-Content -LiteralPath $log -Encoding UTF8 -Value ('{0} {1}' -f (Get-Date -Format 'yyyy-MM-ddTHH:mm:sszzz'), $reason)
+    } catch { }
+    exit 1
 }

@@ -23,6 +23,7 @@ from invoice_print_layout.mail163 import Mail163Settings, mail_failure_category,
 from invoice_print_layout.organize_settings import OrganizeSettings
 from invoice_print_layout.glm_invoice_ai import GlmInvoiceAI
 from invoice_print_layout.workbench import ExpenseStore
+from invoice_print_layout.feishu_notify import FeishuNotifier
 
 Fetcher = Callable[..., dict[str, Any]]
 _ZONE = timezone(timedelta(hours=8))
@@ -69,6 +70,7 @@ class MailAgentService:
         self._closed = threading.Event()
         self._thread: threading.Thread | None = None
         self._force = False
+        self._manual_force = False
         self._dispatch_at = 0.0
         with store.connect() as db:
             db.executescript('''
@@ -80,6 +82,7 @@ class MailAgentService:
                      uid INTEGER NOT NULL, data TEXT NOT NULL,
                      UNIQUE(account_id,uidvalidity,uid));
             ''')
+        self.notifier = FeishuNotifier(store, lambda: bool(self._config()['feishu_enabled']))
 
     def _settings(self) -> Mail163Settings:
         return read_mail_settings(self.store.workspace / 'mail163.toml')
@@ -89,6 +92,7 @@ class MailAgentService:
             'enabled': False, 'interval_seconds': 120, 'since': _today(),
             'approved_since': _today(), 'use_model': self.organize.read()['use_model'], 'default_project_id': '',
             'default_project_account': '',
+            'feishu_enabled': True,
         }
         if not self.config_path.exists():
             return defaults
@@ -107,6 +111,7 @@ class MailAgentService:
     @staticmethod
     def _validate_config(value: dict[str, Any]) -> None:
         if (type(value.get('enabled')) is not bool or type(value.get('use_model')) is not bool or
+                type(value.get('feishu_enabled', True)) is not bool or
                 type(value.get('interval_seconds')) is not int or
                 not 60 <= value['interval_seconds'] <= 3600 or
                 not isinstance(value.get('default_project_id'), str)):
@@ -118,7 +123,7 @@ class MailAgentService:
             raise ValueError('收件日期不能早于已批准的起始日期')
 
     def configure(self, body: dict[str, Any]) -> dict[str, Any]:
-        allowed = {'enabled', 'interval_seconds', 'since', 'use_model', 'default_project_id'}
+        allowed = {'enabled', 'interval_seconds', 'since', 'use_model', 'default_project_id', 'feishu_enabled'}
         if not isinstance(body, dict) or set(body) - allowed:
             raise ValueError('自动收件设置无效')
         with self._lock:
@@ -143,6 +148,8 @@ class MailAgentService:
             if 'use_model' in body:
                 self.organize.update({'use_model': body['use_model']})
             _atomic(self.config_path, encoded({k: v for k, v in value.items() if k != 'use_model'}).encode('utf-8'))
+            if body.get('feishu_enabled') is False:
+                self.notifier.wake()
             self._force = bool(value['enabled'])
         self.kick()
         return self.status()
@@ -177,12 +184,30 @@ class MailAgentService:
                 'uidvalidity': '', 'last_uid': 0, **state}
 
     def _account_update(self, key: str, **changes: Any) -> None:
+        outcome = changes.pop('_notify_outcome', '')
         with self.store.connect() as db:
             db.execute('BEGIN IMMEDIATE')
             row = db.execute('SELECT * FROM mail_agent_accounts WHERE id=?', (key,)).fetchone()
             if row is None:
                 return
             state = json.loads(row['data'])
+            episode = state.get('notify_failure_episode', '')
+            if outcome == 'failure':
+                if not episode:
+                    episode = uuid.uuid4().hex
+                    state.update(notify_failure_episode=episode, notify_failures=0,
+                                 notify_failure_notified=False, notify_failure_suppressed=False)
+                state['notify_failures'] = max(state.get('notify_failures', 0) + 1, changes.get('failures', 0))
+                if not self.notifier.enabled():
+                    state['notify_failure_suppressed'] = True
+                if (not state.get('notify_failure_notified') and not state.get('notify_failure_suppressed')
+                        and (changes.get('error_category') == 'auth' or state['notify_failures'] >= 2)):
+                    state['notify_failure_notified'] = self.notifier.failure(
+                        key, episode, 'first', changes.get('error_category', ''), db=db)
+            elif outcome == 'success' and episode:
+                state['notify_failure_episode'] = ''
+                if state.get('notify_failure_notified') and not state.get('notify_failure_suppressed'):
+                    self.notifier.failure(key, episode, 'recovered', db=db)
             state.update({k: v for k, v in changes.items() if k not in {'last_uid', 'uidvalidity'}})
             db.execute('UPDATE mail_agent_accounts SET last_uid=?,uidvalidity=?,data=? WHERE id=?',
                        (changes.get('last_uid', row['last_uid']), changes.get('uidvalidity', row['uidvalidity']),
@@ -272,6 +297,7 @@ class MailAgentService:
             raise ValueError('请先开启自动收件')
         with self._lock:
             self._force = True
+            self._manual_force = True
         self.kick()
         return self.status()
 
@@ -290,11 +316,13 @@ class MailAgentService:
             if not network and time.time() < self._dispatch_at:
                 return
             self._force = False
+            notify = not self._manual_force
+            self._manual_force = False
             self._dispatch_at = time.time() + 3
-            self._thread = threading.Thread(target=self._run, args=(network,), daemon=True, name='invoice-mail-agent')
+            self._thread = threading.Thread(target=self._run, args=(network, notify), daemon=True, name='invoice-mail-agent')
             self._thread.start()
 
-    def _run(self, network: bool) -> None:
+    def _run(self, network: bool, notify: bool = True) -> None:
         config = self._config()
         if not config['enabled'] or self._closed.is_set():
             return
@@ -331,7 +359,7 @@ class MailAgentService:
                         return
                     if type(remote.get('uid')) is not int or remote['uid'] <= 0:
                         raise ValueError('invalid message UID')
-                    self._persist_message(account, remote, config)
+                    self._persist_message(account, remote, config if notify else {**config, 'feishu_enabled': False})
                     self._account_update(account['id'], last_uid=max(account['last_uid'], remote['uid']))
                     account['last_uid'] = max(account['last_uid'], remote['uid'])
                 # Optional scanned-through UID includes ignored non-invoice messages.
@@ -339,6 +367,7 @@ class MailAgentService:
                     self._account_update(account['id'], last_uid=result['last_uid'])
                 self._account_update(account['id'], last_checked_at=time.time(), last_error='', failures=0,
                                      error_category='',
+                                     _notify_outcome='success' if notify else '',
                                      suspended=False, next_check_at=time.time() + (3 if result.get('more') else
                                                                                 config['interval_seconds']))
             except Exception as error:
@@ -347,9 +376,14 @@ class MailAgentService:
                 failures = int(account.get('failures', 0)) + 1
                 category = mail_failure_category(error)
                 self._account_update(account['id'], last_checked_at=time.time(), failures=failures,
+                                     _notify_outcome='failure' if notify else '',
                                      suspended=failures >= _RETRY_LIMIT,
                                      next_check_at=time.time() + min(3600, 60 * 2 ** min(failures - 1, 6)),
                                      error_category=category, last_error=_FAILURE_HINTS[category])
+            try:
+                self.notifier.mail_batch(account['id'])
+            except Exception:
+                pass  # Pending message flags remain durable for the next cycle.
         if not self._closed.is_set() and self._config()['enabled']:
             try:
                 if self._settings() == settings:
@@ -411,6 +445,7 @@ class MailAgentService:
         dates = sorted({day for file in files for day in attachment_dates(Path(file['path']))})
         dates = dates or ([sent_date] if sent_date else [])
         project, reason = self._route_details(subject + '\n' + text, config, dates)
+        project_name = next((p['name'] for p in ExpenseProjects(self.store).list() if p['id'] == project), '')
         message = {'id': key, 'account_id': account['id'], 'uidvalidity': account['uidvalidity'],
                    'uid': remote['uid'], 'subject': subject, 'sender': str(remote.get('sender', ''))[:500],
                    'text': text, 'message_id': str(remote.get('message_id', ''))[:1000],
@@ -420,6 +455,7 @@ class MailAgentService:
                    'project_id': project, 'job_id': '', 'material_ids': [], 'dispatch_attempts': 0,
                    'retry_at': 0.0, 'status': ('attention' if remote.get('issues') else
                                               (('waiting_agent' if project else 'unassigned') if files else 'ignored'))}
+        message.update(project_name=project_name, notify_pending=bool(files and config.get('feishu_enabled', True)))
         with self.store.connect() as db:
             db.execute('INSERT OR IGNORE INTO mail_agent_messages VALUES (?,?,?,?,?)',
                        (key, account['id'], account['uidvalidity'], remote['uid'], encoded(message)))
@@ -588,3 +624,4 @@ class MailAgentService:
             thread.join(12)
             if thread.is_alive():
                 raise RuntimeError('自动收件后台尚未安全退出，请稍后重试关闭')
+        self.notifier.close()

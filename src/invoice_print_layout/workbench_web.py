@@ -444,7 +444,8 @@ def make_server(workspace: Path, port: int = 8765, *, mode: str = 'workbench',
                 if not isinstance(body, dict):
                     raise ValueError('请求格式无效')
                 if path in {'/api/settings', '/api/settings/test', '/api/settings/models',
-                            '/api/settings/organize', '/api/settings/mail', '/api/settings/mail/test'}:
+                            '/api/settings/organize', '/api/settings/mail', '/api/settings/mail/test',
+                            '/api/settings/feishu', '/api/settings/feishu/test'}:
                     try:
                         if length > 65536:
                             raise ValueError('设置请求过大')
@@ -455,6 +456,12 @@ def make_server(workspace: Path, port: int = 8765, *, mode: str = 'workbench',
                             settings_result = settings_service.save_mail(body)
                         elif path == '/api/settings/mail/test':
                             settings_result = settings_service.test_mail(body)
+                        elif path == '/api/settings/feishu':
+                            settings_result = settings_service.save_feishu(body)
+                        elif path == '/api/settings/feishu/test':
+                            if body:
+                                raise ValueError('测试消息无需填写内容')
+                            settings_result = mail_agent.notifier.test_message()
                         elif path == '/api/settings/test':
                             settings_result = ai_settings.test(body)
                         elif path == '/api/settings/models':
@@ -896,6 +903,7 @@ def make_server(workspace: Path, port: int = 8765, *, mode: str = 'workbench',
             invoice_agent.kick()
             if runtime['ready']:
                 mail_agent.kick()
+                mail_agent.notifier.kick()
             if mode == 'invoice' or not runtime['ready']:
                 return
             if time.monotonic() >= self.next_schedule_check:

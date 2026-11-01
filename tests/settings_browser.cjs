@@ -4,13 +4,14 @@ async function run(pw){
  const browser=await pw.chromium.launch({headless:true}),origin='http://127.0.0.1:18859';
  const source=path.resolve(__dirname,'../src/invoice_print_layout/web'),errors=[],writes=[];
  const evidence=process.env.INVOICE_BROWSER_EVIDENCE;
- let imageFails=false,organizeFails=false,mailTestFails=false;
+ let imageFails=false,organizeFails=false,mailTestFails=false,feishuFails=false;
  if(evidence)await fs.mkdir(evidence,{recursive:true});
  let settings={version:2,enabled:false,active:'workbuddy',providers:[
   {id:'workbuddy',name:'WorkBuddy 本机',kind:'workbuddy',base_url:'http://127.0.0.1:3425/v1',model:'workbuddy/glm-5.3-flash',builtin:true,key_source:'not_required'},
   {id:'glm',name:'智谱官方',kind:'openai',base_url:'https://open.bigmodel.cn/api/paas/v4',model:'glm-5.3-flash',builtin:true,key_source:'file'},
   {id:'deepseek',name:'DeepSeek 官方',kind:'openai',base_url:'https://api.deepseek.com/v1',model:'deepseek-flash',builtin:true,key_source:'none'},
   {id:'custom0',name:'合成自定义',kind:'openai',base_url:'https://synthetic.example/v1',model:'synthetic-vision',builtin:false,key_source:'none'}],organize:{auto_after_upload:true,use_model:true,model_available:false,model_label:''},mail:{address:'sample@163.com',folder:'INBOX',auth_saved:true,enabled:false,interval_seconds:120,since:'2026-10-28',approved_since:'2026-10-27',default_project_id:'',last_checked_at:null,last_error:'',projects:[{id:'p1',name:'合成项目'}]}};
+ settings.mail.feishu={available:true,enabled:true,reason:'',last_result:null};
  const context=await browser.newContext({viewport:{width:1440,height:900}});
  await context.addInitScript(()=>{window.settingsEvents=[];window.addEventListener('invoice-settings-changed',event=>window.settingsEvents.push(event.detail));});
  await context.route(origin+'/**',async route=>{
@@ -22,6 +23,8 @@ async function run(pw){
    if(req.method()==='GET')return json(settings);
    assert.equal(req.headers()['x-workbench-token'],'synthetic');
    const data=req.postDataJSON();writes.push({path:url.pathname,action:data.action});
+   if(url.pathname==='/api/settings/feishu'){assert.equal(typeof data.enabled,'boolean');if(feishuFails){feishuFails=false;return json({error:'合成提醒保存失败'},400);}settings.mail.feishu.enabled=data.enabled;return json(settings.mail.feishu);}
+   if(url.pathname==='/api/settings/feishu/test'){assert.deepEqual(data,{});settings.mail.feishu.last_result={status:'queued',message:'测试消息等待发送',at:1793116800};return json(settings.mail.feishu);}
    if(url.pathname==='/api/settings/organize'){if(organizeFails){organizeFails=false;return json({error:'合成保存失败'},400);}Object.assign(settings.organize,data);return json(settings.organize);}
    if(url.pathname==='/api/settings/mail/test'){assert.equal(data.address,'new-sample@163.com');assert.equal(data.folder,'INBOX');assert.equal(data.auth_code,'synthetic-mail-auth-only');return json({ok:!mailTestFails,message:mailTestFails?'合成连接失败':'连接成功，文件夹可用'});}
    if(url.pathname==='/api/settings/mail'){assert.equal(data.auth_code,'synthetic-mail-auth-only');Object.assign(settings.mail,Object.fromEntries(Object.entries(data).filter(([key])=>key!=='auth_code')),{auth_saved:true});return json(settings.mail);}
@@ -159,7 +162,7 @@ async function run(pw){
   assert.equal(await page.locator('#settingsAutoUpload').isChecked(),true);assert.equal(await page.locator('#settingsOrganizeModel').isChecked(),true);
   assert.match(await page.locator('#settingsOrganizeModelLabel').textContent(),/^当前模型：WorkBuddy/);
   assert.equal(await page.locator('#settingsModelUnavailable').isVisible(),false);
-  for(const id of ['settingsAutoUpload','settingsOrganizeModel','settingsMailEnabled']){
+  for(const id of ['settingsAutoUpload','settingsOrganizeModel','settingsMailEnabled','settingsFeishuEnabled']){
    const control=page.locator('#'+id);assert.equal(await control.getAttribute('role'),'switch');
    const style=await control.evaluate(node=>{const s=getComputedStyle(node),thumb=getComputedStyle(node,'::before');return {appearance:s.appearance,width:s.width,height:s.height,radius:s.borderRadius,thumb:thumb.width};});
    assert.deepEqual(style,{appearance:'none',width:'40px',height:'24px',radius:'999px',thumb:'16px'});
@@ -191,6 +194,15 @@ async function run(pw){
   await page.locator('#settingsMailInterval').fill('5');await page.locator('#settingsMailProject').selectOption('p1');await page.locator('#settingsMailEnabled').check();await page.locator('#settingsMailForm button[type=submit]').click();await waitStatus('收件邮箱设置已保存');assert.equal(settings.mail.interval_seconds,300);assert.equal(settings.mail.default_project_id,'p1');assert.equal(await page.locator('#settingsMailAuth').inputValue(),'');assert.ok(!(await page.locator('#settingsDialog').textContent()).includes('synthetic-mail-auth-only'));
   assert.equal(await page.evaluate(()=>JSON.stringify(window.settingsEvents).includes('synthetic-mail-auth-only')),false);
   await page.locator('#settingsMailCollect').click();await page.getByText('已开始收件',{exact:true}).waitFor();assert.match(await page.locator('#settingsMailLastChecked').textContent(),/上次检查/);
+  assert.equal(await page.locator('#settingsFeishuEnabled').isChecked(),true);assert.equal(await page.locator('#settingsFeishuTest').isEnabled(),true);
+  await page.locator('#settingsFeishuEnabled').uncheck();await waitStatus('飞书提醒设置已保存');assert.equal(settings.mail.feishu.enabled,false);
+  feishuFails=true;await page.locator('#settingsFeishuEnabled').check();await waitStatus('合成提醒保存失败');assert.equal(await page.locator('#settingsFeishuEnabled').isChecked(),false);
+  await page.locator('#settingsFeishuEnabled').check();await waitStatus('飞书提醒设置已保存');assert.equal(settings.mail.feishu.enabled,true);
+  await page.locator('#settingsFeishuTest').click();await waitStatus('测试消息已加入发送队列');assert.match(await page.locator('#settingsFeishuResult').textContent(),/测试消息等待发送/);
+  settings.mail.feishu={available:false,enabled:false,reason:'未找到本机飞书凭据',last_result:{status:'failed',message:'上次发送失败',at:1793116800}};
+  await page.locator('#settingsClose').click();await page.evaluate(()=>window.invoiceSettings.open('mail'));await page.waitForFunction(()=>document.getElementById('settingsFeishuReason').textContent==='未找到本机飞书凭据');
+  assert.equal(await page.locator('#settingsFeishuEnabled').isDisabled(),true);assert.equal(await page.locator('#settingsFeishuTest').isDisabled(),true);assert.match(await page.locator('#settingsFeishuResult').textContent(),/上次发送失败/);assert.equal(await page.locator('#settingsFeishuResult').evaluate(node=>node.classList.contains('is-error')),true);
+  settings.mail.feishu={available:true,enabled:true,reason:'',last_result:null};
   for(const [error_category,hint] of [['auth','请去163邮箱重新生成客户端授权码后在设置里更新'],['network','网络连接失败，会自动重试'],['internal','会自动重试，持续失败请重启发票助手']]){
    Object.assign(settings.mail,{error_category,suspended:true,last_error:hint+'。收件连续失败，已改为每小时自动重试一次。'});
    await page.locator('#settingsClose').click();await page.evaluate(()=>window.invoiceSettings.open('mail'));
@@ -224,7 +236,7 @@ async function run(pw){
    await card(id).getByRole('button',{name:'启用',exact:true}).click();await waitStatus('已切换');assert.equal(settings.active,id);assert.equal(await page.locator('#settingsEditor').isVisible(),false);
   }
   assert.deepEqual(errors,[]);
-  return {passed:true,cases:['dialog close and backdrop','CSS theme cards and hidden select persistence','AI toggle','provider activation and button hierarchy','missing key opens focused editor without activate request','saved page/file/environment and WorkBuddy providers can activate','outlined connection test button matches save height','small danger clear-key button visible only for page key','40px model-list button padding and no wrapping','four compact providers fit desktop','unconfigured key warning contrast >= 4.5 in both themes','secondary text contrast >= 4.5 in both themes','separate edit view and danger-zone delete','40px controls and two-column fields','models list','text success and image failure without key disclosure','host-change key warning','organize immediate save and failure rollback','unavailable model preference preserved and restored','full settings change events without auth code','mail account test and password secrecy','mail interval date and project controls','mail save and explicit collect','four narrow tabs without page overflow','narrow segmented tabs and fixed header','embedded entry'],contrast:{light:Math.min(...lightContrast),dark:Math.min(...darkContrast)},businessMutations:0,syntheticOperations:['mail collect'],writes};
+  return {passed:true,cases:['dialog close and backdrop','CSS theme cards and hidden select persistence','AI toggle','provider activation and button hierarchy','missing key opens focused editor without activate request','saved page/file/environment and WorkBuddy providers can activate','outlined connection test button matches save height','small danger clear-key button visible only for page key','40px model-list button padding and no wrapping','four compact providers fit desktop','unconfigured key warning contrast >= 4.5 in both themes','secondary text contrast >= 4.5 in both themes','separate edit view and danger-zone delete','40px controls and two-column fields','models list','text success and image failure without key disclosure','host-change key warning','organize immediate save and failure rollback','unavailable model preference preserved and restored','full settings change events without auth code','mail account test and password secrecy','mail interval date and project controls','mail save and explicit collect','Feishu toggle save and failure rollback','Feishu text test queues with write token','missing Feishu credential disables controls with reason','Feishu latest send status','four narrow tabs without page overflow','narrow segmented tabs and fixed header','embedded entry'],contrast:{light:Math.min(...lightContrast),dark:Math.min(...darkContrast)},businessMutations:0,syntheticOperations:['mail collect','Feishu settings','Feishu text test'],writes};
  }finally{await context.close();await browser.close();}
 }
 module.exports=run;
