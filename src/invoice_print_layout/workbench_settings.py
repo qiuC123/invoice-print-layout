@@ -48,8 +48,19 @@ class WorkbenchSettings:
                   'approved_since', 'default_project_id', 'last_checked_at', 'last_error', 'error_category',
                   'suspended', 'next_check_at')}
         return {**result, 'folder': status['folder'] or 'INBOX',
+                'feishu': self.mail.notifier.status(),
                 'auth_saved': bool(status['address'] and self._saved_auth(status['address'])),
                 'projects': [{'id': row['id'], 'name': row['name']} for row in ExpenseProjects(self.store).list()]}
+
+    def save_feishu(self, body: dict[str, Any]) -> dict[str, Any]:
+        if set(body) != {'enabled'} or type(body['enabled']) is not bool:
+            raise SettingsError('飞书提醒设置无效')
+        status = self.mail.notifier.status()
+        if body['enabled'] and not status['available']:
+            raise SettingsError(status['reason'])
+        self.mail.configure({'feishu_enabled': body['enabled']})
+        self.mail.notifier.kick()
+        return self.mail.notifier.status()
 
     def public(self) -> dict[str, Any]:
         config = self.invoice_ai.public()

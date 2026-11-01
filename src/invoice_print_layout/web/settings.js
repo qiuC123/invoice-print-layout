@@ -20,7 +20,7 @@
   const controls=[...dialog.querySelectorAll('.settings-content button,.settings-content input,.settings-content select')],disabled=controls.map(node=>node.disabled);
   controls.forEach(node=>node.disabled=true);status('');
   try{await work();}catch(error){status(error.message,true);}
-  finally{busy=false;dialog.removeAttribute('aria-busy');controls.forEach((node,index)=>{if(node.isConnected)node.disabled=disabled[index];});if(settings)renderOrganize();}
+  finally{busy=false;dialog.removeAttribute('aria-busy');controls.forEach((node,index)=>{if(node.isConnected)node.disabled=disabled[index];});if(settings){renderOrganize();renderFeishu();}}
  }
  function needsKey(provider){return provider.kind!=='workbuddy'&&(provider.key_required||!['page','file','environment'].includes(provider.key_source));}
  function keyStatus(provider){
@@ -123,12 +123,24 @@
  for(const [id,key] of [['settingsAutoUpload','auto_after_upload'],['settingsOrganizeModel','use_model']])el(id).onchange=()=>action(async()=>{try{settings.organize=await request('/organize',{[key]:el(id).checked});renderOrganize();changed();status('自动整理设置已保存。');}catch(error){renderOrganize();throw error;}});
  for(const id of ['settingsChangeModel','settingsConfigureModel'])el(id).onclick=()=>tab('ai');
  function authState(){const saved=!!settings?.mail?.auth_saved&&el('settingsMailAddress').value.trim()===settings.mail.address;el('settingsMailAuthState').textContent=saved?'已保存在 Windows 凭据管理器':'未保存';el('settingsMailAuthState').classList.toggle('is-warning',!saved);}
+ const feishuCard=document.createElement('div');feishuCard.className='settings-option-card';
+ feishuCard.innerHTML='<label class="settings-switch"><span>飞书提醒</span><input id="settingsFeishuEnabled" type="checkbox" role="switch" aria-describedby="settingsFeishuReason"></label><p class="muted">自动收件有新附件、出错或恢复时，只发送文字提醒。</p><p id="settingsFeishuReason" class="muted"></p><button id="settingsFeishuTest" type="button" class="settings-outline">发测试消息</button><p id="settingsFeishuResult" class="settings-inline-status" role="status" hidden></p>';
+ el('settingsMail').append(feishuCard);
+ function renderFeishu(){
+  const feishu=settings?.mail?.feishu||{},available=!!feishu.available;
+  el('settingsFeishuEnabled').checked=!!feishu.enabled;el('settingsFeishuEnabled').disabled=!available||busy;el('settingsFeishuTest').disabled=!available||busy;
+  el('settingsFeishuReason').textContent=available?'':feishu.reason||'本机尚未配置飞书提醒';el('settingsFeishuReason').hidden=available;
+  const result=feishu.last_result;el('settingsFeishuResult').hidden=!result;
+  if(result){const at=result.at?new Date(result.at*1000).toLocaleString('zh-CN',{hour12:false}):'';inlineResult('settingsFeishuResult',(at?at+' · ':'')+result.message,['failed','expired','error'].includes(result.status));}
+ }
+ el('settingsFeishuEnabled').onchange=()=>action(async()=>{try{settings.mail.feishu=await request('/feishu',{enabled:el('settingsFeishuEnabled').checked});changed();status('飞书提醒设置已保存。');}finally{renderFeishu();}});
+ el('settingsFeishuTest').onclick=()=>action(async()=>{settings.mail.feishu=await request('/feishu/test',{});renderFeishu();status('测试消息已加入发送队列。');});
  function renderMail(){
   const mail=settings?.mail||{};
   el('settingsMailAddress').value=mail.address||'';el('settingsMailFolder').value=mail.folder||'INBOX';el('settingsMailAuth').value='';authState();
   el('settingsMailEnabled').checked=!!mail.enabled;el('settingsMailInterval').value=(mail.interval_seconds||120)/60;el('settingsMailSince').value=mail.since||'';el('settingsMailSince').min=mail.approved_since||'';
   el('settingsMailProject').replaceChildren(...[{id:'',name:'留在收件箱，由我分配'},...(mail.projects||[])].map(project=>{const option=document.createElement('option');option.value=project.id;option.textContent=project.name;return option;}));el('settingsMailProject').value=mail.default_project_id||'';
-  renderMailStatus(mail);
+  renderMailStatus(mail);renderFeishu();
  }
  function renderMailStatus(mail){
   const checked=mail.last_checked_at?new Date(typeof mail.last_checked_at==='number'?mail.last_checked_at*1000:mail.last_checked_at):null;

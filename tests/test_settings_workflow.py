@@ -394,7 +394,8 @@ def test_mail_connection_transport_echo_never_exposes_authorization(web: Any) ->
     assert not web.secrets.writes and file_snapshot(web.workspace) == before
 
 
-@pytest.mark.parametrize('route', ['/api/settings/organize', '/api/settings/mail', '/api/settings/mail/test'])
+@pytest.mark.parametrize('route', ['/api/settings/organize', '/api/settings/mail', '/api/settings/mail/test',
+                                 '/api/settings/feishu', '/api/settings/feishu/test'])
 def test_workflow_settings_keep_host_origin_and_token_guards(web: Any, route: str) -> None:
     body = {'use_model': False} if route.endswith('/organize') else mail_body(web)
     before = file_snapshot(web.workspace)

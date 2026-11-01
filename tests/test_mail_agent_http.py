@@ -1,5 +1,6 @@
 """Mailbox controls share the existing local-origin and CSRF boundary."""
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -13,7 +14,7 @@ def test_mail_controls_require_token_and_dispatch_exact_values(tmp_path: Path, m
 
     class FakeMail:
         def __init__(self, store: Any, agent: Any):
-            pass
+            self.notifier = SimpleNamespace(kick=lambda: None)
 
         def status(self) -> dict[str, Any]:
             return {'enabled': False, 'messages': []}
