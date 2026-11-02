@@ -4,6 +4,12 @@ on:
   pull_request:
   push:
     branches: [main]
+  workflow_dispatch:
+    inputs:
+      validation-ref:
+        description: Optional 40-character commit SHA to validate with this CI patch
+        type: string
+        required: false
 
 permissions:
   contents: read
@@ -18,17 +24,36 @@ env:
 
 jobs:
   python:
-    name: Python checks (${{ matrix.shard }}/6)
+    name: Python tests (${{ matrix.shard }}/${{ strategy.job-total }})
     runs-on: windows-latest
-    timeout-minutes: 15
+    timeout-minutes: 25
     strategy:
       fail-fast: false
       matrix:
-        shard: [1, 2, 3, 4, 5, 6]
+        shard: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]
     steps:
       - uses: actions/checkout@v7.0.1
         with:
           persist-credentials: false
+          fetch-depth: 0
+      - name: Record source and prepare optional compatibility check
+        env:
+          VALIDATION_REF: ${{ inputs.validation-ref }}
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $true
+          $ciHead = git rev-parse HEAD
+          if ($env:VALIDATION_REF) {
+            if ($env:VALIDATION_REF -notmatch '^[0-9a-fA-F]{40}$') { throw 'validation-ref must be a commit SHA' }
+            $base = git merge-base origin/main $ciHead
+            $patch = Join-Path $env:RUNNER_TEMP 'ci-validation.patch'
+            git diff --binary --output=$patch $base $ciHead
+            git fetch --no-tags origin $env:VALIDATION_REF
+            git checkout --detach $env:VALIDATION_REF
+            git apply --index $patch
+          }
+          New-Item -ItemType Directory -Path .runtime/ci -Force | Out-Null
+          @{workflow_commit=$ciHead;validation_ref=$env:VALIDATION_REF;tree=(git write-tree)} |
+            ConvertTo-Json | Set-Content .runtime/ci/source.json -Encoding utf8
       - uses: actions/setup-python@v7.1.0
         with:
           python-version: '3.12'
@@ -45,9 +70,9 @@ jobs:
       - name: Full pytest (includes agent rules)
         run: |
           $files = @(git ls-files tests | Where-Object { $_ -match '(^|/)(test_[^/]*|[^/]*_test)\.py$' } | Sort-Object)
-          $selected = @(for ($i = ${{ matrix.shard }} - 1; $i -lt $files.Count; $i += 6) { $files[$i] })
+          $selected = @(for ($i = ${{ strategy.job-index }}; $i -lt $files.Count; $i += ${{ strategy.job-total }}) { $files[$i] })
           if (!$selected.Count -or @($selected | Select-Object -Unique).Count -ne $selected.Count) { throw 'Invalid pytest shard' }
-          Write-Host "Shard ${{ matrix.shard }}/6: $($selected.Count) of $($files.Count) test files"
+          Write-Host "Shard ${{ matrix.shard }}/${{ strategy.job-total }}: $($selected.Count) of $($files.Count) test files"
           python -m pytest @selected -n 4 -ra --junitxml=.runtime/ci/pytest-${{ matrix.shard }}.xml
       - name: Strict type check
         if: ${{ !cancelled() && matrix.shard == 1 }}
@@ -56,18 +81,50 @@ jobs:
         if: ${{ !cancelled() }}
         with:
           name: pytest-results-${{ matrix.shard }}
-          path: .runtime/ci/pytest-${{ matrix.shard }}.xml
+          path: |
+            .runtime/ci/pytest-${{ matrix.shard }}.xml
+            .runtime/ci/source.json
           include-hidden-files: true
           retention-days: 7
+
+  python-success:
+    name: Python checks
+    needs: python
+    if: ${{ always() }}
+    runs-on: windows-latest
+    timeout-minutes: 5
+    steps:
+      - name: Require every pytest shard and mypy to pass
+        run: |
+          if ('${{ needs.python.result }}' -ne 'success') { throw 'Python tests or mypy did not pass' }
 
   browser:
     name: Browser contracts
     runs-on: windows-latest
-    timeout-minutes: 15
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v7.0.1
         with:
           persist-credentials: false
+          fetch-depth: 0
+      - name: Record source and prepare optional compatibility check
+        env:
+          VALIDATION_REF: ${{ inputs.validation-ref }}
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $true
+          $ciHead = git rev-parse HEAD
+          if ($env:VALIDATION_REF) {
+            if ($env:VALIDATION_REF -notmatch '^[0-9a-fA-F]{40}$') { throw 'validation-ref must be a commit SHA' }
+            $base = git merge-base origin/main $ciHead
+            $patch = Join-Path $env:RUNNER_TEMP 'ci-validation.patch'
+            git diff --binary --output=$patch $base $ciHead
+            git fetch --no-tags origin $env:VALIDATION_REF
+            git checkout --detach $env:VALIDATION_REF
+            git apply --index $patch
+          }
+          New-Item -ItemType Directory -Path .runtime/ci -Force | Out-Null
+          @{workflow_commit=$ciHead;validation_ref=$env:VALIDATION_REF;tree=(git write-tree)} |
+            ConvertTo-Json | Set-Content .runtime/ci/source.json -Encoding utf8
       - uses: actions/setup-python@v7.1.0
         with:
           python-version: '3.12'
@@ -90,6 +147,8 @@ jobs:
         if: ${{ !cancelled() }}
         with:
           name: browser-results
-          path: .runtime/ci/browser
+          path: |
+            .runtime/ci/browser
+            .runtime/ci/source.json
           include-hidden-files: true
           retention-days: 7

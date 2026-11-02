@@ -31,15 +31,11 @@ function Read-WorkbenchRuntime {
             throw 'Port responds but runtime identity is unavailable. Old backend or another service; no process was stopped. Update the service explicitly.'
         }
         if ($Starting) { return $null }
-        $socket = New-Object System.Net.Sockets.TcpClient
-        try {
-            $connection = $socket.ConnectAsync('127.0.0.1', $Port)
-            if ($connection.Wait(500) -and $socket.Connected) {
-                throw 'Port is occupied but the service is not ready; no process was stopped.'
-            }
-        } catch {
-            if ($socket.Connected) { throw }
-        } finally { $socket.Dispose() }
+        # An async connect deadline cannot distinguish a free port from a delayed completion.
+        $listeners = [Net.NetworkInformation.IPGlobalProperties]::GetIPGlobalProperties().GetActiveTcpListeners()
+        if ($listeners.Port -contains $Port) {
+            throw 'Port is occupied but the service is not ready; no process was stopped.'
+        }
         return $null
     }
     try {

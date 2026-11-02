@@ -1,12 +1,23 @@
 # CI 与本机验证
 
-`.github/workflows/ci.yml` 在所有 PR 和推送到 main 时运行；不部署、不合并、不使用密钥或自托管运行机。六个 pytest 分组加一个浏览器 Windows job 并行，分别限时 15 分钟，缓存 pip 和 npm 下载。
+`.github/workflows/ci.yml` 在所有 PR 和推送到 main 时运行；不部署、不合并、不使用密钥或自托管运行机。16 个 pytest 分组加一个浏览器 Windows job 并行，测试 job 限时 25 分钟，缓存 pip 和 npm 下载。目标是每组 pytest 在 8 分钟内完成，为测试增长和运行机波动留余量；25 分钟是故障上限，不是目标时长。
 
 ## 云端检查
 
-- **Python checks (1/6) 至 (6/6)**：Python 3.12，建立应用启动器要求的 `.venv` 并安装 `.[dev]`。按排序后的公开测试文件轮流分到六个运行机，各用 `python -m pytest <本组文件> -n 4 -ra --junitxml=...`；六组并集为完整套件，包含 `tests/test_agent_rules.py`，不是跳过其他组。每组检查非空和无重复，交付时将六份 XML 的用例并集与本机完整 XML 核对，必须无缺失、无重复。第一组另跑 `python -m mypy src`。
+- **Python tests (1/16) 至 (16/16)**：Python 3.12，建立应用启动器要求的 `.venv` 并安装 `.[dev]`。按排序后的公开测试文件轮流分组，各用 `python -m pytest <本组文件> -n 4 -ra --junitxml=...`；16 组并集为完整套件，包含 `tests/test_agent_rules.py`，不是跳过其他组。分组步长取 `strategy.job-total`，增加矩阵项即可扩组。每组检查非空和无重复，交付时将所有 XML 的用例并集与本机完整 XML 核对，必须无缺失、无重复。第一组另跑 `python -m mypy src`。
+- **Python checks**：固定名称的汇总检查，`always()` 等待全部 Python 分组；任何分组或 mypy 失败、取消或跳过都会失败。分组数变化不需要改这个必需检查名。
 - **Browser contracts**：Node 24，`npm ci`、`npx playwright install chromium`，然后 `node scripts/run-browser-tests.mjs --output=.runtime/ci/browser`。运行公开 Git 文件中的全部 `tests/*.cjs`；Python 服务使用临时合成工作区和临时端口，其他界面契约使用模拟响应。它们不能代替真实 OCR、Excel 或 Android 真机验收。
 - pytest XML、浏览器逐项日志和结果 JSON 保留为 Actions artifacts 七天；失败时也上传。没有真实发票、私有模板或台账。
+
+## 合并前的兼容试跑
+
+可在已有 CI 分支手动运行同一工作流，输入 `validation-ref`（完整 40 位提交 SHA）。运行机将该提交检出，再将本 CI 分支相对 main 的补丁应用到临时索引；不创建合并提交、不推送、不修改目标分支。普通 PR/main 运行不输入此值，照常验证本次提交。
+
+```powershell
+gh workflow run ci.yml --ref <CI分支> -f validation-ref=<待验证提交SHA>
+```
+
+每组和浏览器 artifact 的 `source.json` 记录工作流提交、待验证 SHA 和实际测试树哈希，防止把 CI 分支的普通绿灯误称为功能分支已验证。补丁冲突或无效 SHA 直接失败。
 
 依赖缓存配置依据 [setup-python](https://github.com/actions/setup-python#caching-packages-dependencies)；浏览器安装依据 [Playwright CI 文档](https://playwright.dev/docs/ci)。不缓存浏览器二进制，避免缓存恢复与重新下载收益不确定；固定 Playwright 版本由 `package-lock.json` 管理。
 
@@ -41,4 +52,4 @@ node .claude/skills/verify-workbench/scripts/verify.cjs run <新运行名称>
 
 技能的体检、操作、证据和清理以 [verify-workbench](../.claude/skills/verify-workbench/SKILL.md) 为准。技能测试的是临时实例，不附加正式服务。Git-only 基线与候选版本应在同一依赖、同一公开测试范围内比较；私有测试数量不能混入比较。
 
-建议用户后续将 **Python checks (1/6)** 至 **Python checks (6/6)**、**Browser contracts** 设为 main 的必需状态检查，并要求人工批准合并；本次不修改仓库设置。
+main 的必需检查应为固定的 **Python checks** 和 **Browser contracts**，并要求人工批准合并。旧的六个 `Python checks (n/6)` 需由维护者替换；本次不修改仓库设置。

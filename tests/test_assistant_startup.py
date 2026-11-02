@@ -82,7 +82,7 @@ exit $LASTEXITCODE
     success = case in {'ready', 'old', 'unready', 'cold'}
     assert result.returncode == (0 if success else 1), result.stderr
     launches = tmp_path / 'launches.txt'
-    assert launches.exists() == (case in {'cold', 'timeout'})
+    assert launches.exists() == (case in {'cold', 'timeout'}), log.read_text(encoding='utf-8-sig')
     if success:
         assert log.stat().st_size == 300000
     else:
@@ -91,6 +91,35 @@ exit $LASTEXITCODE
         assert 'no process was stopped' in text or 'startup timed out' in text or 'invalid runtime identity' in text
         assert re.search(r'\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}[+-]\d{2}:\d{2}', text)
         assert not result.stderr
+
+
+@pytest.mark.parametrize('connected', [False, True])
+def test_occupied_port_is_rejected_even_if_tcp_completion_is_delayed(tmp_path, connected):
+    with socket.socket() as listener:
+        listener.bind(('127.0.0.1', 0))
+        listener.listen()
+        result = run_script(tmp_path, r'''$ErrorActionPreference = 'Stop'
+function Invoke-WebRequest { throw 'Offline' }
+function New-Object {
+    param($TypeName)
+    if ($TypeName -ne 'System.Net.Sockets.TcpClient') { throw 'Unexpected constructor' }
+    $task = [PSCustomObject]@{}
+    $task | Add-Member ScriptMethod Wait { param($Milliseconds) return $false }
+    $client = [PSCustomObject]@{Connected=[bool]::Parse('@@CONNECTED@@');Task=$task}
+    $client | Add-Member ScriptMethod ConnectAsync { param($Address,$Port) return $this.Task }
+    $client | Add-Member ScriptMethod Dispose { }
+    return $client
+}
+function Start-Process { Add-Content -LiteralPath '@@LAUNCHES@@' -Value 'unexpected launch' }
+function Start-Sleep { param($Seconds) }
+& '@@LAUNCHER@@' -Workspace '@@WORKSPACE@@' -Port @@PORT@@ -NoBrowser -EnsureRunning
+exit $LASTEXITCODE
+''', {'CONNECTED': str(connected), 'LAUNCHES': tmp_path / 'launches.txt',
+      'PORT': listener.getsockname()[1],
+      'LAUNCHER': ROOT / 'scripts/start-invoice-assistant.ps1', 'WORKSPACE': tmp_path})
+    assert result.returncode == 1, result.stderr
+    assert not (tmp_path / 'launches.txt').exists()
+    assert 'Port is occupied' in (tmp_path / '工作台/startup.log').read_text(encoding='utf-8-sig')
 
 
 @pytest.mark.parametrize('case', ['install', 'replace-own', 'remove-own', 'remove-absent', 'foreign', 'foreign-remove', 'foreign-action'])
