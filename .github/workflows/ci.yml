@@ -76,7 +76,7 @@ jobs:
           INVOICE_PYTEST_SHARD_INDEX: ${{ strategy.job-index }}
           INVOICE_PYTEST_SHARD_COUNT: ${{ strategy.job-total }}
         run: |
-          python -m pytest -p tests.ci_shard -m "not powershell" -n 4 -ra --junitxml=.runtime/ci/pytest-${{ matrix.shard }}.xml
+          python -m pytest -p tests.ci_shard -m "not powershell" -n 2 -ra --junitxml=.runtime/ci/pytest-${{ matrix.shard }}.xml
       - name: Strict type check
         if: ${{ !cancelled() && matrix.shard == 1 }}
         run: python -m mypy src

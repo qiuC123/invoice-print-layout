@@ -6,7 +6,7 @@ import json
 from pathlib import Path
 import threading
 import time
-from typing import Any
+from typing import Any, Iterator
 
 import pymupdf
 import pytest
@@ -44,7 +44,7 @@ class StubAgent:
 
 
 @pytest.fixture
-def env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[Any, ...]:
+def env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[tuple[Any, ...]]:
     store = ExpenseStore(tmp_path)
     project = ExpenseProjects(store).create('测试项目')['id']
     second = ExpenseProjects(store).create('其他项目')['id']
@@ -62,7 +62,10 @@ def env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[Any, ...]:
     monkeypatch.setattr(mail_agent, 'read_auth_code', lambda address: 'secret-not-in-any-receipt')
     service = mail_agent.MailAgentService(store, agent, fetcher=fetch)
     monkeypatch.setattr(service, 'kick', lambda: None)
-    return service, store, agent, project, second, settings, results, calls
+    try:
+        yield service, store, agent, project, second, settings, results, calls
+    finally:
+        service.close()
 
 
 def enable(service: Any, **values: Any) -> None:
@@ -555,22 +558,32 @@ def test_async_kick_never_blocks_http_and_close_does_not_half_commit_a_message(e
     service, _, _, _, _, _, results, _ = env
     gate = threading.Event()
     entered = threading.Event()
+    returned = threading.Event()
     results.append(message(1, '未分配发票'))
 
     def delayed(*args: Any, **kwargs: Any) -> dict[str, Any]:
         entered.set()
-        assert gate.wait(3)
+        gate.wait()  # Released in finally, including assertion failures; never unblock on a timing guess.
         return {'uidvalidity': '100', 'messages': results, 'more': False}
 
     service._fetcher = delayed
     enable(service)
     monkeypatch.setattr(service, 'kick', lambda: mail_agent.MailAgentService.kick(service))
-    before = time.monotonic()
-    service.kick()
-    assert time.monotonic() - before < .5 and entered.wait(2)
-    assert service.status()['collecting'] is True
-    gate.set()
-    service.close()
+    def call_kick() -> None:
+        service.kick()
+        returned.set()
+
+    caller = threading.Thread(target=call_kick, daemon=True)
+    try:
+        caller.start()
+        assert entered.wait(2)
+        assert returned.wait(2) and not gate.is_set(), 'kick must return while fetch is still blocked'
+        assert service.status()['collecting'] is True
+    finally:
+        gate.set()
+        caller.join(2)
+        service.close()
+    assert not caller.is_alive()
     assert not service._thread.is_alive()
     assert len(service._messages()) in {0, 1}
     for record in service._messages():

@@ -4,7 +4,7 @@
 
 ## 云端检查
 
-- **Python tests (1/32) 至 (32/32)**：Python 3.12，建立应用启动器要求的 `.venv` 并安装 `.[dev]`。第一组先运行 `python -m pytest -m powershell -n 0 -ra --junitxml=.runtime/ci/powershell.xml`，统一串行所有直接调用 PowerShell/脚本替身的模块，保留原断言和 40/60 秒子进程限时。随后各组 `python -m pytest -p tests.ci_shard -m "not powershell" -n 4 -ra --junitxml=...` 先按标记反选，再分片其余用例；参数化大文件也会分散，包含 `tests/test_agent_rules.py`。32 份分组 XML 加 powershell.xml 的并集为完整套件，交付时核对无缺失、无重复。其他组用例显示为 deselected，不算跳过。分组索引和总数取 `strategy`；未加载分片插件或无分组环境变量时，本机收集不变。第一组另跑 `python -m mypy src`。
+- **Python tests (1/32) 至 (32/32)**：Python 3.12，建立应用启动器要求的 `.venv` 并安装 `.[dev]`。第一组先运行 `python -m pytest -m powershell -n 0 -ra --junitxml=.runtime/ci/powershell.xml`，统一串行所有直接调用 PowerShell/脚本替身的模块，保留原断言和 40/60 秒子进程限时。随后各组 `python -m pytest -p tests.ci_shard -m "not powershell" -n 2 -ra --junitxml=...` 先按标记反选，再分片其余用例；每台运行机使用2个worker，减少4个worker下已观察到的短时限/HTTP争用，不延长请求超时。参数化大文件也会分散，包含 `tests/test_agent_rules.py`。32 份分组 XML 加 powershell.xml 的并集为完整套件，交付时核对无缺失、无重复。其他组用例显示为 deselected，不算跳过。分组索引和总数取 `strategy`；未加载分片插件或无分组环境变量时，本机收集不变。第一组另跑 `python -m mypy src`。
 - **Python checks**：固定名称的汇总检查，`always()` 等待全部 Python 分组；任何分组或 mypy 失败、取消或跳过都会失败。分组数变化不需要改这个必需检查名。
 - **Browser contracts**：Node 24，`npm ci`、`npx playwright install chromium`，然后 `node scripts/run-browser-tests.mjs --output=.runtime/ci/browser`。运行公开 Git 文件中的全部 `tests/*.cjs`；Python 服务使用临时合成工作区和临时端口，其他界面契约使用模拟响应。它们不能代替真实 OCR、Excel 或 Android 真机验收。
 - pytest XML、浏览器逐项日志和结果 JSON 保留为 Actions artifacts 七天；失败时也上传。没有真实发票、私有模板或台账。
