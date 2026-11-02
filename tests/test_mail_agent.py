@@ -510,7 +510,8 @@ def test_real_agent_can_run_imported_pair_to_preview_then_confirm(env: Any, monk
     assert done['state'] == 'ready', done['message']
     items = store.get_many(done['item_ids'])
     assert len(items) == 1 and items[0]['amount_cents'] == 1700
-    assert not items[0]['verified'] and items[0]['stage'] == 'draft'
+    assert items[0]['verified'] and items[0]['stage'] == 'draft'
+    assert items[0]['verification']['mode'] == 'automatic'
     assert len(items[0]['attachments']) == 2
     assert service.status()['messages'][0]['status'] == 'ready'
 

@@ -1,5 +1,9 @@
 # 发票助手独立 CLI
 
+F23-B 的 `attention list/show/resolve` 用于疑点查证和写回，完整操作见项目 `.agents/skills/invoice-attention/SKILL.md`。
+`attention resolve OBJECT --expected-version VERSION --request answer.json` 通过原本机 API 保存决定者、依据和审计，并排队重新整理；不直接核对费用。
+请求只接受 `action/values/decided_by/evidence`；`evidence` 必须带 `method/reference/statement`。全局 `--dry-run` 只预演，版本冲突必须重新查证。
+
 `invoice-assistant`，同义命令`cli-anything-invoice-assistant`。直接调用原发票助手本机API，不需要个人工作台、浏览器自动化或新增MCP服务器。原账本/原件/人工字段/GLM与Jev配置仍由原工具管理。
 
 ```powershell
@@ -11,6 +15,7 @@ invoice-assistant --json --project "原项目ID" materials prepare --id "材料I
 invoice-assistant --json --project "原项目ID" expenses classify --id "费用ID"
 invoice-assistant --json --project "原项目ID" matches suggest
 invoice-assistant --json --project "原项目ID" reports list
+invoice-assistant --json reports create --project "原项目ID" --request-id "feishu-click-001" --expected-version "项目可出包事件的ref.version"
 invoice-assistant --json --project "原项目ID" reports download --report-id "上一步ID" --output-dir "D:\新的报表副本"
 invoice-assistant --json results show "D:\新的报表副本"
 ```
@@ -33,11 +38,15 @@ prepare默认只读取已有识别；缺结果列needs_recognition，不自动�
 }
 ```
 
-候选、材料版本、明确金额/分类/名称、同项目及原件校验均由原服务完成。缺项、冲突、多种可能组合不能由CLI猜测。创建不执行核对或正式提交，仍由用户在原页面操作。本版不提供自动核对、submit、金额编辑或任意API转发。
+候选、材料版本、明确金额/分类/名称、同项目及原件校验均由原服务完成。缺项、冲突、多种可能组合不能由CLI猜测。草稿创建本身不执行核对或正式提交；自动核对由工作台的独立规则控制。本版不提供任意核对、submit、金额编辑或API转发。
 
-reports只下载原先已生成的PDF/Excel/清单，不触发Office/排版、重新登记或提交。一个包可能涵盖多笔费用，返回expense_ids；保留生成时历史快照，不能称为当前修订报表。输出新目录，记录hash/格式及来源；重复同目录校验读回，损坏或请求不同直接报错，不覆盖也不重生成。旧包没有原hash时只记录本次观察hash。
+`reports list/download`只下载原先已生成的PDF/Excel/清单，不触发Office/排版、重新登记或提交。一个包可能涵盖多笔费用，返回expense_ids；保留生成时历史快照，不能称为当前修订报表。输出新目录，记录hash/格式及来源；重复同目录校验读回，损坏或请求不同直接报错，不覆盖也不重生成。旧包没有原hash时只记录本次观察hash。
 
-`--json`、`--project`、`--url`、`--workspace-id`和`--dry-run`均放子命令前。dry-run不POST、不写输出；草稿dry-run校验候选token，完整业务校验仍由原服务事务执行。退出0是命令成功，不表示费用已确认；检查status、pending_review、missing等。退出1服务/状态，2参数，4身份/范围/损坏/原服务业务拒绝，5输出锁，6写操作结果不确定。6时先查询，不盲目重发；只有明确403前置拒绝才刷新token重试一次。
+`reports create --project ID --request-id KEY [--expected-version VERSION]`按项目生成一个含主表的PDF、XLSX和MD，并复用原提交流程将这批费用标记为已出包。只包含已核对、未出包的费用，不调用模型，也不发送给任何人。11-02用户批准了这项范围变更，用于personal-agent收到用户点击后调用。`expected-version`取项目可出包事件的`ref.version`；项目费用或材料变化时返回`version_changed`，不会悄悄使用另一批。项目参数也支持原全局`--project`写法。
+
+同一`request-id`成功后重复调用返回原文件和费用，`reused:true`，不会生成第二个包；不能跨项目重用。并发请求返回`in_progress`，稍后用同一编号重试。失败保留`error.code`与`error.retryable`：空批次`nothing_to_package`、版本变化`version_changed`、模板`template_missing/template_invalid`、环境`runtime_unavailable`、Excel`excel_error`、存储`storage_error`等。输出`files`是原服务导出目录中的文件名，另有`expense_count/total_cents/expense_ids`。模板/环境修复后可重试原编号。写请求超时仍不自动重发；可用同一编号取回幂等结果。
+
+`--json`、全局`--project`、`--url`、`--workspace-id`和`--dry-run`放子命令前（reports create另支持自己的`--project`）。dry-run不POST、不写输出；草稿dry-run校验候选token，项目出包dry-run只列当前候选，模板/环境/最终版本仍在执行时由原服务检查。退出0是命令成功，不表示费用已确认；检查status、pending_review、missing等。退出1服务/状态，2参数，4身份/范围/损坏/原服务业务拒绝，5输出锁，6写操作结果不确定。6时先查询，出包可用同一请求编号重试；只有明确403前置拒绝才刷新token自动重试一次。
 
 operations区分recognition_requests/classification_requests与glm_calls/jev_calls；只读复用时均0。显式调用原识别/分类后，原服务没有提供的模型次数为null，不能把HTTP请求数当模型计费次数。模型订阅是调用Agent的配置，不在本CLI里保存。
 

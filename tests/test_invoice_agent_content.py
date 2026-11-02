@@ -375,6 +375,7 @@ def test_native_columnar_rail_document_reaches_preview_without_title_as_goods(
     assert [good['name'] for good in item['agent_content']['goods']] == [expected_name]
     assert item['title'] == item['display_name'] == expected_name
     assert item['category'] == '高铁' and item['project_name'] == '火车、飞机'
-    assert item['amount_cents'] == expected_cents and not item['verified']
+    assert item['amount_cents'] == expected_cents and item['verified']
+    assert item['verification']['mode'] == 'automatic'
     assert item['stage'] == 'draft' and len(item['attachments']) == 1
     assert hashlib.sha256(Path(linked['path']).read_bytes()).hexdigest() == source_digest

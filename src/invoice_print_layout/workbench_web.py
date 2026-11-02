@@ -198,6 +198,8 @@ def make_server(workspace: Path, port: int = 8765, *, mode: str = 'workbench',
     from invoice_print_layout.mail_agent import MailAgentService
     mail_agent = MailAgentService(store, invoice_agent)
     settings_service = WorkbenchSettings(store, mail_agent, invoice_ai, imap_factory=imap_factory)
+    from invoice_print_layout.project_events import ProjectEvents
+    project_events = ProjectEvents(store)
     with store.connect() as db:
         from invoice_print_layout.expense_projects import install_project_guards
         install_project_guards(db)
@@ -329,6 +331,15 @@ def make_server(workspace: Path, port: int = 8765, *, mode: str = 'workbench',
                     self.respond(receipt_devices.status())
                 elif path == '/api/runtime':
                     self.respond(runtime)
+                elif path == '/api/attention':
+                    from invoice_print_layout.invoice_attention import Attention
+                    query = parse_qs(urlparse(self.path).query)
+                    self.respond(Attention(store).list(query.get('project', [''])[0],
+                                                      offset=int(query.get('offset', ['0'])[0]),
+                                                      limit=int(query.get('limit', ['100'])[0])))
+                elif path == '/api/attention/context':
+                    from invoice_print_layout.invoice_attention import Attention
+                    self.respond(Attention(store).show(parse_qs(urlparse(self.path).query).get('object', [''])[0]))
                 elif path == '/api/intake':
                     self.respond({'queue': [{k: v for k, v in row.items() if k != 'path'} for row in intake.list()]})
                 elif path == '/api/intake/progress':
@@ -585,6 +596,13 @@ def make_server(workspace: Path, port: int = 8765, *, mode: str = 'workbench',
                     else:
                         mail_agent_result = mail_agent.collect_now()
                     self.respond(mail_agent_result)
+                    return
+                if path == '/api/attention/resolve':
+                    from invoice_print_layout.invoice_attention import Attention
+                    with write_lock:
+                        attention_result = Attention(store).resolve(body)
+                    invoice_agent.kick()
+                    self.respond(attention_result)
                     return
                 if path == '/api/agent/facts/restore':
                     from invoice_print_layout.agent_confirmed_facts import restore
@@ -875,6 +893,10 @@ def make_server(workspace: Path, port: int = 8765, *, mode: str = 'workbench',
                     elif path == '/api/report':
                         from invoice_print_layout.reimbursement import create_report
                         result = create_report(store, body['ids'], body.get('options'), include_table=True)
+                    elif path == '/api/reports/create':
+                        from invoice_print_layout.project_reports import create_project_report
+                        result = create_project_report(store, body.get('project_id'), body.get('request_id'),
+                                                       body.get('expected_version'))
                     elif path == '/api/report-template':
                         from invoice_print_layout.report_excel import install_template
                         install_template(store.root, base64.b64decode(body['data'], validate=True))
@@ -893,6 +915,7 @@ def make_server(workspace: Path, port: int = 8765, *, mode: str = 'workbench',
         next_schedule_check = 0.0
 
         def server_close(self) -> None:
+            project_events.close()
             receipt_devices.close()
             background_intake.close()
             mail_agent.close()
@@ -906,6 +929,7 @@ def make_server(workspace: Path, port: int = 8765, *, mode: str = 'workbench',
             if runtime['ready']:
                 mail_agent.kick()
                 mail_agent.notifier.kick()
+                project_events.kick()
             if mode == 'invoice' or not runtime['ready']:
                 return
             if time.monotonic() >= self.next_schedule_check:

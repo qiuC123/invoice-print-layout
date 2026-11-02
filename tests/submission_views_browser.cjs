@@ -21,7 +21,7 @@ async function run(playwright) {
     app_mode: 'invoice', logistics_available: false, items: [
       item('review'), item('requested', {complete: false, review_requested: true, missing: ['付款截图']}),
       item('missing', {complete: false, missing: ['发票']}),
-      item('ready', {verified: true, ready: true}),
+      item('ready', {verified: true, ready: true, verification: {mode: 'automatic', rule_version: 'auto-verify-v1'}}),
       item('submitted', {stage: 'submitted', verified: true, ready: true}),
       item('reimbursed', {stage: 'reimbursed', verified: true, ready: true}),
       item('deleted', {deleted: true, verified: true, ready: true}),
@@ -40,6 +40,13 @@ async function run(playwright) {
     const json = body => route.fulfill({contentType: 'application/json', body: JSON.stringify(body)});
     if (request.method() === 'POST') {
       const body = request.postDataJSON();
+      if (url.pathname === '/api/review/return') {
+        assert.equal(request.headers()['x-workbench-token'], 'synthetic');
+        assert.deepEqual(body.ids, ['ready']);assert.equal(body.versions.ready, 'ready-v1');
+        const x = state.items.find(value => value.id === 'ready');
+        Object.assign(x, {verified: false, ready: false, review_requested: true, version: 'ready-v2'});
+        writes.push(body);return json({items: [x], changed: 1});
+      }
       if (url.pathname === '/api/expense-print-preview') {
         previews.push(body.id);
         const x = state.items.find(value => value.id === body.id);
@@ -107,6 +114,8 @@ async function run(playwright) {
     assert.equal(await page.locator('#exportSelected').isVisible(), true);
     await select('ready');
     await image('ready');
+    assert.match(await page.locator('[data-item="ready"]').innerText(), /自动核对/);
+    assert.equal(await page.getByRole('button', {name: '撤销自动核对', exact: true}).isVisible(), true);
     assert.equal(await page.locator('#expensePrintPdf').getAttribute('href'), '/export/ready.pdf');
     assert.match(await page.locator('#detail').innerText(), /最终打印预览/);
     await page.locator('#makeExpenseReport').click();
@@ -187,6 +196,13 @@ async function run(playwright) {
     assert.match(await metric.innerText(), /1 笔事项/);
     assert.deepEqual(await ids(), ['historical-project']);
     assert.equal(writes.length, 1, 'Summary clicks and filters never modify financial records');
+    await page.goto(origin + '/?project=p1&view=submitted');await select('ready');await image('ready');
+    await page.getByRole('button', {name: '撤销自动核对', exact: true}).click();
+    await page.locator('#confirmVerify').click();
+    await page.waitForFunction(() => document.querySelector('#tabs [data-view="review"]')?.classList.contains('active'));
+    assert.equal(state.items.find(x => x.id === 'ready').verified, false);
+    assert.equal(state.items.find(x => x.id === 'ready').review_requested, true);
+    assert.equal(writes.length, 2);
     assert.deepEqual(errors, []);
     return {passed: true, scope: 'synthetic browser only', reviewSplit: true, preservedHistoricalBills: true,
       finalPrintPreview: true, materialDeskEntry: true, createdExpenseFocus: true, legacySynthesisRedirect: true,

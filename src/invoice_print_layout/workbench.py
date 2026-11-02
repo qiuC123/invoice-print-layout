@@ -188,6 +188,10 @@ class ExpenseStore:
                 CREATE TABLE IF NOT EXISTS automatic_ride_files (
                     digest TEXT PRIMARY KEY, item_id TEXT REFERENCES expenses(id), material_key TEXT NOT NULL);
             ''')
+            from invoice_print_layout.project_events import install
+            install(db)
+            from invoice_print_layout.invoice_attention import install as install_attention
+            install_attention(db)
             from invoice_print_layout.expense_projects import install_project_guards
             install_project_guards(db)
 
@@ -199,6 +203,9 @@ class ExpenseStore:
         try:
             with db:
                 yield db
+                if db.in_transaction:
+                    from invoice_print_layout.project_events import capture_changes
+                    capture_changes(self, db)
         finally:
             db.close()
 
@@ -480,6 +487,10 @@ class ExpenseStore:
             # External source loss/replacement must invalidate the effective
             # review without rewriting the ledger during a read.
             data['verified'] = False
+        if stored.get('verified') and (stored.get('verification') or {}).get('mode') == 'automatic':
+            from invoice_print_layout.auto_verify import automatic_verification_valid
+            if not automatic_verification_valid(self, db, stored):
+                data['verified'] = False
         data['ready'] = ((data['complete'] or data['missing_acknowledged']) and data['verified']
                          and not data['deleted'] and not returned)
         data.setdefault('review_requested', False)
@@ -741,6 +752,7 @@ class ExpenseStore:
                 else:
                     data.pop('missing_material_acknowledgement', None)
                 data['verified'] = True
+                data['verification'] = {'mode': 'human', 'at': now()}
                 label = '人工确认材料内容及金额'
                 if not current['complete']:
                     label += '；已确认仍缺：' + '、'.join(current['missing'])
@@ -767,10 +779,13 @@ class ExpenseStore:
             db.execute('INSERT INTO events(item_id,at,message) VALUES (?,?,?)', (item_id, now(), label))
         return self.get(item_id)
 
-    def submit_report(self, snapshots: list[dict[str, Any]], files: dict[str, str]) -> None:
+    def submit_report(self, snapshots: list[dict[str, Any]], files: dict[str, str], *, request_id: str | None = None) -> None:
         """Commit all report matters together; reject edits made during rendering."""
         with self.connect() as db:
             db.execute('BEGIN IMMEDIATE')
+            if request_id is not None:
+                from invoice_print_layout.project_reports import complete_request
+                complete_request(self, db, request_id, snapshots, files)
             for expected in snapshots:
                 current = self.get(expected['id'])
                 if current['stage'] != 'draft' or not current['ready']:

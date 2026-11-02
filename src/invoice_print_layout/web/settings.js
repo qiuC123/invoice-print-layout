@@ -117,10 +117,11 @@
  function renderOrganize(){
   const organize=settings?.organize||{auto_after_upload:true,use_model:true,model_available:false,model_label:''};
   el('settingsAutoUpload').checked=organize.auto_after_upload!==false;
+  el('settingsAutoVerify').checked=organize.auto_verify!==false;
   el('settingsOrganizeModel').checked=!!organize.model_available&&organize.use_model!==false;el('settingsOrganizeModel').disabled=!organize.model_available||busy;
   el('settingsOrganizeModelLabel').textContent='当前模型：'+organize.model_label;el('settingsModelAvailable').hidden=!organize.model_available;el('settingsModelUnavailable').hidden=!!organize.model_available;
  }
- for(const [id,key] of [['settingsAutoUpload','auto_after_upload'],['settingsOrganizeModel','use_model']])el(id).onchange=()=>action(async()=>{try{settings.organize=await request('/organize',{[key]:el(id).checked});renderOrganize();changed();status('自动整理设置已保存。');}catch(error){renderOrganize();throw error;}});
+ for(const [id,key] of [['settingsAutoUpload','auto_after_upload'],['settingsOrganizeModel','use_model'],['settingsAutoVerify','auto_verify']])el(id).onchange=()=>action(async()=>{try{settings.organize=await request('/organize',{[key]:el(id).checked});renderOrganize();changed();status('自动整理设置已保存。');}catch(error){renderOrganize();throw error;}});
  for(const id of ['settingsChangeModel','settingsConfigureModel'])el(id).onclick=()=>tab('ai');
  function authState(){const saved=!!settings?.mail?.auth_saved&&el('settingsMailAddress').value.trim()===settings.mail.address;el('settingsMailAuthState').textContent=saved?'已保存在 Windows 凭据管理器':'未保存';el('settingsMailAuthState').classList.toggle('is-warning',!saved);}
  const feishuCard=document.createElement('div');feishuCard.className='settings-option-card';

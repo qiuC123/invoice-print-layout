@@ -17,7 +17,7 @@ _MATERIAL_GAPS = frozenset({
     '订单记录', '运单明细',
 })
 _LIFECYCLE_FIELDS = frozenset({
-    'verified', 'stage', 'updated_at', 'review_requested', 'report_files',
+    'verified', 'verification', 'stage', 'updated_at', 'review_requested', 'report_files',
     'missing_material_acknowledgement',
 })
 

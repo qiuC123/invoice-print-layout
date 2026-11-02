@@ -175,4 +175,6 @@ class AutomaticCategory:
             elif result.get('warnings'):
                 result['reason'] = '部分材料未能完整读取，保留原类别。请补充或手动选择。'
             self.remember_attempt(item_id, input_key, evidence_key, result)
+            from invoice_print_layout.auto_verify import scan
+            scan(self.store, [item_id])
         return result

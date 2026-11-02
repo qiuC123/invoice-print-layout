@@ -44,6 +44,19 @@ def test_auto_save_only_category_and_reuse_after_restart(setup):
     assert len(calls) == 2
 
 
+def test_saved_classification_triggers_source_bound_auto_review(setup, monkeypatch):
+    from invoice_print_layout import auto_verify
+    store, auto, _, create = setup
+    item = create()
+    reviewed = []
+    def scan(current_store, ids):
+        assert current_store is store and store.get(item['id'])['category'] == '材料采购'
+        reviewed.extend(ids)
+    monkeypatch.setattr(auto_verify, 'scan', scan)
+    assert auto.run(item['id'])['saved']
+    assert reviewed == [item['id']]
+
+
 def test_human_correction_overrides_cached_model_without_retraining(setup):
     store, auto, calls, create = setup
     item = create()

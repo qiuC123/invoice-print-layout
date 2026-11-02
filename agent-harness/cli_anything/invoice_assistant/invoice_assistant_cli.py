@@ -137,6 +137,36 @@ def classify(ctx, ids, classify_missing):
 def matches(): """Original local matching rules; no duplicate recognizer."""
 
 
+@cli.group()
+def attention(): """Inspect source-bound questions and return evidenced answers."""
+
+
+@attention.command('list')
+@paging
+@click.pass_context
+def list_attention(ctx, offset, limit):
+    from cli_anything.invoice_assistant.core import attention as att
+    emit(ctx, att.list_attention(ctx.obj['client'], ctx.obj['project'], offset, limit))
+
+
+@attention.command('show')
+@click.argument('object')
+@click.pass_context
+def show_attention(ctx, object):
+    from cli_anything.invoice_assistant.core import attention as att
+    emit(ctx, att.context(ctx.obj['client'], ctx.obj['project'], object))
+
+
+@attention.command('resolve')
+@click.argument('object')
+@click.option('--expected-version', required=True)
+@click.option('--request', required=True, type=click.Path(exists=True, dir_okay=False, path_type=Path))
+@click.pass_context
+def resolve_attention(ctx, object, expected_version, request):
+    from cli_anything.invoice_assistant.core import attention as att
+    emit(ctx, att.resolve(ctx.obj['client'], ctx.obj['project'], object, expected_version, read_json(request), ctx.obj['dry_run']))
+
+
 @matches.command('list')
 @click.pass_context
 def list_matches(ctx): emit(ctx, {'status': 'complete', 'board': flow.matches(ctx.obj['client'], ctx.obj['project']), 'reused': True})
@@ -160,7 +190,17 @@ def create_drafts(ctx, request_file, request_id):
 
 
 @cli.group('reports')
-def reports_group(): """List/download existing original report snapshots; no generation or submission."""
+def reports_group(): """Create a verified project package or list/download existing snapshots."""
+
+
+@reports_group.command('create')
+@click.option('--project', 'project_id', help='Stable project ID; alternatively use the global --project.')
+@click.option('--request-id', required=True, help='Stable idempotency key, 1-128 ASCII identifier characters.')
+@click.option('--expected-version', help='Project version from invoice.project_ready; reject a changed batch.')
+@click.pass_context
+def create_report(ctx, project_id, request_id, expected_version):
+    ctx.obj['project'] = project_id or ctx.obj['project']
+    emit(ctx, reports.create(ctx.obj['client'], ctx.obj['project'], request_id, expected_version, ctx.obj['dry_run']))
 
 
 @reports_group.command('list')
@@ -213,6 +253,7 @@ def repl(ctx):
 
 def error(exc, as_json):
     body = {'ok': False, 'status': 'failed', 'error': {'code': getattr(exc, 'code', 'INVALID_REQUEST'), 'message': str(exc)}}
+    if getattr(exc, 'retryable', None) is not None: body['error']['retryable'] = exc.retryable
     click.echo(json.dumps(body, ensure_ascii=False) if as_json else '错误：' + str(exc))
 
 

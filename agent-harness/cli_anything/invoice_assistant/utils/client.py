@@ -10,9 +10,10 @@ from urllib.request import build_opener, HTTPRedirectHandler, ProxyHandler, Requ
 
 
 class CLIError(Exception):
-    def __init__(self, message, code='INVALID_REQUEST', exit_code=2):
+    def __init__(self, message, code='INVALID_REQUEST', exit_code=2, *, retryable=None):
         super().__init__(message)
         self.code, self.exit_code = code, exit_code
+        self.retryable = retryable
 
 
 def canonical(value):
@@ -131,6 +132,10 @@ class Client:
             self.operations['classification_requests'] += 1
             self.operations['jev_calls'] = None
         elif path == '/api/material-matching/create-batch': self.operations['draft_requests'] += 1
+        elif path == '/api/reports/create': self.operations['report_render_requests'] += 1
+        elif path == '/api/attention/resolve':
+            # The queued organizer's provider activity is reported by its job.
+            self.operations['glm_calls'] = self.operations['jev_calls'] = None
         for attempt in range(2):
             self.runtime()
             state = self.state(refresh=attempt > 0)

@@ -57,10 +57,11 @@ def test_current_prepared_payment_has_amount_without_legacy_completion(environme
     assert not any(event.get('tool') == 'analyze_materials' for event in done['events'])
     assert not tools.intake.get(payment['id']).get('agent_local_evidence')
     item = tools.store.get(done['item_ids'][0])
-    assert len(item['attachments']) == 2 and not item['verified'] and item['stage'] == 'draft'
+    assert len(item['attachments']) == 2 and item['verified'] and item['stage'] == 'draft'
+    assert item['verification']['mode'] == 'automatic'
 
 
-def test_legacy_prepared_payment_missing_amount_completes_to_unverified_preview(environment: Any) -> None:
+def test_legacy_prepared_payment_missing_amount_completes_to_auto_verified_draft(environment: Any) -> None:
     jobs, tools, _ = environment
     rows = pair(environment)
     assert rows[1]['status'] == 'review' and rows[1]['fields']['amount'] == ''
@@ -71,7 +72,8 @@ def test_legacy_prepared_payment_missing_amount_completes_to_unverified_preview(
     assert done['preview']['total_cents'] == 1700 and len(done['item_ids']) == 1
     result = tools.store.get(done['item_ids'][0])
     assert result['amount_cents'] == 1700 and len(result['attachments']) == 2
-    assert not result['verified'] and result['stage'] == 'draft'
+    assert result['verified'] and result['stage'] == 'draft'
+    assert result['verification']['mode'] == 'automatic'
     assert '鼠标' in result['title']
     recovered = tools.intake.get(rows[1]['id'])
     assert recovered['fields']['amount'] == '17.00'

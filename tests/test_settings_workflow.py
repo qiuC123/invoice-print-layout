@@ -168,7 +168,7 @@ def file_snapshot(workspace: Path) -> dict[str, bytes]:
 def test_organize_defaults_partial_atomic_save_and_readback(tmp_path: Path,
                                                            monkeypatch: pytest.MonkeyPatch) -> None:
     service = OrganizeSettings(tmp_path)
-    assert service.read() == {'auto_after_upload': True, 'use_model': True}
+    assert service.read() == {'auto_after_upload': True, 'use_model': True, 'auto_verify': True}
     assert not service.path.exists()
     replaces: list[tuple[Path, Path]] = []
     real_replace = reliability.os.replace
@@ -180,17 +180,17 @@ def test_organize_defaults_partial_atomic_save_and_readback(tmp_path: Path,
         real_replace(source, destination)
 
     monkeypatch.setattr(reliability.os, 'replace', replace)
-    assert service.update({'auto_after_upload': False}) == {'auto_after_upload': False, 'use_model': True}
-    assert OrganizeSettings(tmp_path).update({'use_model': False}) == {'auto_after_upload': False, 'use_model': False}
+    assert service.update({'auto_after_upload': False}) == {'auto_after_upload': False, 'use_model': True, 'auto_verify': True}
+    assert OrganizeSettings(tmp_path).update({'use_model': False}) == {'auto_after_upload': False, 'use_model': False, 'auto_verify': True}
     assert len(replaces) == 2 and not list(tmp_path.glob('*.tmp'))
     assert json.loads(service.path.read_text(encoding='utf-8')) == {
-        'version': 1, 'auto_after_upload': False, 'use_model': False}
+        'version': 1, 'auto_after_upload': False, 'use_model': False, 'auto_verify': True}
 
 
 @pytest.mark.parametrize('bad', [None, 0, 1, 'true', [], {}])
 def test_organize_rejects_non_boolean_updates_without_writing(tmp_path: Path, bad: Any) -> None:
     service = OrganizeSettings(tmp_path)
-    for key in ('auto_after_upload', 'use_model'):
+    for key in ('auto_after_upload', 'use_model', 'auto_verify'):
         with pytest.raises(ValueError):
             service.update({key: bad})
     with pytest.raises(ValueError):

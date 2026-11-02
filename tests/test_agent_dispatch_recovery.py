@@ -28,7 +28,9 @@ def confirmation_barrier_worker(workspace: str, key: str) -> None:
     if not job.get('confirmations'):
         jobs.update(key, state='running', run_started=time.time())
         jobs.stop(key, 'needs_input', job['question']['text'])
-        (root / 'old-worker-paused.json').write_text(json.dumps({'pid': os.getpid(), 'id': key}), encoding='utf-8')
+        barrier = root / 'old-worker-paused.tmp'
+        barrier.write_text(json.dumps({'pid': os.getpid(), 'id': key}), encoding='utf-8')
+        barrier.replace(root / 'old-worker-paused.json')
         deadline = time.monotonic() + 8
         while not (root / 'release-old-worker').exists():
             if time.monotonic() >= deadline:
