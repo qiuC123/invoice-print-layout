@@ -172,7 +172,7 @@
 
 ### T14 并行测试与浏览器测试入口
 
-- 开发依赖加 `pytest-xdist`，修正并行冲突（固定端口、共享路径等），使 `pytest -n auto` 全部通过；串行跑法继续有效，`AGENTS.md` 的交付要求不变。
+- 开发依赖加 `pytest-xdist`，修正并行冲突（固定端口、共享路径等）。F24（11-02）更新：PowerShell 契约用 `pytest -m powershell -n 0` 独立串行，其余用 `pytest -m "not powershell" -n auto`；两阶段并集为全量，完整串行跑法及 `AGENTS.md` 的交付要求不变。
 - 新增 `scripts/run-browser-tests.ps1`（或 `.mjs`）：依次运行全部 `tests/*.cjs`，说明 Playwright 的解析方式，汇总通过/失败并返回退出码。README 开发章节补用法。
 - 验收：报告串行与并行的耗时，以及浏览器测试的汇总结果。
 
@@ -241,10 +241,10 @@
 ### F6 并行测试补跑
 
 - 用 PyPI 在项目 `.venv` 安装 `pytest-xdist`（会一并装上 `execnet`）。这一步只装开发依赖，允许联网；其他网络限制不变。
-- 跑 `pytest -n auto`，修正只在并行下出现的失败（固定端口、共享目录、全局缓存等）。
+- 先跑 `pytest -m powershell -n 0`，再跑 `pytest -m "not powershell" -n auto`，修正只在并行下出现的失败（固定端口、共享目录、全局缓存等）。
 - 验收：报告串行和并行的耗时与结果末尾几行。
 
 ### 修复轮收尾
 
-- 跑完整串行 pytest、`pytest -n auto`、mypy、全部浏览器测试。
+- 跑完整串行 pytest、上述两阶段 pytest、mypy、全部浏览器测试。
 - 在验收报告末尾追加“修复轮”一节：每项的提交 hash 和结论；F3、F4 的前后评估表；各项测试结果的末尾几行。
