@@ -169,7 +169,13 @@ $env:PYTHONPATH = Join-Path (Get-Location) "src"
 .\.venv\Scripts\python.exe -m mypy src
 ```
 
-安装开发依赖后也可运行 `python -m pytest -n auto`（需要 `pytest-xdist`）；串行跑法保持有效。
+安装开发依赖后也可按两阶段执行完整套件（需要 `pytest-xdist`）：PowerShell 契约先串行，其余用例再并行；两阶段并集为全量，上方完整串行跑法仍有效。
+
+```powershell
+python -m pytest -m powershell -n 0
+python -m pytest -m "not powershell" -n auto
+```
+
 浏览器测试统一入口会按顺序执行全部 `tests/*.cjs`，失败后继续其他文件，最后返回非零退出码：
 
 ```powershell

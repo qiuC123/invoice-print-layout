@@ -24,6 +24,8 @@ from invoice_print_layout.workbench import ExpenseStore
 from invoice_print_layout.workbench_runtime import identity, source_build_id
 from tests.helpers import make_invoice_pdf, make_trip_pdf
 
+pytestmark = pytest.mark.powershell
+
 
 class Client:
     def __init__(self, port: int):
@@ -353,6 +355,8 @@ def test_cli_only_imports_history_in_full_workbench_mode(
 @pytest.mark.parametrize('case,target_mode', [
     ('switch_to_invoice', 'invoice'), ('switch_to_workbench', 'workbench'),
     ('cold', 'invoice'), ('foreign', 'invoice'), ('workspace', 'invoice'),
+    ('delayed_exit_to_invoice', 'invoice'), ('delayed_exit_to_workbench', 'workbench'),
+    ('stuck_exit', 'invoice'),
 ])
 def test_launcher_mode_switch_and_identity_guards_without_touching_a_live_service(
         tmp_path: Path, case: str, target_mode: str) -> None:
@@ -362,7 +366,7 @@ def test_launcher_mode_switch_and_identity_guards_without_touching_a_live_servic
     root = Path(__file__).resolve().parents[1]
     ready = {'ready': True, 'started_at': '2026-01-01T00:00:00Z'}
     target = {**identity(tmp_path, source_build_id(), mode=target_mode), **ready}
-    initial_mode = 'invoice' if case in {'switch_to_workbench', 'workspace'} else 'workbench'
+    initial_mode = 'invoice' if case in {'switch_to_workbench', 'delayed_exit_to_workbench', 'workspace'} else 'workbench'
     initial = {**identity(tmp_path, source_build_id(), mode=initial_mode), **ready}
     if case == 'foreign':
         initial['app_id'] = 'unrelated-app'
@@ -378,33 +382,55 @@ def test_launcher_mode_switch_and_identity_guards_without_touching_a_live_servic
 $global:phase = 'initial'
 $global:launched = $false
 $global:shutdowns = 0
+$global:closingWaits = 0
+$global:closingProbes = 0
+$global:testPort = @@PORT@@
+$global:oldListener = $null
+if ('@@CASE@@' -like 'delayed_exit*' -or '@@CASE@@' -eq 'stuck_exit') {
+    $global:oldListener = [Net.Sockets.TcpListener]::new([Net.IPAddress]::Loopback, 0)
+    $global:oldListener.Start()
+    $global:testPort = $global:oldListener.LocalEndpoint.Port
+}
+$global:testUrl = 'http://127.0.0.1:' + $global:testPort
 $global:launches = [Collections.Generic.List[object]]::new()
 function Invoke-WebRequest {
     param($Uri, [switch]$UseBasicParsing, $TimeoutSec, $Method, $Headers, $ContentType, $Body)
     if (-not $UseBasicParsing.IsPresent) { throw 'Basic parsing required' }
-    if ($Uri -eq 'http://127.0.0.1:@@PORT@@/api/state') {
+    if ($Uri -eq ($global:testUrl + '/api/state')) {
         return [PSCustomObject]@{Content='{"token":"synthetic-token"}'}
     }
-    if ($Uri -eq 'http://127.0.0.1:@@PORT@@/api/shutdown') {
+    if ($Uri -eq ($global:testUrl + '/api/shutdown')) {
         if ($Method -ne 'Post' -or $Headers['X-Workbench-Token'] -ne 'synthetic-token' -or $Body -ne '{}') { throw 'Invalid shutdown request' }
         $global:shutdowns++
         $global:phase = 'closed'
         return [PSCustomObject]@{Content='{"ok":true}'}
     }
-    if ($Uri -ne 'http://127.0.0.1:@@PORT@@/api/runtime') { throw 'Wrong endpoint' }
+    if ($Uri -ne ($global:testUrl + '/api/runtime')) { throw 'Wrong endpoint' }
     if ($global:launched) { return [PSCustomObject]@{Content=(Get-Content -Raw -LiteralPath '@@TARGET@@')} }
-    if ($global:phase -eq 'closed' -or '@@CASE@@' -eq 'cold') { throw 'Offline' }
+    if ($global:phase -eq 'closed') { $global:closingProbes++; throw 'Offline' }
+    if ('@@CASE@@' -eq 'cold') { throw 'Offline' }
     return [PSCustomObject]@{Content=(Get-Content -Raw -LiteralPath '@@INITIAL@@')}
 }
 function Start-Process {
     param($FilePath, $ArgumentList, $WorkingDirectory, $WindowStyle)
+    if ($global:oldListener) { throw 'New backend launched before the old listener closed' }
     $global:launches.Add([PSCustomObject]@{FilePath=$FilePath;WindowStyle=$WindowStyle;Arguments=$ArgumentList})
     $global:launched = $true
 }
-function Start-Sleep { param($Seconds) }
+function Start-Sleep {
+    param($Seconds)
+    if ($global:phase -eq 'closed' -and -not $global:launched) {
+        $global:closingWaits++
+        if ('@@CASE@@' -like 'delayed_exit*' -and $global:closingWaits -eq 3) {
+            $global:oldListener.Stop()
+            $global:oldListener = $null
+        }
+    }
+}
 $failure = $null
-try { & '@@LAUNCHER@@' -Workspace '@@WORKSPACE@@' -Port @@PORT@@ -Mode '@@MODE@@' -NoBrowser } catch { $failure = $_.Exception.Message }
-[PSCustomObject]@{Shutdowns=$global:shutdowns;Launches=@($global:launches.ToArray());Failure=$failure} | ConvertTo-Json -Depth 6 -Compress
+try { & '@@LAUNCHER@@' -Workspace '@@WORKSPACE@@' -Port $global:testPort -Mode '@@MODE@@' -NoBrowser } catch { $failure = $_.Exception.Message }
+finally { if ($global:oldListener) { $global:oldListener.Stop() } }
+[PSCustomObject]@{Shutdowns=$global:shutdowns;Launches=@($global:launches.ToArray());Failure=$failure;Port=$global:testPort;ClosingWaits=$global:closingWaits;ClosingProbes=$global:closingProbes} | ConvertTo-Json -Depth 6 -Compress
 '''
     replacements = {'PORT': str(port), 'TARGET': str(target_path), 'INITIAL': str(initial_path),
                     'CASE': case, 'LAUNCHER': str(root / 'scripts/start-workbench.ps1'),
@@ -418,6 +444,10 @@ try { & '@@LAUNCHER@@' -Workspace '@@WORKSPACE@@' -Port @@PORT@@ -Mode '@@MODE@@
     data = json.loads(result.stdout)
     if case in {'foreign', 'workspace'}:
         assert data['Failure'] and data['Shutdowns'] == 0 and data['Launches'] == []
+    elif case == 'stuck_exit':
+        assert data['Failure'].startswith('Old backend did not exit after graceful shutdown')
+        assert data['Shutdowns'] == 1 and data['Launches'] == []
+        assert data['ClosingWaits'] == 10 and data['ClosingProbes'] == 0
     else:
         assert data['Failure'] is None
         assert data['Shutdowns'] == (0 if case == 'cold' else 1)
@@ -426,5 +456,7 @@ try { & '@@LAUNCHER@@' -Workspace '@@WORKSPACE@@' -Port @@PORT@@ -Mode '@@MODE@@
         assert launch['FilePath'].endswith('pythonw.exe') and launch['WindowStyle'] == 'Hidden'
         arguments = launch['Arguments']
         assert arguments[arguments.index('--mode') + 1] == target_mode
-        assert arguments[arguments.index('--port') + 1] == str(port)
+        assert arguments[arguments.index('--port') + 1] == str(data['Port'])
+        if case.startswith('delayed_exit'):
+            assert data['ClosingWaits'] == 3 and data['ClosingProbes'] == 0
     assert not (tmp_path / '工作台').exists()

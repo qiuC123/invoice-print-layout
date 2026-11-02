@@ -4,6 +4,7 @@ import os
 import pytest
 
 
+@pytest.hookimpl(trylast=True)
 def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:
     raw_index = os.environ.get('INVOICE_PYTEST_SHARD_INDEX')
     raw_count = os.environ.get('INVOICE_PYTEST_SHARD_COUNT')

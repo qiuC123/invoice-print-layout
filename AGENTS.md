@@ -24,5 +24,6 @@
 | 保留用户 Office 实例；禁止按进程名终止 Office。 | `tests/test_agent_rules.py::test_tracked_scripts_preserve_user_office`，以及坏样本和历史脚本回归测试；所有权注释仍须代码审查。 |
 | PDF 保留原件与矢量文字，裁剪不确定时进入人工复核。 | `tests/test_layout.py`、`tests/test_documents.py`；验证技能检查原件哈希和导出 PDF 文本。 |
 | 行为变更需测试，交付前完整 pytest 和 mypy。 | `.github/workflows/ci.yml` 的 Python checks；是否覆盖了变更仍须审查。 |
+| 直接调用 PowerShell 或脚本替身的测试模块统一标记 `powershell`，串行执行。 | `tests/powershell_contracts.py` 在筛选前拒绝漏标的宿主解析/字面量调用，在 xdist worker 中拒绝执行；CI 用同一标记正选/反选，回归证明能拦住旧遗漏。动态构造宿主时须扩展检查。 |
 | 真实界面使用合成数据验证，清理实例并保留证据。 | `verify-workbench` 的体检、断言和 `cleanup.json`；CI 的 Browser contracts 补充界面回归。 |
 | 禁止提交真实业务数据、凭据和工作区状态。 | `.gitignore` 限制常见文件；推送前逐文件审查。没有自动检查能保证内容完全脱敏。 |

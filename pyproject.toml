@@ -33,6 +33,7 @@ where = ["src"]
 [tool.pytest.ini_options]
 addopts = "-q"
 testpaths = ["tests"]
+markers = ["powershell: real PowerShell or script-double contracts; run serially without xdist"]
 
 [tool.mypy]
 python_version = "3.12"

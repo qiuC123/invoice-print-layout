@@ -4,10 +4,18 @@
 
 ## 云端检查
 
-- **Python tests (1/32) 至 (32/32)**：Python 3.12，建立应用启动器要求的 `.venv` 并安装 `.[dev]`。第一组先串行跑 `test_assistant_startup.py`、`test_workbench_launcher.py`，保留各子进程 40 秒限时及断言，避免与数据库/OCR 重测试争用同一运行机；独立 XML 为 `startup.xml`。随后各组 `python -m pytest -p tests.ci_shard -n 4 -ra --ignore=tests/test_assistant_startup.py --ignore=tests/test_workbench_launcher.py --junitxml=...` 按用例序号划分其余完整套件，参数化大文件也会分散，包含 `tests/test_agent_rules.py`。32 份分组 XML 加 startup.xml 的并集为完整套件，交付时核对无缺失、无重复；其他组用例显示为 deselected，不算跳过。分组索引和总数取 `strategy`，插件拒绝非法/空组，有完整性及大文件均衡回归；未加载插件或无分组环境变量时本机收集不变。第一组另跑 `python -m mypy src`。
+- **Python tests (1/32) 至 (32/32)**：Python 3.12，建立应用启动器要求的 `.venv` 并安装 `.[dev]`。第一组先运行 `python -m pytest -m powershell -n 0 -ra --junitxml=.runtime/ci/powershell.xml`，统一串行所有直接调用 PowerShell/脚本替身的模块，保留原断言和 40/60 秒子进程限时。随后各组 `python -m pytest -p tests.ci_shard -m "not powershell" -n 2 -ra --junitxml=...` 先按标记反选，再分片其余用例；每台运行机使用2个worker，减少4个worker下已观察到的短时限/HTTP争用，不延长请求超时。参数化大文件也会分散，包含 `tests/test_agent_rules.py`。32 份分组 XML 加 powershell.xml 的并集为完整套件，交付时核对无缺失、无重复。其他组用例显示为 deselected，不算跳过。分组索引和总数取 `strategy`；未加载分片插件或无分组环境变量时，本机收集不变。第一组另跑 `python -m mypy src`。
 - **Python checks**：固定名称的汇总检查，`always()` 等待全部 Python 分组；任何分组或 mypy 失败、取消或跳过都会失败。分组数变化不需要改这个必需检查名。
 - **Browser contracts**：Node 24，`npm ci`、`npx playwright install chromium`，然后 `node scripts/run-browser-tests.mjs --output=.runtime/ci/browser`。运行公开 Git 文件中的全部 `tests/*.cjs`；Python 服务使用临时合成工作区和临时端口，其他界面契约使用模拟响应。它们不能代替真实 OCR、Excel 或 Android 真机验收。
 - pytest XML、浏览器逐项日志和结果 JSON 保留为 Actions artifacts 七天；失败时也上传。没有真实发票、私有模板或台账。
+
+## PowerShell 测试的唯一分类来源
+
+直接调用宿主或脚本替身的模块设置 `pytestmark = pytest.mark.powershell`，不维护第二份 CI 文件清单。当前为 `test_assistant_startup.py`（含 VBS 调用 PS 替身）、`test_workbench_launcher.py`、`test_invoice_assistant.py`、`test_construction_report_execution.py`、`test_construction_report_native.py`。整个模块串行，避免同文件里的辅助调用被漏掉。
+
+`tests/powershell_contracts.py` 随 conftest 自动加载，在 `-m` 筛选前检查实际宿主解析和字面量子进程调用，漏标就收集失败；已标记测试进入 xdist worker 也会失败，提示使用 `-m powershell -n 0`。检查不把静态审计字符串或 Git 命令当成宿主执行，回归覆盖此前漏标的 invoice_assistant 模块。动态构造宿主时须扩展识别，不能只改文档。
+
+隔离针对已观察到的宿主/子 Python 在重测试并行负载下超过 40 秒的现象。原 CI 日志没有分段计时，不能精确归因到某个系统调用；没有延长超时或加入测试重试。私有 Excel/COM 集成的原有跳过范围不变。
 
 ## 合并前的兼容试跑
 
@@ -42,7 +50,8 @@ gh workflow run ci.yml --ref <CI分支> -f validation-ref=<待验证提交SHA>
 
 ```powershell
 $env:PYTHONPATH = Join-Path $PWD 'src'
-.venv/Scripts/python.exe -m pytest -n 4 -ra --junitxml=.runtime/verify/pytest.xml
+.venv/Scripts/python.exe -m pytest -m powershell -n 0 -ra --junitxml=.runtime/verify/powershell.xml
+.venv/Scripts/python.exe -m pytest -m "not powershell" -n 4 -ra --junitxml=.runtime/verify/pytest.xml
 .venv/Scripts/python.exe -m mypy src
 npm ci
 npx playwright install chromium
@@ -51,5 +60,7 @@ node .claude/skills/verify-workbench/scripts/verify.cjs run <新运行名称>
 ```
 
 技能的体检、操作、证据和清理以 [verify-workbench](../.claude/skills/verify-workbench/SKILL.md) 为准。技能测试的是临时实例，不附加正式服务。Git-only 基线与候选版本应在同一依赖、同一公开测试范围内比较；私有测试数量不能混入比较。
+
+本机完整 pytest 可用上述两阶段（XML 并集为全量），或直接 `python -m pytest` 串行全量；不要对含 PowerShell 标记的完整套件直接使用 `-n 4`。
 
 main 的必需检查应为固定的 **Python checks** 和 **Browser contracts**，并要求人工批准合并。旧的六个 `Python checks (n/6)` 需由维护者替换；本次不修改仓库设置。
