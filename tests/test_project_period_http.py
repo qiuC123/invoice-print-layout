@@ -71,10 +71,11 @@ def test_paired_phone_cannot_modify_project_period(web: Any, monkeypatch: pytest
     original = phone_link.lan_address
     monkeypatch.setattr(phone_link, 'lan_address', lambda address: address == '127.0.0.1' or original(address))
     monkeypatch.setattr(phone_link, 'addresses', lambda: [{'address': '127.0.0.1', 'label': 'Synthetic LAN'}])
-    server_class = phone_link.ThreadingHTTPServer
-    monkeypatch.setattr(phone_link, 'ThreadingHTTPServer', lambda address, handler: server_class((address[0], 0), handler))
+    server_class = phone_link.MobileServer
+    monkeypatch.setattr(phone_link, 'MobileServer', lambda address, handler: server_class((address[0], 0), handler))
     code, connection = web.client.request('/api/phone-link/start', {'address': '127.0.0.1'})
     assert code == 200
+    assert connection['port'] != 8767, 'Phone fixture must use an ephemeral port'
     phone = Client(connection['port'])
     assert phone.request('/api/phone/pair', {'code': connection['pair_url'].split('#')[1]})[0] == 200
     phone.token = phone.request('/api/state')[1]['token']

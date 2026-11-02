@@ -10,7 +10,8 @@ from pathlib import Path
 import pytest
 
 
-@pytest.mark.skipif(os.name != 'nt', reason='Requires Windows PowerPoint')
+@pytest.mark.skipif(os.name != 'nt' or os.environ.get('CI') == 'true',
+                    reason='Requires local Windows PowerPoint COM; hosted CI has no Office installation')
 def test_isolated_native_retry_still_rejects_changed_history(tmp_path):
     shell = shutil.which('powershell.exe')
     if not shell:
