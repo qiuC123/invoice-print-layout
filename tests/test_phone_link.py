@@ -13,12 +13,15 @@ from typing import Any
 import cv2
 import numpy as np
 import pytest
+import qrcode
 
 from invoice_print_layout import phone_link
 from invoice_print_layout.workbench import ExpenseStore
 from invoice_print_layout.workbench_web import make_server
 from tests.helpers import make_invoice_pdf
 import pymupdf
+
+QR_DETECTOR = getattr(cv2, 'QRCodeDetectorAruco', cv2.QRCodeDetector)
 
 
 class Client:
@@ -88,7 +91,7 @@ def test_pairing_qr_and_session_isolation(clients: Any) -> None:
     assert mobile.request('/api/phone/pair', {'code': 'invalid'})[0] == 403
     assert mobile.request('/api/phone/pair', {'code': connection['pair_url'].split('#')[1]}, Origin='http://evil.test')[0] == 403
     image = np.frombuffer(base64.b64decode(connection['qr'].split(',')[1]), dtype=np.uint8)
-    decoded, _, _ = cv2.QRCodeDetector().detectAndDecode(cv2.imdecode(image, cv2.IMREAD_COLOR))
+    decoded, _, _ = QR_DETECTOR().detectAndDecode(cv2.imdecode(image, cv2.IMREAD_COLOR))
     assert decoded == connection['pair_url']
     pair(mobile, connection)
     assert mobile.token != desktop.token
@@ -103,6 +106,14 @@ def test_pairing_qr_and_session_isolation(clients: Any) -> None:
     assert mobile.request('/api/intake/receive', {}, **{'X-Workbench-Token': desktop.token})[0] == 403
     assert mobile.request('/api/intake/receive', {}, Origin='null')[0] == 403
     assert mobile.request('/api/intake/analyze', {'id': 'none', 'force_ai': True})[0] == 400
+
+
+def test_pairing_qr_decoder_accepts_a_valid_legacy_failure_mask():
+    # The legacy OpenCV detector misses this valid mask from a synthetic CI pairing fixture.
+    synthetic_url = 'http://127.0.0.1:59894/mobile#HL4FkzfciOB9imf-2doCqP15U_NDKdRS24eS23nij80'
+    image = np.asarray(qrcode.make(synthetic_url, box_size=6, border=4).convert('RGB'))
+    decoded, _, _ = QR_DETECTOR().detectAndDecode(image)
+    assert decoded == synthetic_url
 
 
 def test_rotating_qr_and_closing_invalidates_connections(clients: Any) -> None:
