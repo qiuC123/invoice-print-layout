@@ -162,6 +162,7 @@ def remote_clients(tmp_path: Path, monkeypatch: Any) -> Any:
         assert desktop.request('/api/phone-link')[1]['enabled'] is False
         status, connection = desktop.request('/api/phone-link/start', {'mode': 'remote'})
         assert status == 200 and connection['mode'] == 'remote'
+        assert connection['port'] != 8768, 'Remote phone fixture must use an ephemeral port'
         assert connection['url'] == ORIGIN + '/mobile'
         assert connection['address'] == '127.0.0.1'
         yield desktop, RemoteClient(connection['port']), connection, tmp_path, Network

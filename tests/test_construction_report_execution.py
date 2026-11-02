@@ -241,7 +241,8 @@ try { Open-PrivatePresentation $openedBefore[0]; exit 5 } catch {
     if ($_.Exception.Message -ne 'Refusing to operate a presentation that was already open before this run') { throw }
 }
 ''', encoding="utf-8-sig")
-    result = subprocess.run([shell, "-NoProfile", "-NonInteractive", "-File", str(script)], capture_output=True, timeout=20)
+    # Cold hosted PowerShell startup can exceed 20s; the refusal and untouched app are still checked.
+    result = subprocess.run([shell, "-NoProfile", "-NonInteractive", "-File", str(script)], capture_output=True, timeout=60)
     assert result.returncode == 0, result.stderr.decode(errors="replace")
 
 

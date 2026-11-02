@@ -60,6 +60,7 @@ def clients(tmp_path: Path, monkeypatch: Any) -> Any:
         assert desktop.request('/api/phone-link')[1]['enabled'] is False
         status, connection = desktop.request('/api/phone-link/start', {'address': '127.0.0.1'})
         assert status == 200
+        assert connection['port'] != 8767, 'Phone fixture must use an ephemeral port'
         yield desktop, Client(connection['port']), connection, tmp_path
     finally:
         server.shutdown()
