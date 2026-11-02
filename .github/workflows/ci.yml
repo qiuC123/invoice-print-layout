@@ -68,12 +68,11 @@ jobs:
           "$PWD\.venv\Scripts" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
       - run: python -m pip install -e ".[dev]"
       - name: Full pytest (includes agent rules)
+        env:
+          INVOICE_PYTEST_SHARD_INDEX: ${{ strategy.job-index }}
+          INVOICE_PYTEST_SHARD_COUNT: ${{ strategy.job-total }}
         run: |
-          $files = @(git ls-files tests | Where-Object { $_ -match '(^|/)(test_[^/]*|[^/]*_test)\.py$' } | Sort-Object)
-          $selected = @(for ($i = ${{ strategy.job-index }}; $i -lt $files.Count; $i += ${{ strategy.job-total }}) { $files[$i] })
-          if (!$selected.Count -or @($selected | Select-Object -Unique).Count -ne $selected.Count) { throw 'Invalid pytest shard' }
-          Write-Host "Shard ${{ matrix.shard }}/${{ strategy.job-total }}: $($selected.Count) of $($files.Count) test files"
-          python -m pytest @selected -n 4 -ra --junitxml=.runtime/ci/pytest-${{ matrix.shard }}.xml
+          python -m pytest -p tests.ci_shard -n 4 -ra --junitxml=.runtime/ci/pytest-${{ matrix.shard }}.xml
       - name: Strict type check
         if: ${{ !cancelled() && matrix.shard == 1 }}
         run: python -m mypy src
