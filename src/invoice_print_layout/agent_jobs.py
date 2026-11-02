@@ -41,6 +41,20 @@ def digest(value: Any) -> str:
     return hashlib.sha256(encoded(value).encode()).hexdigest()
 
 
+def new_job(project: str, entries: list[dict[str, Any]], *, use_model: bool,
+            options: dict[str, Any], limits: dict[str, int]) -> dict[str, Any]:
+    return {
+        'id': uuid.uuid4().hex, 'project_id': project, 'material_ids': [e['id'] for e in entries],
+        'material_revisions': {e['id']: e['revision'] for e in entries},
+        'state': 'queued', 'use_model': use_model, 'options': options, 'queue_revision': 0,
+        'limits': dict(limits), 'models': 0, 'tools': 0, 'elapsed': 0.0, 'run_started': None,
+        'stalls': 0, 'seen_results': [], 'events': [], 'last_results': [], 'model_retries': 0,
+        'item_ids': [], 'preview': None, 'question': None, 'approval': None, 'confirmations': [],
+        'created_at': time.time(), 'updated_at': time.time(), 'message': '等待后台整理',
+        'timings': agent_metrics.initial(),
+    }
+
+
 class ModelBudgetExceeded(ValueError):
     """All model providers share the same durable task budget."""
 
@@ -197,6 +211,8 @@ class Jobs:
             self._timing_transition(job, previous)
             db.execute('UPDATE invoice_agent_jobs SET state=?,data=? WHERE id=?',
                        (job['state'], encoded(job), key))
+            from invoice_print_layout.invoice_attention import job_failure
+            job_failure(self.store, db, job, previous)
         return self._timing_snapshot(job)
 
     def event(self, key: str, message: str, **extra: Any) -> None:
@@ -263,18 +279,7 @@ class Jobs:
                     stored = json.loads(db.execute('SELECT data FROM intake_queue WHERE id=?', (entry['id'],)).fetchone()['data'])
                     stored.pop('agent_review_reason', None)
                     db.execute('UPDATE intake_queue SET data=? WHERE id=?', (encoded(stored), entry['id']))
-            job = {
-                'id': uuid.uuid4().hex, 'project_id': project, 'material_ids': ids,
-                'material_revisions': {e['id']: e['revision'] for e in entries},
-                'state': 'queued', 'use_model': use_model, 'options': options,
-                'queue_revision': 0,
-                'limits': caps, 'models': 0, 'tools': 0, 'elapsed': 0.0, 'run_started': None,
-                'stalls': 0, 'seen_results': [], 'events': [], 'last_results': [],
-                'model_retries': 0,
-                'item_ids': [], 'preview': None, 'question': None, 'approval': None, 'confirmations': [],
-                'created_at': time.time(), 'updated_at': time.time(), 'message': '等待后台整理',
-                'timings': agent_metrics.initial(),
-            }
+            job = new_job(project, entries, use_model=use_model, options=options, limits=caps)
             db.execute('INSERT INTO invoice_agent_jobs VALUES (?,?,?,?)',
                        (job['id'], project, 'queued', encoded(job)))
             db.execute('INSERT INTO invoice_agent_requests VALUES (?,?,?)', (request_id, fingerprint, job['id']))
@@ -377,6 +382,8 @@ class Jobs:
             job.update(state=state, elapsed=elapsed, run_started=None, message=message, updated_at=time.time())
             self._timing_transition(job, previous)
             db.execute('UPDATE invoice_agent_jobs SET state=?,data=? WHERE id=?', (state, encoded(job), key))
+            from invoice_print_layout.invoice_attention import job_failure
+            job_failure(self.store, db, job, previous)
         return self._timing_snapshot(job)
 
     def refresh_question(self, key: str, expected_updated_at: Any,

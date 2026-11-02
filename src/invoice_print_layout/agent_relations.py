@@ -319,8 +319,9 @@ class RelationTools:
             key=digest(identity)[:24]
             if not any(r['id']==key for r in rows):
                 rows.append({**identity,'id':key,'strength':'needs_fact','competing':False,
-                             'anchors':['用户已按本组原件确认手写内容、金额和材料关系'],
-                             'duplicate_views':[], 'relation_kind':'user_confirmation'})
+                             'anchors':['Codex已按本组原件查证内容、金额和材料关系' if fact['actor'] == 'codex'
+                                        else '用户已按本组原件确认手写内容、金额和材料关系'],
+                             'duplicate_views':[], 'relation_kind':'codex_evidence' if fact['actor'] == 'codex' else 'user_confirmation'})
         assessment=self.jobs.cached(job['id'],'relations:'+fingerprint)
         decisions=(assessment or {}).get('decisions',{})
         approval=job.get('approval') or {}
@@ -345,9 +346,11 @@ class RelationTools:
                                      'provenance': prior_fact.get('provenance')})
             automatic=(row['strength']=='supported' and not row['competing'] and model.get('decision')=='supported')
             if confirmed or automatic:
-                proposals.append({**row,'automatic':True,'proof':'用户确认当前原件为同一笔费用' if confirmed else
+                codex_fact = bool(prior_fact and prior_fact.get('actor') == 'codex')
+                proposals.append({**row,'automatic':True,'proof':('Codex查证当前原件为同一笔费用' if codex_fact else
+                                  '用户确认当前原件为同一笔费用') if confirmed else
                                   '模型基于商品、金额和商家角色提出的未核对关联',
-                                  'relation_kind':'user_confirmed' if confirmed else 'model_inference',
+                                  'relation_kind':('codex_evidence' if codex_fact else 'user_confirmed') if confirmed else 'model_inference',
                                   'relation_evidence':model.get('evidence',[]),
                                   'confirmation_id':prior_fact['fact_id'] if prior_fact else approval.get('question_id') if confirmed else None,
                                   'source_fact': prior_fact})

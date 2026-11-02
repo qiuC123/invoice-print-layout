@@ -331,6 +331,15 @@ def make_server(workspace: Path, port: int = 8765, *, mode: str = 'workbench',
                     self.respond(receipt_devices.status())
                 elif path == '/api/runtime':
                     self.respond(runtime)
+                elif path == '/api/attention':
+                    from invoice_print_layout.invoice_attention import Attention
+                    query = parse_qs(urlparse(self.path).query)
+                    self.respond(Attention(store).list(query.get('project', [''])[0],
+                                                      offset=int(query.get('offset', ['0'])[0]),
+                                                      limit=int(query.get('limit', ['100'])[0])))
+                elif path == '/api/attention/context':
+                    from invoice_print_layout.invoice_attention import Attention
+                    self.respond(Attention(store).show(parse_qs(urlparse(self.path).query).get('object', [''])[0]))
                 elif path == '/api/intake':
                     self.respond({'queue': [{k: v for k, v in row.items() if k != 'path'} for row in intake.list()]})
                 elif path == '/api/intake/progress':
@@ -587,6 +596,13 @@ def make_server(workspace: Path, port: int = 8765, *, mode: str = 'workbench',
                     else:
                         mail_agent_result = mail_agent.collect_now()
                     self.respond(mail_agent_result)
+                    return
+                if path == '/api/attention/resolve':
+                    from invoice_print_layout.invoice_attention import Attention
+                    with write_lock:
+                        attention_result = Attention(store).resolve(body)
+                    invoice_agent.kick()
+                    self.respond(attention_result)
                     return
                 if path == '/api/agent/facts/restore':
                     from invoice_print_layout.agent_confirmed_facts import restore

@@ -99,7 +99,7 @@ def capture_changes(store: ExpenseStore, db: sqlite3.Connection, *, at: float | 
                    f"合计 ¥{snapshot['total_cents'] / 100:.2f}；还有 {snapshot['pending_count']} 笔在处理")
         if previous and previous['version'] == snapshot['version']:
             db.execute("UPDATE invoice_event_outbox SET payload=json_set(payload,'$.ref.pending_count',?,'$.summary',?) "
-                       "WHERE project_id=? AND status='pending'",
+                       "WHERE project_id=? AND status='pending' AND json_extract(payload,'$.type')='invoice.project_ready'",
                        (snapshot['pending_count'], summary, project_id))
             continue
         last_attempt = previous['last_attempt'] if previous else 0
@@ -108,7 +108,8 @@ def capture_changes(store: ExpenseStore, db: sqlite3.Connection, *, at: float | 
                    'ON CONFLICT(project_id) DO UPDATE SET version=excluded.version,verified_count=excluded.verified_count,'
                    'fingerprint=excluded.fingerprint',
                    (project_id, snapshot['version'], snapshot['verified_count'], last_attempt, fingerprint))
-        db.execute("UPDATE invoice_event_outbox SET status='superseded' WHERE project_id=? AND status='pending'",
+        db.execute("UPDATE invoice_event_outbox SET status='superseded' WHERE project_id=? AND status='pending' "
+                   "AND json_extract(payload,'$.type')='invoice.project_ready'",
                    (project_id,))
         if not snapshot['verified_count'] and not (previous and previous['verified_count']):
             continue
@@ -201,17 +202,19 @@ class ProjectEvents:
         for row in rows:
             if self._closed.is_set():
                 break
+            is_project = json.loads(row['payload'])['type'] == 'invoice.project_ready'
             with self.store.connect() as db:
                 db.execute('BEGIN IMMEDIATE')
                 state = db.execute('SELECT last_attempt FROM invoice_project_state WHERE project_id=?',
                                    (row['project_id'],)).fetchone()
-                if state and state['last_attempt'] and self.clock() < state['last_attempt'] + 60:
+                if is_project and state and state['last_attempt'] and self.clock() < state['last_attempt'] + 60:
                     continue
                 if not db.execute("UPDATE invoice_event_outbox SET status='sending' WHERE id=? AND status='pending'",
                                   (row['id'],)).rowcount:
                     continue
-                db.execute('UPDATE invoice_project_state SET last_attempt=? WHERE project_id=?',
-                           (self.clock(), row['project_id']))
+                if is_project:
+                    db.execute('UPDATE invoice_project_state SET last_attempt=? WHERE project_id=?',
+                               (self.clock(), row['project_id']))
             error = ''
             try:
                 self.sender(event_url(self.store), json.loads(row['payload']))
@@ -221,9 +224,9 @@ class ProjectEvents:
                 db.execute('BEGIN IMMEDIATE')
                 current = db.execute('SELECT version FROM invoice_project_state WHERE project_id=?',
                                      (row['project_id'],)).fetchone()
-                status = ('pending' if current and current['version'] == row['version'] else 'superseded') if error else 'sent'
+                status = ('pending' if not is_project or current and current['version'] == row['version'] else 'superseded') if error else 'sent'
                 delay = min(3600, 60 * 2 ** min(row['attempts'], 6))
-                db.execute('UPDATE invoice_event_outbox SET status=?,attempts=attempts+1,retry_at=?,error=? WHERE id=?',
+                db.execute("UPDATE invoice_event_outbox SET status=?,attempts=attempts+1,retry_at=?,error=? WHERE id=? AND status='sending'",
                            (status, self.clock() + delay, error, row['id']))
 
     def close(self) -> None:

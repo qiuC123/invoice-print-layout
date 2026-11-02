@@ -1,7 +1,7 @@
-"""Exact-original human facts. Local confirmations add evidence, never a budget.
+"""Exact-original facts with separate human and Codex attribution.
 
 Use the existing action journal; reading does not migrate the formal ledger.
-Only the normal answer path or an authenticated human-history restore writes facts.
+Facts come from normal answers, authenticated human-history restore or attention answers.
 """
 from __future__ import annotations
 
@@ -20,6 +20,12 @@ if TYPE_CHECKING:
 
 def _hash(value: Any) -> str:
     return hashlib.sha256(json.dumps(value, ensure_ascii=False, sort_keys=True).encode()).hexdigest()
+
+
+def _attributed(fact: dict[str, Any]) -> bool:
+    source = fact.get('provenance', {}).get('source')
+    return bool(fact.get('actor') == 'user' and source in {'direct_user_reply', 'recorded_user_confirmation'} or
+                fact.get('actor') == 'codex' and source == 'codex_evidence')
 
 
 def _digests(entries: list[dict[str, Any]]) -> set[str] | None:
@@ -106,15 +112,14 @@ def _records(jobs: Jobs, project: str) -> list[dict[str, Any]]:
     for row in rows:
         try:
             receipt = json.loads(row['data'])
-            if receipt.get('actor') != 'user':
-                continue
             if receipt.get('fact_id', '').startswith('source-fact:'):
-                if (receipt.get('project_id') != project or receipt.get('provenance', {}).get('source') not in
-                        {'direct_user_reply', 'recorded_user_confirmation'} or
+                if (receipt.get('project_id') != project or not _attributed(receipt) or
                         receipt.get('fact_id') != 'source-fact:' + _hash({k: v for k, v in receipt.items()
                                                           if k not in {'fact_id', 'recorded_at'}})):
                     continue
                 result.append(receipt)
+                continue
+            if receipt.get('actor') != 'user':
                 continue
             selected = receipt.get('choice_data') or {}
             proposal = selected.get('proposal') or selected
@@ -182,7 +187,7 @@ def verified_content(item: dict[str, Any], sources: list[dict[str, Any]]) -> dic
         return None
     for entry in sources:
         fact = entry.get('confirmed_content')
-        if (not isinstance(fact, dict) or fact.get('actor') != 'user' or
+        if (not isinstance(fact, dict) or not _attributed(fact) or
                 fact.get('claim') != 'material_content' or fact.get('action') != 'confirm_relation' or
                 not str(fact.get('fact_id', '')).startswith('source-fact:') or
                 fact.get('content_digest') != entry['digest'] or
@@ -199,7 +204,7 @@ def verified_content(item: dict[str, Any], sources: list[dict[str, Any]]) -> dic
             continue
         if (fact.get('project_id') != item.get('project_id') or
                 any(e.get('project_id') != fact['project_id'] for e in sources) or
-                fact.get('provenance', {}).get('source') not in {'direct_user_reply', 'recorded_user_confirmation'}):
+                not _attributed(fact)):
             continue
         attachments = item.get('attachments')
         if isinstance(attachments, list) and {a.get('id') for a in attachments}:

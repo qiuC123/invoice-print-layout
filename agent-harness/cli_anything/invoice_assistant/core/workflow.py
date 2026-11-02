@@ -8,9 +8,11 @@ from cli_anything.invoice_assistant.utils.client import CLIError, digest
 EXPENSE_FIELDS = ('id', 'project_id', 'title', 'expense_date', 'amount', 'amount_cents', 'amount_pending', 'category',
                   'merchant', 'shopping_platform', 'shop_name', 'payment_channel', 'project_type', 'project_name',
                   'report_choice', 'manual_report_choice', 'verified', 'stage', 'version', 'missing', 'complete',
-                  'ready', 'pending_review', 'returned_to_synthesis', 'deleted', 'reimbursement_person_id', 'reimbursement_person_label', 'report_files')
+                  'ready', 'pending_review', 'returned_to_synthesis', 'deleted', 'reimbursement_person_id', 'reimbursement_person_label', 'report_files',
+                  'agent_review_reason', 'agent_content', 'field_conflicts')
 MATERIAL_FIELDS = ('id', 'digest', 'name', 'project_id', 'status', 'revision', 'item_id', 'fields', 'role', 'issues',
-                   'field_sources', 'result', 'reimbursement_person_id', 'reimbursement_person_label', 'material_match_id')
+                   'field_sources', 'result', 'reimbursement_person_id', 'reimbursement_person_label', 'material_match_id',
+                   'agent_review_reason', 'agent_content', 'field_conflicts')
 
 
 def pick(value, keys): return {k: value[k] for k in keys if k in value}

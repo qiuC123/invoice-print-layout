@@ -480,14 +480,17 @@ class ContentTools:
                     break
         entry = next(source for source in sources if source['digest'] == confirmed['content_digest'])
         products = [{'name': name, 'material_id': entry['id'], 'sha256': entry['digest'],
-                     'method': 'user_confirmation', 'source_quote': confirmed['statement'],
+                     'method': 'codex_evidence' if confirmed['actor'] == 'codex' else 'user_confirmation',
+                     'actor': confirmed['actor'], 'source_quote': confirmed['statement'],
                      'fact_id': confirmed['fact_id']} for name in names]
         return {'status': 'needs_input' if failure else 'human_confirmed',
                 'category': None if failure else confirmed['category'],
-                'coverage_complete': not failure, 'coverage_basis': 'exact_source_set_user_confirmation',
+                'coverage_complete': not failure,
+                'coverage_basis': 'exact_source_set_codex_evidence' if confirmed['actor'] == 'codex' else 'exact_source_set_user_confirmation',
                 'goods_text': '\n'.join(names), 'products': products, 'forbidden_categories': [],
                 'confirmed_content': confirmed,
-                'reason': failure or '复用同一完整原件集合的明确人工商品及分类事实',
+                'reason': failure or ('复用同一完整原件集合的Codex查证商品及分类事实' if confirmed['actor'] == 'codex'
+                                      else '复用同一完整原件集合的明确人工商品及分类事实'),
                 'rules_version': PRODUCT_RULES_VERSION}
 
     @staticmethod
@@ -616,6 +619,10 @@ class ContentTools:
         raw, item, sources, binding = self._load(job, ident)
         state = item.get('agent_content') or {}
         protected = set().union(*(self.intake._manual_keys(e) for e in sources))
+        from invoice_print_layout.auto_verify import source_signature
+        attention = item.get('attention_fields') or {}
+        attention_fields = attention.get('values', {}) if attention.get('source_signature') == source_signature(sources) else {}
+        protected.update(attention_fields)
         if state.get('status') == 'ready':
             return {'content_status': 'ready', 'goods': [g['name'] for g in state['goods']],
                     'category': item['category'], 'title': item['title'], 'source_binding': binding}
@@ -634,7 +641,8 @@ class ContentTools:
                                     entry, cache_root=self.store.root).get('goods', [])]
                 origin = next(entry for entry in sources if entry['digest'] == confirmed['content_digest'])
                 confirmed_goods = [{'name': value, 'raw_name': value, 'quote': confirmed['statement'],
-                                    'method': 'user_confirmation', 'fact_id': confirmed['fact_id'],
+                                    'method': 'codex_evidence' if confirmed['actor'] == 'codex' else 'user_confirmation',
+                                    'actor': confirmed['actor'], 'fact_id': confirmed['fact_id'],
                                     'provenance': confirmed['provenance'],
                                     'material_digests': list(confirmed['material_digests']),
                                     'material_id': origin['id'], 'sha256': origin['digest']}
@@ -712,14 +720,20 @@ class ContentTools:
                     return classifier.ask_jev(value)
 
             known_categories = _content_categories(state['goods']) - {None}
-            if (checked['status'] == 'human_confirmed' and not
+            if attention_fields.get('category') == item['category']:
+                decision = {'category': item['category'], 'source': 'codex' if attention['decided_by'] == 'codex' else 'human',
+                            'reason': '按已审计的疑点答案保留费用分类'}
+            elif (checked['status'] == 'human_confirmed' and not
                     protected & {'category', 'project_type', 'project_name', 'report_section'}):
-                decision = {'category': checked['category'], 'source': 'human', 'reason': checked['reason'],
+                decision = {'category': checked['category'],
+                            'source': 'codex' if checked['confirmed_content']['actor'] == 'codex' else 'human', 'reason': checked['reason'],
                             'fact_id': checked['confirmed_content']['fact_id']}
             elif preferences['conflicts']:
                 decision = {'category': None, 'source': 'experience', 'reason': '已有人工经验冲突，请确认费用分类'}
             elif protected & {'category', 'project_type', 'project_name', 'report_section'}:
-                decision = {'category': item['category'], 'source': 'human', 'reason': '保留材料上的人工分类'}
+                codex_category = any(e.get('field_sources', {}).get('category') == 'attention:codex' for e in sources)
+                decision = {'category': item['category'], 'source': 'codex' if codex_category else 'human',
+                            'reason': '保留材料上的Codex查证分类' if codex_category else '保留材料上的人工分类'}
             elif preferences['changes'].get('category'):
                 decision = {'category': preferences['changes']['category'], 'source': 'experience', 'reason': '复用已有人工分类经验'}
             elif checked['status'] == 'needs_input':
@@ -778,6 +792,8 @@ class ContentTools:
             preferred = state.get('preferences', {}).get('changes', {})
             if protected & {'title', 'display_name', 'project_name', 'project_type', 'report_section', 'report_group'}:
                 choice = validate_report_choice(item.get('project_type'), item.get('project_name'))
+                if attention_fields.get('title') == item['title']:
+                    choice.update(title=item['title'], display_name=item['title'])
             else:
                 title = preferred.get('display_name') or concise_expense_name(names, category)
                 if len(title) > 200:

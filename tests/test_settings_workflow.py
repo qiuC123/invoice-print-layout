@@ -410,8 +410,8 @@ def test_paired_phone_cannot_use_organize_or_mail_settings(web: Any, monkeypatch
     original = phone_link.lan_address
     monkeypatch.setattr(phone_link, 'lan_address', lambda address: address == '127.0.0.1' or original(address))
     monkeypatch.setattr(phone_link, 'addresses', lambda: [{'address': '127.0.0.1', 'label': 'Synthetic LAN'}])
-    server_class = phone_link.ThreadingHTTPServer
-    monkeypatch.setattr(phone_link, 'ThreadingHTTPServer', lambda address, handler: server_class((address[0], 0), handler))
+    server_class = phone_link.MobileServer
+    monkeypatch.setattr(phone_link, 'MobileServer', lambda address, handler: server_class((address[0], 0), handler))
     code, connection = web.client.request('/api/phone-link/start', {'address': '127.0.0.1'})
     assert code == 200
     phone = Client(connection['port'])

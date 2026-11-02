@@ -137,6 +137,36 @@ def classify(ctx, ids, classify_missing):
 def matches(): """Original local matching rules; no duplicate recognizer."""
 
 
+@cli.group()
+def attention(): """Inspect source-bound questions and return evidenced answers."""
+
+
+@attention.command('list')
+@paging
+@click.pass_context
+def list_attention(ctx, offset, limit):
+    from cli_anything.invoice_assistant.core import attention as att
+    emit(ctx, att.list_attention(ctx.obj['client'], ctx.obj['project'], offset, limit))
+
+
+@attention.command('show')
+@click.argument('object')
+@click.pass_context
+def show_attention(ctx, object):
+    from cli_anything.invoice_assistant.core import attention as att
+    emit(ctx, att.context(ctx.obj['client'], ctx.obj['project'], object))
+
+
+@attention.command('resolve')
+@click.argument('object')
+@click.option('--expected-version', required=True)
+@click.option('--request', required=True, type=click.Path(exists=True, dir_okay=False, path_type=Path))
+@click.pass_context
+def resolve_attention(ctx, object, expected_version, request):
+    from cli_anything.invoice_assistant.core import attention as att
+    emit(ctx, att.resolve(ctx.obj['client'], ctx.obj['project'], object, expected_version, read_json(request), ctx.obj['dry_run']))
+
+
 @matches.command('list')
 @click.pass_context
 def list_matches(ctx): emit(ctx, {'status': 'complete', 'board': flow.matches(ctx.obj['client'], ctx.obj['project']), 'reused': True})

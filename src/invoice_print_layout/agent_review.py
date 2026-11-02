@@ -44,6 +44,8 @@ def leave_for_review(jobs: Jobs, key: str, question: dict[str, Any], *, finish: 
                     from invoice_print_layout.agent_content import ContentTools
                     content['base'] = ContentTools._base(item)
                 db.execute('UPDATE expenses SET data=? WHERE id=?', (encoded(item), ident))
+                from invoice_print_layout.invoice_attention import capture
+                capture(jobs.store, db, 'invoice-item', item, job, question)
                 content_ids.add(ident)
         if question.get('type') == 'expense_content':
             targets = set()
@@ -60,6 +62,8 @@ def leave_for_review(jobs: Jobs, key: str, question: dict[str, Any], *, finish: 
             if ident in targets:
                 entry['agent_review_reason'] = entry.get('agent_review_reason') or reason
                 db.execute('UPDATE intake_queue SET data=? WHERE id=?', (encoded(entry), ident))
+                from invoice_print_layout.invoice_attention import capture
+                capture(jobs.store, db, 'invoice-material', entry, job, question)
                 material_ids.add(ident)
         previous = job['state']
         if previous == 'needs_input':

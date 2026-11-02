@@ -1,5 +1,9 @@
 # 发票助手独立 CLI
 
+F23-B 的 `attention list/show/resolve` 用于疑点查证和写回，完整操作见项目 `.agents/skills/invoice-attention/SKILL.md`。
+`attention resolve OBJECT --expected-version VERSION --request answer.json` 通过原本机 API 保存决定者、依据和审计，并排队重新整理；不直接核对费用。
+请求只接受 `action/values/decided_by/evidence`；`evidence` 必须带 `method/reference/statement`。全局 `--dry-run` 只预演，版本冲突必须重新查证。
+
 `invoice-assistant`，同义命令`cli-anything-invoice-assistant`。直接调用原发票助手本机API，不需要个人工作台、浏览器自动化或新增MCP服务器。原账本/原件/人工字段/GLM与Jev配置仍由原工具管理。
 
 ```powershell

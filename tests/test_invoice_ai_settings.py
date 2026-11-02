@@ -474,8 +474,8 @@ def test_paired_phone_cannot_access_settings_or_key_files(web: Any, monkeypatch:
     original = phone_link.lan_address
     monkeypatch.setattr(phone_link, 'lan_address', lambda ip: ip == '127.0.0.1' or original(ip))
     monkeypatch.setattr(phone_link, 'addresses', lambda: [{'address': '127.0.0.1', 'label': 'Test LAN'}])
-    server_class = phone_link.ThreadingHTTPServer
-    monkeypatch.setattr(phone_link, 'ThreadingHTTPServer', lambda addr, handler: server_class((addr[0], 0), handler))
+    server_class = phone_link.MobileServer
+    monkeypatch.setattr(phone_link, 'MobileServer', lambda addr, handler: server_class((addr[0], 0), handler))
     status, connection = desktop.request('/api/phone-link/start', {'address': '127.0.0.1'})
     assert status == 200
     phone = Client(connection['port'])

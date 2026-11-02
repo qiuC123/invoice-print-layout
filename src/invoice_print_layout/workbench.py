@@ -190,6 +190,8 @@ class ExpenseStore:
             ''')
             from invoice_print_layout.project_events import install
             install(db)
+            from invoice_print_layout.invoice_attention import install as install_attention
+            install_attention(db)
             from invoice_print_layout.expense_projects import install_project_guards
             install_project_guards(db)
 
