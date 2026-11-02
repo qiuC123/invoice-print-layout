@@ -51,7 +51,7 @@ try {
     $main.ExportAsFixedFormat(0, $pdfPath, 0, $true, $false)
 } finally {
     if ($null -ne $book) { $book.Close($false) }
-    if ($owned -and $null -ne $excel) { $excel.Quit() }
+    if ($owned -and $null -ne $excel) { $excel.Quit() } # office-quit-ok: new COM instance; HWND PID must be absent from the pre-existing Excel PID snapshot ($owned).
     foreach ($comObject in @($detail, $main, $book, $excel)) {
         if ($null -ne $comObject) { [Runtime.InteropServices.Marshal]::FinalReleaseComObject($comObject) | Out-Null }
     }
