@@ -18,9 +18,13 @@ env:
 
 jobs:
   python:
-    name: Python checks
+    name: Python checks (${{ matrix.shard }}/6)
     runs-on: windows-latest
     timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4, 5, 6]
     steps:
       - uses: actions/checkout@v7.0.1
         with:
@@ -39,15 +43,20 @@ jobs:
           "$PWD\.venv\Scripts" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
       - run: python -m pip install -e ".[dev]"
       - name: Full pytest (includes agent rules)
-        run: python -m pytest -n 4 -ra --junitxml=.runtime/ci/pytest.xml
+        run: |
+          $files = @(git ls-files tests | Where-Object { $_ -match '(^|/)(test_[^/]*|[^/]*_test)\.py$' } | Sort-Object)
+          $selected = @(for ($i = ${{ matrix.shard }} - 1; $i -lt $files.Count; $i += 6) { $files[$i] })
+          if (!$selected.Count -or @($selected | Select-Object -Unique).Count -ne $selected.Count) { throw 'Invalid pytest shard' }
+          Write-Host "Shard ${{ matrix.shard }}/6: $($selected.Count) of $($files.Count) test files"
+          python -m pytest @selected -n 4 -ra --junitxml=.runtime/ci/pytest-${{ matrix.shard }}.xml
       - name: Strict type check
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && matrix.shard == 1 }}
         run: python -m mypy src
       - uses: actions/upload-artifact@v7.0.2
         if: ${{ !cancelled() }}
         with:
-          name: pytest-results
-          path: .runtime/ci/pytest.xml
+          name: pytest-results-${{ matrix.shard }}
+          path: .runtime/ci/pytest-${{ matrix.shard }}.xml
           include-hidden-files: true
           retention-days: 7
 

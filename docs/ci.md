@@ -1,10 +1,10 @@
 # CI 与本机验证
 
-`.github/workflows/ci.yml` 在所有 PR 和推送到 main 时运行；不部署、不合并、不使用密钥或自托管运行机。两个 Windows job 并行，分别限时 15 分钟，缓存 pip 和 npm 下载。
+`.github/workflows/ci.yml` 在所有 PR 和推送到 main 时运行；不部署、不合并、不使用密钥或自托管运行机。六个 pytest 分组加一个浏览器 Windows job 并行，分别限时 15 分钟，缓存 pip 和 npm 下载。
 
 ## 云端检查
 
-- **Python checks**：Python 3.12，建立应用启动器要求的 `.venv` 并安装 `.[dev]`；`python -m pytest -n 4 -ra --junitxml=.runtime/ci/pytest.xml`，包含 `tests/test_agent_rules.py`；`python -m mypy src`。
+- **Python checks (1/6) 至 (6/6)**：Python 3.12，建立应用启动器要求的 `.venv` 并安装 `.[dev]`。按排序后的公开测试文件轮流分到六个运行机，各用 `python -m pytest <本组文件> -n 4 -ra --junitxml=...`；六组并集为完整套件，包含 `tests/test_agent_rules.py`，不是跳过其他组。每组检查非空和无重复，交付时将六份 XML 的用例并集与本机完整 XML 核对，必须无缺失、无重复。第一组另跑 `python -m mypy src`。
 - **Browser contracts**：Node 24，`npm ci`、`npx playwright install chromium`，然后 `node scripts/run-browser-tests.mjs --output=.runtime/ci/browser`。运行公开 Git 文件中的全部 `tests/*.cjs`；Python 服务使用临时合成工作区和临时端口，其他界面契约使用模拟响应。它们不能代替真实 OCR、Excel 或 Android 真机验收。
 - pytest XML、浏览器逐项日志和结果 JSON 保留为 Actions artifacts 七天；失败时也上传。没有真实发票、私有模板或台账。
 
@@ -41,4 +41,4 @@ node .claude/skills/verify-workbench/scripts/verify.cjs run <新运行名称>
 
 技能的体检、操作、证据和清理以 [verify-workbench](../.claude/skills/verify-workbench/SKILL.md) 为准。技能测试的是临时实例，不附加正式服务。Git-only 基线与候选版本应在同一依赖、同一公开测试范围内比较；私有测试数量不能混入比较。
 
-建议用户后续将 **Python checks**、**Browser contracts** 设为 main 的必需状态检查，并要求人工批准合并；本次不修改仓库设置。
+建议用户后续将 **Python checks (1/6)** 至 **Python checks (6/6)**、**Browser contracts** 设为 main 的必需状态检查，并要求人工批准合并；本次不修改仓库设置。
