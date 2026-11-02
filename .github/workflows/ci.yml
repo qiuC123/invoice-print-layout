@@ -30,7 +30,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        shard: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]
+        shard: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16,
+                17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32]
     steps:
       - uses: actions/checkout@v7.0.1
         with:
@@ -67,12 +68,15 @@ jobs:
           python -m venv .venv
           "$PWD\.venv\Scripts" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
       - run: python -m pip install -e ".[dev]"
+      - name: Startup contracts before resource-heavy tests
+        if: ${{ matrix.shard == 1 }}
+        run: python -m pytest tests/test_assistant_startup.py tests/test_workbench_launcher.py -ra --junitxml=.runtime/ci/startup.xml
       - name: Full pytest (includes agent rules)
         env:
           INVOICE_PYTEST_SHARD_INDEX: ${{ strategy.job-index }}
           INVOICE_PYTEST_SHARD_COUNT: ${{ strategy.job-total }}
         run: |
-          python -m pytest -p tests.ci_shard -n 4 -ra --junitxml=.runtime/ci/pytest-${{ matrix.shard }}.xml
+          python -m pytest -p tests.ci_shard -n 4 -ra --ignore=tests/test_assistant_startup.py --ignore=tests/test_workbench_launcher.py --junitxml=.runtime/ci/pytest-${{ matrix.shard }}.xml
       - name: Strict type check
         if: ${{ !cancelled() && matrix.shard == 1 }}
         run: python -m mypy src
@@ -82,6 +86,7 @@ jobs:
           name: pytest-results-${{ matrix.shard }}
           path: |
             .runtime/ci/pytest-${{ matrix.shard }}.xml
+            .runtime/ci/startup.xml
             .runtime/ci/source.json
           include-hidden-files: true
           retention-days: 7

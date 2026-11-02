@@ -1,10 +1,10 @@
 # CI 与本机验证
 
-`.github/workflows/ci.yml` 在所有 PR 和推送到 main 时运行；不部署、不合并、不使用密钥或自托管运行机。16 个 pytest 分组加一个浏览器 Windows job 并行，测试 job 限时 25 分钟，缓存 pip 和 npm 下载。目标是每组 pytest 在 8 分钟内完成，为测试增长和运行机波动留余量；25 分钟是故障上限，不是目标时长。
+`.github/workflows/ci.yml` 在所有 PR 和推送到 main 时运行；不部署、不合并、不使用密钥或自托管运行机。32 个 pytest 分组加一个浏览器 Windows job，按账户并发额度调度，测试 job 限时 25 分钟，缓存 pip 和 npm 下载。目标是每组 pytest 在 8 分钟内完成，为测试增长和运行机波动留余量；25 分钟是故障上限，不是目标时长。
 
 ## 云端检查
 
-- **Python tests (1/16) 至 (16/16)**：Python 3.12，建立应用启动器要求的 `.venv` 并安装 `.[dev]`。`python -m pytest -p tests.ci_shard -n 4 -ra --junitxml=...` 收集完整套件后按用例序号分组，参数化大文件也会分散；16 组并集为完整套件，包含 `tests/test_agent_rules.py`。其余组用例显示为 deselected，不算跳过；交付时核对 XML 并集无缺失、无重复。分组索引和总数取 `strategy`，插件拒绝非法/空组，有完整性及大文件均衡回归；未加载插件或无分组环境变量时本机收集不变。第一组另跑 `python -m mypy src`。
+- **Python tests (1/32) 至 (32/32)**：Python 3.12，建立应用启动器要求的 `.venv` 并安装 `.[dev]`。第一组先串行跑 `test_assistant_startup.py`、`test_workbench_launcher.py`，保留各子进程 40 秒限时及断言，避免与数据库/OCR 重测试争用同一运行机；独立 XML 为 `startup.xml`。随后各组 `python -m pytest -p tests.ci_shard -n 4 -ra --ignore=tests/test_assistant_startup.py --ignore=tests/test_workbench_launcher.py --junitxml=...` 按用例序号划分其余完整套件，参数化大文件也会分散，包含 `tests/test_agent_rules.py`。32 份分组 XML 加 startup.xml 的并集为完整套件，交付时核对无缺失、无重复；其他组用例显示为 deselected，不算跳过。分组索引和总数取 `strategy`，插件拒绝非法/空组，有完整性及大文件均衡回归；未加载插件或无分组环境变量时本机收集不变。第一组另跑 `python -m mypy src`。
 - **Python checks**：固定名称的汇总检查，`always()` 等待全部 Python 分组；任何分组或 mypy 失败、取消或跳过都会失败。分组数变化不需要改这个必需检查名。
 - **Browser contracts**：Node 24，`npm ci`、`npx playwright install chromium`，然后 `node scripts/run-browser-tests.mjs --output=.runtime/ci/browser`。运行公开 Git 文件中的全部 `tests/*.cjs`；Python 服务使用临时合成工作区和临时端口，其他界面契约使用模拟响应。它们不能代替真实 OCR、Excel 或 Android 真机验收。
 - pytest XML、浏览器逐项日志和结果 JSON 保留为 Actions artifacts 七天；失败时也上传。没有真实发票、私有模板或台账。

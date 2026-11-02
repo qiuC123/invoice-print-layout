@@ -10,11 +10,12 @@ def config(deselected):
     return SimpleNamespace(hook=SimpleNamespace(pytest_deselected=lambda *, items: deselected.extend(items)))
 
 
-def test_complete_balanced_partition_of_a_single_large_file(monkeypatch):
+@pytest.mark.parametrize('count', [16, 32])
+def test_complete_balanced_partition_of_a_single_large_file(monkeypatch, count):
     original = [f'tests/large.py::test_fee[{number}]' for number in range(513)]
     groups = []
-    monkeypatch.setenv('INVOICE_PYTEST_SHARD_COUNT', '16')
-    for index in range(16):
+    monkeypatch.setenv('INVOICE_PYTEST_SHARD_COUNT', str(count))
+    for index in range(count):
         monkeypatch.setenv('INVOICE_PYTEST_SHARD_INDEX', str(index))
         selected, deselected = original.copy(), []
         pytest_collection_modifyitems(config(deselected), selected)
