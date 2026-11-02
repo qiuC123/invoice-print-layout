@@ -9,6 +9,8 @@ from pathlib import Path
 
 import pytest
 
+pytestmark = pytest.mark.powershell
+
 
 @pytest.mark.skipif(os.name != 'nt' or os.environ.get('CI') == 'true',
                     reason='Requires local Windows PowerPoint COM; hosted CI has no Office installation')

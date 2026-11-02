@@ -22,6 +22,11 @@ $expectedJson = & $consolePython -m invoice_print_layout.workbench_runtime --wor
 if ($LASTEXITCODE -ne 0) { throw 'Cannot read expected backend identity.' }
 $expected = $expectedJson | ConvertFrom-Json
 
+function Test-WorkbenchPortListening {
+    $listeners = [Net.NetworkInformation.IPGlobalProperties]::GetIPGlobalProperties().GetActiveTcpListeners()
+    return $listeners.Port -contains $Port
+}
+
 function Read-WorkbenchRuntime {
     param([switch]$Starting)
     try {
@@ -32,8 +37,7 @@ function Read-WorkbenchRuntime {
         }
         if ($Starting) { return $null }
         # An async connect deadline cannot distinguish a free port from a delayed completion.
-        $listeners = [Net.NetworkInformation.IPGlobalProperties]::GetIPGlobalProperties().GetActiveTcpListeners()
-        if ($listeners.Port -contains $Port) {
+        if (Test-WorkbenchPortListening) {
             throw 'Port is occupied but the service is not ready; no process was stopped.'
         }
         return $null
@@ -73,12 +77,13 @@ if ($null -ne $runtime -and $runtime.app_id -in $knownAppIds -and $runtime.works
     $state = (Invoke-WebRequest "$url/api/state" -UseBasicParsing -TimeoutSec 2).Content | ConvertFrom-Json
     Invoke-WebRequest "$url/api/shutdown" -Method Post -Headers @{'X-Workbench-Token'=$state.token} -ContentType 'application/json' -Body '{}' -UseBasicParsing -TimeoutSec 5 | Out-Null
     $runtime = $null
+    $stopped = $false
     for ($attempt = 0; $attempt -lt 10; $attempt++) {
         Start-Sleep -Seconds 1
-        $runtime = Read-WorkbenchRuntime
-        if ($null -eq $runtime) { break }
+        # Acknowledged shutdown can close HTTP before releasing the listening socket.
+        if (-not (Test-WorkbenchPortListening)) { $stopped = $true; break }
     }
-    if ($null -ne $runtime) { throw 'Old backend did not exit after graceful shutdown; browser was not opened.' }
+    if (-not $stopped) { throw 'Old backend did not exit after graceful shutdown; browser was not opened.' }
 }
 if ($null -eq $runtime) {
     Start-Process -FilePath $python -ArgumentList @('-m', 'invoice_print_layout.workbench_web', '--workspace', "`"$Workspace`"", '--port', "$Port", '--mode', $Mode) -WorkingDirectory $project -WindowStyle Hidden

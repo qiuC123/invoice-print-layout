@@ -12,6 +12,7 @@ from invoice_print_layout.workbench_runtime import identity, source_build_id
 
 
 ROOT = Path(__file__).resolve().parents[1]
+pytestmark = pytest.mark.powershell
 
 
 def run_script(tmp_path, script, replacements):

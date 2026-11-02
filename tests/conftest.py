@@ -6,6 +6,8 @@ import pytest
 
 from invoice_print_layout import phone_link, project_events
 
+pytest_plugins = ('tests.powershell_contracts',)
+
 
 @pytest.fixture(autouse=True)
 def isolate_personal_agent(monkeypatch: pytest.MonkeyPatch) -> None:

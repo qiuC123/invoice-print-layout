@@ -8,6 +8,8 @@ from pathlib import Path
 import pytest
 from invoice_print_layout.workbench_runtime import identity, source_build_id
 
+pytestmark = pytest.mark.powershell
+
 
 @pytest.mark.parametrize('mode', ['ready', 'edge-x86', 'edge-x64', 'browser-tab', 'no-browser', 'cold', 'timeout', 'stale', 'workspace', 'foreign', 'capability', 'malformed', 'legacy', 'empty', 'not-ready', 'occupied'])
 def test_launcher_identity_readiness_and_failure(tmp_path, mode):

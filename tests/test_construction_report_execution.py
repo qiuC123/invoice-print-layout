@@ -9,6 +9,8 @@ import pytest
 
 from invoice_print_layout import construction_report_execution as execution
 
+pytestmark = pytest.mark.powershell
+
 
 def put(path, value):
     path.parent.mkdir(parents=True, exist_ok=True)
