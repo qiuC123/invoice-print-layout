@@ -76,4 +76,7 @@ def leave_for_review(jobs: Jobs, key: str, question: dict[str, Any], *, finish: 
                        ('；模型暂时不可用' if job.get('model_unavailable') else ''))
             jobs._timing_transition(job, previous)
         db.execute('UPDATE invoice_agent_jobs SET state=?,data=? WHERE id=?', (job['state'], encoded(job), key))
+    if finish:
+        from invoice_print_layout.auto_verify import scan
+        scan(jobs.store, sorted(items))
     return jobs._timing_snapshot(job)

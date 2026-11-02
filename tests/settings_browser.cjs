@@ -162,12 +162,15 @@ async function run(pw){
   assert.equal(await page.locator('#settingsAutoUpload').isChecked(),true);assert.equal(await page.locator('#settingsOrganizeModel').isChecked(),true);
   assert.match(await page.locator('#settingsOrganizeModelLabel').textContent(),/^当前模型：WorkBuddy/);
   assert.equal(await page.locator('#settingsModelUnavailable').isVisible(),false);
-  for(const id of ['settingsAutoUpload','settingsOrganizeModel','settingsMailEnabled','settingsFeishuEnabled']){
+  for(const id of ['settingsAutoUpload','settingsAutoVerify','settingsOrganizeModel','settingsMailEnabled','settingsFeishuEnabled']){
    const control=page.locator('#'+id);assert.equal(await control.getAttribute('role'),'switch');
    const style=await control.evaluate(node=>{const s=getComputedStyle(node),thumb=getComputedStyle(node,'::before');return {appearance:s.appearance,width:s.width,height:s.height,radius:s.borderRadius,thumb:thumb.width};});
    assert.deepEqual(style,{appearance:'none',width:'40px',height:'24px',radius:'999px',thumb:'16px'});
   }
   await page.locator('#settingsAutoUpload').focus();assert.equal(await page.locator('#settingsAutoUpload').evaluate(node=>getComputedStyle(node).outlineStyle),'solid');
+  assert.equal(await page.locator('#settingsAutoVerify').isChecked(),true);
+  await page.locator('#settingsAutoVerify').uncheck();await waitStatus('自动整理设置已保存');assert.equal(settings.organize.auto_verify,false);
+  await page.locator('#settingsAutoVerify').check();await waitStatus('自动整理设置已保存');assert.equal(settings.organize.auto_verify,true);
   await page.locator('#settingsAutoUpload').uncheck();await waitStatus('自动整理设置已保存');assert.equal(settings.organize.auto_after_upload,false);
   organizeFails=true;await page.locator('#settingsAutoUpload').check();await waitStatus('合成保存失败');assert.equal(await page.locator('#settingsAutoUpload').isChecked(),false);
   await page.locator('#settingsAutoUpload').check();await waitStatus('自动整理设置已保存');

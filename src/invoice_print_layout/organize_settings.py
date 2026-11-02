@@ -17,17 +17,18 @@ class OrganizeSettings:
 
     def read(self) -> dict[str, bool]:
         if not self.path.exists():
-            return {'auto_after_upload': True, 'use_model': True}
+            return {'auto_after_upload': True, 'use_model': True, 'auto_verify': True}
         if self.path.stat().st_size > 65536:
             raise ValueError('整理设置无效')
         value = json.loads(self.path.read_text(encoding='utf-8'))
         if (not isinstance(value, dict) or value.get('version') != 1 or
-                any(type(value.get(key)) is not bool for key in ('auto_after_upload', 'use_model'))):
+                any(type(value.get(key)) is not bool for key in ('auto_after_upload', 'use_model')) or
+                type(value.get('auto_verify', True)) is not bool):
             raise ValueError('整理设置无效')
-        return {key: value[key] for key in ('auto_after_upload', 'use_model')}
+        return {key: value.get(key, True) for key in ('auto_after_upload', 'use_model', 'auto_verify')}
 
     def update(self, body: dict[str, Any]) -> dict[str, bool]:
-        if (not isinstance(body, dict) or set(body) - {'auto_after_upload', 'use_model'} or
+        if (not isinstance(body, dict) or set(body) - {'auto_after_upload', 'use_model', 'auto_verify'} or
                 any(type(value) is not bool for value in body.values())):
             raise ValueError('整理开关必须是布尔值')
         with _WRITE_LOCK:

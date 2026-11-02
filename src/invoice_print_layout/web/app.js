@@ -281,7 +281,7 @@ function materialAmountsAligned(x){
  sides.every(side=>materialSideCount(x,side)>0&&knownMaterialAmount(match[side+'_total_cents'])&&match[side+'_total_cents']===x.amount_cents)&&
  !['unknown','unconfirmed'].includes(match.alignment_status);
 }
-function badge(x){return x.deleted?'已删除':x.merged_into?'已合并':x.stage==='submitted'?'已生成报销包':x.stage==='reimbursed'?'已报销 · 历史记录':x.stage!=='draft'?state.stages[x.stage]:x.ready&&expenseProjectReimbursed(x)?'项目已报销 · 尚未生成报销包':x.ready&&x.missing_acknowledged?'待提交 · 已核对 · 已确认缺材料':!x.verified&&x.amount_pending?'金额待确认 · 待核对':!x.verified&&materialAmountDiffers(x)?'金额有差额 · 待核对':!x.complete?'待核对 · 仍缺材料':!x.verified?(materialAmountsAligned(x)?'金额已对齐 · 待核对':taxiProofsComplete(x)?'发票＋行程单齐全 · 待核对':courierProofsComplete(x)?'发票＋运单明细齐全 · 待核对':materialSideCount(x,'payment')===0&&receivedVoucher(x)?receivedVoucher(x)+' · 待核对':'材料齐全 · 待核对'):'待提交 · 已核对';}
+function badge(x){return x.deleted?'已删除':x.merged_into?'已合并':x.stage==='submitted'?'已生成报销包':x.stage==='reimbursed'?'已报销 · 历史记录':x.stage!=='draft'?state.stages[x.stage]:x.ready&&expenseProjectReimbursed(x)?'项目已报销 · 尚未生成报销包':x.ready&&x.missing_acknowledged?'待提交 · 已核对 · 已确认缺材料':!x.verified&&x.amount_pending?'金额待确认 · 待核对':!x.verified&&materialAmountDiffers(x)?'金额有差额 · 待核对':!x.complete?'待核对 · 仍缺材料':!x.verified?(materialAmountsAligned(x)?'金额已对齐 · 待核对':taxiProofsComplete(x)?'发票＋行程单齐全 · 待核对':courierProofsComplete(x)?'发票＋运单明细齐全 · 待核对':materialSideCount(x,'payment')===0&&receivedVoucher(x)?receivedVoucher(x)+' · 待核对':'材料齐全 · 待核对'):x.verification?.mode==='automatic'?'待提交 · 自动核对':'待提交 · 已核对';}
 function materialMatchNotice(x){
  const match=x.material_match;if(!match?.provisional||x.verified)return '';
  const voucherCount=materialSideCount(x,'voucher'),paymentCount=materialSideCount(x,'payment'),tripCount=materialSideCount(x,'trip'),detailCount=materialSideCount(x,'detail'),taxi=taxiTripRequired(x),courier=courierWaybillRequired(x),parts=[];
@@ -402,7 +402,7 @@ function formFields(x={}){const field=(label,name,type='text',wide=false)=>`<lab
 function progressActions(x){
   if(x.merged_into)return '<span class="muted">已合并到组合费用，请在组合费用中核对或撤回。</span>';
   const edit=reviewFieldsEditable(x)?`<button type="button" id="editReviewFields" ${typeof window.openReviewFieldsEditor==='function'?'':'disabled'}>修改报销信息</button>`:'';
-  if(x.stage==='draft'&&x.ready)return view==='submitted'?'<button id="makeExpenseReport" class="primary">制作本笔报销包</button>':'<span class="muted">已核对，请到“已核对”制作报销包。</span>';
+  if(x.stage==='draft'&&x.ready)return (view==='submitted'?'<button id="makeExpenseReport" class="primary">制作本笔报销包</button>':'<span class="muted">已核对，请到“已核对”制作报销包。</span>')+(x.verification?.mode==='automatic'?'<button data-action="draft">撤销自动核对</button>':'');
   const downgrade=x.stage==='draft'&&!x.verified&&x.material_match?.group_id?'<button id="undoExpenseMatch">撤回材料配对</button>':'';
   if(x.stage==='draft'&&!verificationBlockReason(x))return edit+`<button id="verifyNext" class="primary" ${singleVerifyBusy?'disabled':''}>${singleVerifyBusy?'正在核对…':'核对并下一笔'}</button><button data-action="verify" ${singleVerifyBusy?'disabled':''}>核对完成，进入已核对</button>`+downgrade;
   if(['submitted','reimbursed'].includes(x.stage))return '<span class="muted">历史费用保留，可查看最终打印页。</span><button data-action="draft">退回待核对</button>';

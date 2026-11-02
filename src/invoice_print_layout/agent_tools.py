@@ -817,5 +817,20 @@ class InvoiceTools:
                 db.execute('UPDATE material_matches SET data=? WHERE id=?', (encoded(group), ref['match_id']))
             result = {'item_id': ref['item_id'], 'proof': proposal['proof'],
                       'content_base': self.content._base(created)}
+            if proposal.get('automatic') is True:
+                from invoice_print_layout.auto_verify import source_signature
+                sources = [json.loads(record['data']) for record in db.execute(
+                    "SELECT data FROM intake_queue WHERE json_extract(data,'$.item_id')=?", (ref['item_id'],))]
+                created['auto_verification_candidate'] = {
+                    'automatic': True, 'proof': proposal['proof'], 'proposal_id': proposal['id'],
+                    'amount_cents': proposal['amount_cents'], 'source_ids': sorted(source['id'] for source in sources),
+                    'source_signature': source_signature(sources)}
+                created['auto_registration_review'] = {'job_id': job['id'], 'event_id': db.execute(
+                    'SELECT MAX(id) FROM events WHERE item_id=?', (ref['item_id'],)).fetchone()[0]}
+                db.execute('UPDATE expenses SET data=? WHERE id=?', (encoded(created), ref['item_id']))
+                result['content_base'] = self.content._base(created)
+                group = json.loads(db.execute('SELECT data FROM material_matches WHERE id=?', (ref['match_id'],)).fetchone()['data'])
+                group['aggregate_after'] = self.matching._member_state(db, ref['item_id'])
+                db.execute('UPDATE material_matches SET data=? WHERE id=?', (encoded(group), ref['match_id']))
             db.execute('INSERT INTO invoice_agent_effects VALUES (?,?,?)', (job['id'], key, encoded(result)))
         return result

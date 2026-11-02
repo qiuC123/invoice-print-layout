@@ -96,6 +96,7 @@ def test_acknowledged_missing_proofs_become_ready_without_becoming_complete(
         store.transition(item['id'], 'verify', expected_version=item['version'])
     reviewed = _acknowledge(store, item)
     assert reviewed['verified'] and reviewed['ready'] and reviewed['missing_acknowledged']
+    assert reviewed['verification']['mode'] == 'human'
     assert not reviewed['complete'] and not reviewed['pending_review']
     assert reviewed['missing'] == item['missing']
     assert reviewed['amount_cents'] == item['amount_cents']

@@ -3,6 +3,7 @@ from datetime import datetime, timezone
 import json
 import os
 from pathlib import Path
+import re
 import tempfile
 from urllib.parse import quote
 import zipfile
@@ -11,6 +12,33 @@ from cli_anything.invoice_assistant.core.workflow import expense_rows
 from cli_anything.invoice_assistant.utils.client import CLIError, canonical, digest, read_json
 
 SCHEMA = 'invoice-assistant-cli/report-v1'
+
+
+def create(client, project_id, request_id, expected_version=None, dry_run=False):
+    client.project(project_id)
+    if not isinstance(request_id, str) or not re.fullmatch(r'[A-Za-z0-9_.-]{1,128}', request_id):
+        raise CLIError('请求编号须为1至128位英文字母、数字、_、-或.。')
+    request = {'project_id': project_id, 'request_id': request_id}
+    if expected_version is not None: request['expected_version'] = expected_version
+    if dry_run:
+        rows = expense_rows(client, project_id)
+        ids = [row['id'] for row in rows if row.get('ready') and row.get('stage') == 'draft'
+               and not row.get('deleted') and not row.get('returned_to_synthesis')]
+        return {'status': 'planned', 'dry_run': True, 'would_create': request, 'expense_ids': ids,
+                'note': '执行时由原服务检查项目版本、模板和运行环境；本次未生成或提交。'}
+    try:
+        result = client.post('/api/reports/create', request)
+    except CLIError as exc:
+        if exc.code == 'RESULT_UNCERTAIN':
+            raise CLIError('出包结果尚未确认；可用同一request-id重试并取回原结果。', exc.code, exc.exit_code, retryable=True) from None
+        raise
+    if result.get('ok') is False:
+        error = result.get('error')
+        if not isinstance(error, dict): raise CLIError('原服务出包回执格式无效。', 'INVALID_RESPONSE', 1)
+        raise CLIError(error.get('message', '原服务出包失败。'), error.get('code', 'report_error'), 4,
+                       retryable=bool(error.get('retryable')))
+    if result.get('ok') is not True: raise CLIError('原服务未确认出包结果。', 'INVALID_RESPONSE', 1)
+    return result
 
 
 def filename(value, kind):

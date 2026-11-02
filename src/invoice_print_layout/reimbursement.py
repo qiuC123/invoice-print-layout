@@ -241,7 +241,8 @@ def person_allocation_lines(report: dict[str, Any]) -> list[str]:
 
 
 def create_report(store: ExpenseStore, ids: list[str], options: dict[str, Any] | None = None, *,
-                  submit: bool = True, include_table: bool = False) -> dict[str, str]:
+                  submit: bool = True, include_table: bool = False,
+                  submit_request_id: str | None = None) -> dict[str, str]:
     if not isinstance(ids, list) or not ids or len(ids) > 200 or not all(isinstance(x, str) for x in ids) or len(ids) != len(set(ids)):
         raise ValueError('请选择1至200个不重复事项')
     items = [store.get(key) for key in ids]
@@ -280,6 +281,9 @@ def create_report(store: ExpenseStore, ids: list[str], options: dict[str, Any] |
     total = sum(x['amount_cents'] for x in items)
     stem = (datetime.now().strftime('%Y-%m-%d_%H%M%S') + f'_报销包_{total/100:.2f}元_'
             + safe_filename_part(options['person'] or '待填姓名') + '_' + uuid.uuid4().hex[:6])
+    if submit_request_id:
+        # A retry after process exit reuses any files published before the DB commit.
+        stem = '报销包_请求_' + hashlib.sha256(submit_request_id.encode()).hexdigest()[:32]
     outputs = {key: folder / (stem + '.' + key) for key in ('pdf', 'md', 'xlsx')}
     published: list[Path] = []
     try:
@@ -351,7 +355,10 @@ def create_report(store: ExpenseStore, ids: list[str], options: dict[str, Any] |
                 published.append(final)
         result = {kind: path.name for kind,path in outputs.items()}
         if submit:
-            store.submit_report(items, result)
+            if submit_request_id:
+                store.submit_report(items, result, request_id=submit_request_id)
+            else:
+                store.submit_report(items, result)
         return result
     except Exception:
         for path in published:

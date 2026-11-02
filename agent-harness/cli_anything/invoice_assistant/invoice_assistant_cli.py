@@ -160,7 +160,17 @@ def create_drafts(ctx, request_file, request_id):
 
 
 @cli.group('reports')
-def reports_group(): """List/download existing original report snapshots; no generation or submission."""
+def reports_group(): """Create a verified project package or list/download existing snapshots."""
+
+
+@reports_group.command('create')
+@click.option('--project', 'project_id', help='Stable project ID; alternatively use the global --project.')
+@click.option('--request-id', required=True, help='Stable idempotency key, 1-128 ASCII identifier characters.')
+@click.option('--expected-version', help='Project version from invoice.project_ready; reject a changed batch.')
+@click.pass_context
+def create_report(ctx, project_id, request_id, expected_version):
+    ctx.obj['project'] = project_id or ctx.obj['project']
+    emit(ctx, reports.create(ctx.obj['client'], ctx.obj['project'], request_id, expected_version, ctx.obj['dry_run']))
 
 
 @reports_group.command('list')
@@ -213,6 +223,7 @@ def repl(ctx):
 
 def error(exc, as_json):
     body = {'ok': False, 'status': 'failed', 'error': {'code': getattr(exc, 'code', 'INVALID_REQUEST'), 'message': str(exc)}}
+    if getattr(exc, 'retryable', None) is not None: body['error']['retryable'] = exc.retryable
     click.echo(json.dumps(body, ensure_ascii=False) if as_json else '错误：' + str(exc))
 
 

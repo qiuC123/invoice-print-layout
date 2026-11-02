@@ -83,7 +83,8 @@ def test_human_confirmed_incomplete_receipt_three_originals_continue_through_nor
     assert len(items) == 1
     item = items[0]
     assert item['amount_cents'] == 1400 and item['category'] == '材料采购'
-    assert item['stage'] == 'draft' and item['verified'] is False
+    assert item['stage'] == 'draft' and item['verified'] is True
+    assert item['verification']['mode'] == 'automatic'
     assert len(item['attachments']) == 3
     with tools.store.connect() as db:
         attached_digests = {a['digest'] for a in db.execute('SELECT digest FROM attachments WHERE item_id=?', (item['id'],))}

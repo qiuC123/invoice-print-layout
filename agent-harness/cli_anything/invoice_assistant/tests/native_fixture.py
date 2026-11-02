@@ -12,6 +12,8 @@ from invoice_print_layout.glm_invoice_ai import LocalOnlyInvoiceAI
 
 workspace = Path(sys.argv[1]).resolve(); workspace.mkdir()
 matcher, project, other = setup.__wrapped__(workspace)
+(matcher.store.root / 'project-events.json').write_text(
+    json.dumps({'url': 'http://127.0.0.1:1/events'}), encoding='utf-8')
 voucher = auto_queued(matcher, project, 'CLI synthetic voucher', 'invoice', '17')
 payment = auto_queued(matcher, project, 'CLI synthetic payment', 'payment', '17')
 foreign = auto_queued(matcher, other, 'Foreign synthetic voucher', 'invoice', '23')
