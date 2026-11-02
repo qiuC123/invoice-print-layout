@@ -151,8 +151,8 @@ def remote_clients(tmp_path: Path, monkeypatch: Any) -> Any:
 
     monkeypatch.setattr(phone_link, 'PrivateNetwork', Network)
     monkeypatch.setattr(phone_link, 'addresses', lambda: [])
-    real_server = phone_link.ThreadingHTTPServer
-    monkeypatch.setattr(phone_link, 'ThreadingHTTPServer', lambda addr, handler: real_server((addr[0], 0), handler))
+    real_server = phone_link.MobileServer
+    monkeypatch.setattr(phone_link, 'MobileServer', lambda addr, handler: real_server((addr[0], 0), handler))
     server = make_server(tmp_path, 0, mode='invoice')
     worker = threading.Thread(target=server.serve_forever, daemon=True)
     worker.start()
@@ -162,6 +162,7 @@ def remote_clients(tmp_path: Path, monkeypatch: Any) -> Any:
         assert desktop.request('/api/phone-link')[1]['enabled'] is False
         status, connection = desktop.request('/api/phone-link/start', {'mode': 'remote'})
         assert status == 200 and connection['mode'] == 'remote'
+        assert connection['port'] != 8768, 'Remote phone fixture must use an ephemeral port'
         assert connection['url'] == ORIGIN + '/mobile'
         assert connection['address'] == '127.0.0.1'
         yield desktop, RemoteClient(connection['port']), connection, tmp_path, Network

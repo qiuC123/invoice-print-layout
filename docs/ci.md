@@ -4,7 +4,7 @@
 
 ## 云端检查
 
-- **Python checks**：Python 3.12，安装 `.[dev]`；`python -m pytest -n 4 -ra --junitxml=.runtime/ci/pytest.xml`，包含 `tests/test_agent_rules.py`；`python -m mypy src`。
+- **Python checks**：Python 3.12，建立应用启动器要求的 `.venv` 并安装 `.[dev]`；`python -m pytest -n 4 -ra --junitxml=.runtime/ci/pytest.xml`，包含 `tests/test_agent_rules.py`；`python -m mypy src`。
 - **Browser contracts**：Node 24，`npm ci`、`npx playwright install chromium`，然后 `node scripts/run-browser-tests.mjs --output=.runtime/ci/browser`。运行公开 Git 文件中的全部 `tests/*.cjs`；Python 服务使用临时合成工作区和临时端口，其他界面契约使用模拟响应。它们不能代替真实 OCR、Excel 或 Android 真机验收。
 - pytest XML、浏览器逐项日志和结果 JSON 保留为 Actions artifacts 七天；失败时也上传。没有真实发票、私有模板或台账。
 
@@ -25,7 +25,7 @@
 | `.gitignore` 中的私有测试和 `phone_web_browser.cjs`、`agent_details_browser.cjs` | 不属于公开 Git 文件；不向 CI 复制真实数据。未收集不计为 pytest 的 skip。 |
 | 验证技能的真实整批预览/制包 | 需要原生 Excel COM 和本机 `@oai/artifact-tool`，不在云端运行；本机用合成模板按技能实测并留证。 |
 
-其余公开测试使用合成数据、mock 或自己启动的临时本机服务，不因依赖 Windows 子进程、OCR 或浏览器而整类排除。CI 不读取邮箱、模型凭据、真实台账或 8765 服务。
+其余公开测试使用合成数据、mock 或自己启动的临时本机服务，不因依赖 Windows 子进程、OCR 或浏览器而整类排除。`tests/conftest.py` 默认将网卡枚举替换为空合成网络，防止每次构造 HTTP 服务都启动真实 PowerShell 网卡探针；地址/缓存专项测试仍覆盖此默认值，注入各自的接口和延迟。产品网卡发现逻辑不变，真实网卡和手机连接仍需本机专项验收，不能据合成测试声称通过。CI 不读取邮箱、模型凭据、真实台账或 8765 服务。
 
 ## 本机复现
 
