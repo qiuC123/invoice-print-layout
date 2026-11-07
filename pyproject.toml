@@ -19,6 +19,7 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = [
+  "click>=8",
   "mypy>=1.11,<2",
   "pytest>=8,<9",
   "pytest-xdist>=3.6,<4",

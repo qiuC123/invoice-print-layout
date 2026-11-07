@@ -333,10 +333,32 @@ def make_server(workspace: Path, port: int = 8765, *, mode: str = 'workbench',
                     self.respond(runtime)
                 elif path == '/api/attention':
                     from invoice_print_layout.invoice_attention import Attention
+                    from invoice_print_layout import knowledge_read
                     query = parse_qs(urlparse(self.path).query)
-                    self.respond(Attention(store).list(query.get('project', [''])[0],
-                                                      offset=int(query.get('offset', ['0'])[0]),
-                                                      limit=int(query.get('limit', ['100'])[0])))
+                    if query.get('all', ['0'])[0] == '1':
+                        with knowledge_read.connect(store.database) as db:
+                            rows = knowledge_read.attention_rows(db, query.get('project', [''])[0])
+                        self.respond(knowledge_read.snapshot_page(rows, 'object',
+                                     offset=int(query.get('offset', ['0'])[0]),
+                                     limit=int(query.get('limit', ['100'])[0]),
+                                     expected=query.get('fingerprint', [''])[0]))
+                    else:
+                        self.respond(Attention(store).list(query.get('project', [''])[0],
+                                                          offset=int(query.get('offset', ['0'])[0]),
+                                                          limit=int(query.get('limit', ['100'])[0])))
+                elif path in {'/api/knowledge/audit', '/api/knowledge/corrections', '/api/knowledge/classification'}:
+                    from invoice_print_layout import knowledge_read
+                    query = parse_qs(urlparse(self.path).query)
+                    limit = int(query.get('limit', ['200'])[0])
+                    if path.endswith('/classification'):
+                        with knowledge_read.connect(store.database) as db:
+                            rows = knowledge_read.classification_rows(db)
+                        self.respond(knowledge_read.snapshot_page(rows, 'item_id',
+                                     offset=int(query.get('offset', ['0'])[0]), limit=limit,
+                                     expected=query.get('fingerprint', [''])[0]))
+                    else:
+                        self.respond(knowledge_read.append_page(store.database, path.rsplit('/', 1)[1],
+                                     after_id=int(query.get('after_id', ['0'])[0]), limit=limit))
                 elif path == '/api/attention/context':
                     from invoice_print_layout.invoice_attention import Attention
                     self.respond(Attention(store).show(parse_qs(urlparse(self.path).query).get('object', [''])[0]))
@@ -359,9 +381,8 @@ def make_server(workspace: Path, port: int = 8765, *, mode: str = 'workbench',
                     pid = parse_qs(urlparse(self.path).query).get('project', [''])[0]
                     self.respond(matching.suggest(pid))
                 elif path == '/api/preferences':
-                    with store.connect() as db:
-                        learned = [dict(r) for r in db.execute('SELECT e.*, d.evidence_key IS NULL AS enabled FROM category_experience e LEFT JOIN category_experience_disabled d ON d.evidence_key=e.evidence_key')]
-                    self.respond({'rules': preferences.list(), 'sections': REPORT_SECTIONS, 'learned': learned})
+                    from invoice_print_layout.knowledge_read import preferences_snapshot
+                    self.respond({**preferences_snapshot(store.database), 'sections': REPORT_SECTIONS})
                 elif path == '/api/report-snapshot':
                     ids = parse_qs(urlparse(self.path).query).get('id', [])
                     if not ids or len(ids) > 200 or len(ids) != len(set(ids)):
