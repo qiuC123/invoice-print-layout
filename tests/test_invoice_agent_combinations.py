@@ -141,7 +141,7 @@ def test_courier_uses_exact_invoice_reference_and_detail_total(env: Any) -> None
     proposal = env[1]._scan(job)['proposals'][0]
     assert proposal['support_ids'] == [detail['id']]
     item = register(env, job, proposal)
-    assert item['category'] == '顺丰' and item['complete']
+    assert item['category'] == '快递' and item['complete']
 
 
 def test_courier_same_amount_wrong_invoice_reference_is_not_linked(env: Any) -> None:

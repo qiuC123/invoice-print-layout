@@ -69,7 +69,7 @@ def local_structured_facts(entry: dict[str, Any]) -> dict[str, Any]:
             r'发票总金额[（(]元[)）][:：]?(\d+(?:\.\d{1,2})?)(?![\d.])', text)}
         if len(totals) == 1 and next(iter(totals)) > 0:
             return {'role': 'detail', 'fields': {'amount': f'{next(iter(totals)) / 100:.2f}',
-                    'category': '顺丰', 'invoice_number': number}}
+                    'category': '快递', 'invoice_number': number}}
     return {}
 
 
@@ -88,10 +88,11 @@ def source_category(entry: dict[str, Any]) -> str:
     if (role == 'detail' and ('运单明细' in text or all(
             word in text for word in ('运单起止日期', '订单号', '发件信息', '收件信息'))) or
             role == 'invoice' and '收派服务' in text and '顺丰' in text):
-        return '顺丰'
+        return '快递'
     # Existing local category rules may identify goods; they do not assert links.
     category = str((entry.get('fields') or {}).get('category') or '')
-    return category if category in {'材料采购', '餐饮', '外卖'} else ''
+    category = '快递' if category == '顺丰' else category
+    return category if category in {'材料采购', '餐饮', '外卖', '快递', '打印'} else ''
 
 
 def invoice_complete(entry: dict[str, Any]) -> bool:
@@ -168,7 +169,7 @@ def extended_candidates(entries: list[dict[str, Any]], states: dict[str, dict[st
     payments = [e for e in eligible if e.get('role') == 'payment']
     supports = [e for e in eligible if e.get('role') in {'purchase', 'order', 'trip', 'trip_sheet', 'detail'}]
     profiles = {e['id']: transport_profile(e) for e in eligible
-                if e.get('role') in {'trip', 'trip_sheet', 'detail'} or source_category(e) in {'打车', '顺丰'}}
+                if e.get('role') in {'trip', 'trip_sheet', 'detail'} or source_category(e) in {'打车', '快递'}}
     results: list[dict[str, Any]] = []
     budget = EnumerationBudget()
 
@@ -192,7 +193,7 @@ def extended_candidates(entries: list[dict[str, Any]], states: dict[str, dict[st
         result = {'voucher_keys': sorted('q:' + e['id'] for e in v),
                         'payment_ids': sorted(e['id'] for e in p), 'support_ids': sorted(e['id'] for e in s),
                         'category': category, 'material_basis': basis, 'amount_cents': total, 'proof': proof}
-        if category in {'打车', '顺丰'} and len(v) == len(s) == 1:
+        if category in {'打车', '快递'} and len(v) == len(s) == 1:
             result['source_context'] = pair_priority_evidence(v[0], s[0], profiles,
                                                               trusted_mail_origins=trusted_mail_origins)
         results.append(result)
@@ -201,7 +202,7 @@ def extended_candidates(entries: list[dict[str, Any]], states: dict[str, dict[st
         if budget.exhausted:
             return []
         category = source_category(invoice)
-        if category in {'打车', '顺丰'} and not source_current(invoice):
+        if category in {'打车', '快递'} and not source_current(invoice):
             continue
         if category in {'高铁', '酒店'}:
             # Each complete native service invoice stands alone. Optional
@@ -223,7 +224,7 @@ def extended_candidates(entries: list[dict[str, Any]], states: dict[str, dict[st
                     proof = ('同一可信邮件内完整发票及行程的唯一对应合计' if not a['identity'] or not b['identity'] else
                              '同一出行服务方的完整发票及行程合计')
                     add([invoice], [], [support], category, 'standard', proof)
-        if category == '顺丰':
+        if category == '快递':
             for support in supports:
                 if support['role'] != 'detail':
                     continue
@@ -244,7 +245,7 @@ def extended_candidates(entries: list[dict[str, Any]], states: dict[str, dict[st
         # Standard invoice/payment paths can have missing merchant projections,
         # but only a grounded source relation can fill that gap.
         related = [p for p in payments if source_relation(invoice, p, states[invoice['id']], states[p['id']])]
-        if category not in {'高铁', '酒店', '打车', '顺丰'}:
+        if category not in {'高铁', '酒店', '打车', '快递'}:
             for group in amount_groups(related, cents(invoice), cents, budget) or []:
                 add([invoice], group, [], '其他', 'invoice_payment', '发票与成功付款的明确商家及全额对应')
     # Multi-invoice groups require a single supporting order with grounded
@@ -339,7 +340,7 @@ def missing_questions(entries: list[dict[str, Any]], *,
         elif role in {'trip', 'trip_sheet'} and 'invoice' not in roles:
             reason = '行程单还缺对应正式发票，请补充发票'
             requires_source = True
-        elif category == '顺丰' and role == 'invoice' and 'detail' not in roles:
+        elif category == '快递' and role == 'invoice' and 'detail' not in roles:
             reason = '快递发票还缺对应完整运单明细；请补充含运单或订单身份、承运方及总额的原件'
             requires_source = True
         elif role == 'detail' and 'invoice' not in roles:

@@ -69,7 +69,7 @@ def test_source_bound_complete_native_service_detail_is_supplementary(
     assert plan['supplementary'][0]['quote'].strip() == entries[1]['text']
     checked = inspect_product_rules(goods, plan['sources'], plan['source_categories'])
     assert checked['status'] == 'exact' and checked['coverage_complete']
-    assert checked['category'] == ('顺丰' if kind == 'city' else '打车')
+    assert checked['category'] == ('快递' if kind == 'city' else '打车')
     assert (item, facts, goods, entries) == before
 
 

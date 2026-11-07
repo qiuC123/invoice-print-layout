@@ -22,7 +22,7 @@ from invoice_print_layout.missing_materials import (
     acknowledgement_valid, can_acknowledge_missing, expense_scope, source_snapshot,
 )
 
-CATEGORIES = ('材料采购', '酒店', '高铁', '外卖', '餐饮', '打车', '顺丰', '其他')
+CATEGORIES = ('材料采购', '酒店', '高铁', '外卖', '餐饮', '打车', '快递', '打印', '其他')
 ROLES = {'purchase': '购买明细', 'invoice': '发票', 'receipt': '收据', 'payment': '微信／支付宝扣费记录',
          'order': '订单记录', 'trip': '行程单', 'detail': '运单明细', 'other': '待分类材料', 'package': '历史打印包'}
 STAGES = {'draft': '待提交', 'submitted': '已提交', 'reimbursed': '已报销', 'cancelled': '已取消'}
@@ -110,7 +110,8 @@ def evaluate(category: str, roles: set[str], *, legacy: bool = False, material_b
              amount_pending: bool = False) -> dict[str, Any]:
     if not isinstance(amount_pending, bool):
         raise ValueError('金额待确认标记必须为布尔值')
-    result = _evaluate_materials(category, roles, legacy=legacy, material_basis=material_basis)
+    result = _evaluate_materials('快递' if category == '顺丰' else category, roles,
+                                 legacy=legacy, material_basis=material_basis)
     if amount_pending:
         result['missing'].append('金额待确认')
         result['complete'] = False
@@ -127,7 +128,7 @@ def _evaluate_materials(category: str, roles: set[str], *, legacy: bool, materia
         missing.extend(ROLES[role] for role in ('invoice', 'trip') if role not in roles)
         return {'missing': missing, 'complete': not missing, 'alternative': False,
                 'basis': '打车须有正式发票和行程单，不要求付款截图；金额及对应行程需人工核对'}
-    if category == '顺丰' and not legacy:
+    if category == '快递' and not legacy:
         missing.extend(ROLES[role] for role in ('invoice', 'detail') if role not in roles)
         return {'missing': missing, 'complete': not missing, 'alternative': False,
                 'basis': '快递须有正式发票和运单明细，不要求付款截图；金额及对应运单需人工核对'}
@@ -145,6 +146,11 @@ def _evaluate_materials(category: str, roles: set[str], *, legacy: bool, materia
             missing.append('购买明细／收据')
         if not roles.intersection({'invoice', 'payment'}):
             missing.append('发票或微信／支付宝扣费记录')
+    elif category == '打印':
+        if not roles.intersection({'invoice', 'receipt', 'purchase'}):
+            missing.append('发票或收据／购买明细')
+        if 'payment' not in roles:
+            missing.append('微信／支付宝扣费记录')
     elif category in {'酒店', '高铁'}:
         if 'invoice' not in roles:
             missing.append('发票' if category == '酒店' else '12306发票')
@@ -153,8 +159,8 @@ def _evaluate_materials(category: str, roles: set[str], *, legacy: bool, materia
             missing.append('发票')
         if not roles.intersection({'order', 'purchase'}):
             missing.append('订单记录或购买明细／收据')
-    elif category in {'打车', '外卖', '顺丰'}:
-        second = {'打车': 'trip', '外卖': 'order', '顺丰': 'detail'}[category]
+    elif category in {'打车', '外卖', '快递'}:
+        second = {'打车': 'trip', '外卖': 'order', '快递': 'detail'}[category]
         missing.extend(ROLES[role] for role in ('invoice', second) if role not in roles)
     else:
         missing.append('确认此类别的材料要求（请选择具体类别）')
@@ -194,6 +200,8 @@ class ExpenseStore:
             install_attention(db)
             from invoice_print_layout.expense_projects import install_project_guards
             install_project_guards(db)
+        from invoice_print_layout.category_migration import migrate_categories
+        migrate_categories(self.database)
 
     @contextmanager
     def connect(self) -> Iterator[sqlite3.Connection]:
@@ -227,6 +235,7 @@ class ExpenseStore:
         if raw_category is not None and not isinstance(raw_category, str):
             raise ValueError('费用类别必须为文字')
         category = (raw_category or '').strip() or '其他'
+        category = '快递' if category == '顺丰' else category
         if len(category) > 200:
             raise ValueError('费用类别文字过长')
         result: dict[str, Any] = {'category': category}
@@ -301,6 +310,8 @@ class ExpenseStore:
             result[field] = str(values.get(field, '')).strip()
             if len(result[field]) > 200:
                 raise ValueError('报表设置文字过长')
+        if result['report_section'] == 'sf':
+            result['report_section'] = 'express'
         from invoice_print_layout.report_snapshot import REPORT_SECTIONS
         if result['report_section'] and result['report_section'] not in REPORT_SECTIONS:
             raise ValueError('报表栏目无效')
@@ -462,7 +473,7 @@ class ExpenseStore:
         data.setdefault('material_basis', 'standard')
         data.setdefault('amount_pending', False)
         data.setdefault('deleted', False)
-        data.update(evaluate('顺丰' if data['courier_waybill_required'] else data['category'], roles, legacy=bool(data.get('legacy')),
+        data.update(evaluate('快递' if data['courier_waybill_required'] else data['category'], roles, legacy=bool(data.get('legacy')),
                              material_basis=data['material_basis'], amount_pending=data['amount_pending']))
         data['amount'] = '' if data['amount_pending'] else f"{data['amount_cents'] / 100:.2f}"
         if data.get('agent_review_reason'):
@@ -911,7 +922,7 @@ class ExpenseStore:
                     continue
                 normalized = _record_from_entry(record)
                 category = normalized.category or '其他'
-                category = {'咖啡': '外卖', '快递': '顺丰', '同城配送': '顺丰'}.get(category, category)
+                category = {'咖啡': '外卖', '顺丰': '快递', '同城配送': '快递'}.get(category, category)
                 if category not in CATEGORIES:
                     category = '其他'
                 files = [(output, 'package')]

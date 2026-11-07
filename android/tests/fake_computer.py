@@ -12,7 +12,7 @@ from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
-CATEGORIES = ["材料采购", "酒店", "高铁", "外卖", "餐饮", "打车", "顺丰", "其他"]
+CATEGORIES = ["材料采购", "酒店", "高铁", "外卖", "餐饮", "打车", "快递", "打印", "其他"]
 KEY = "A" * 43
 LOCK = threading.Lock()
 STATE = {"mode": "normal", "entries": {}, "attempts": [], "paired": 0}

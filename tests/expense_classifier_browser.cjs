@@ -10,6 +10,8 @@ const staticFiles = new Set(['index.html', 'workbench-theme.js', 'workbench-them
   'expense-classifier.js', 'intake.js', 'matching-desk.js', 'matching-desk.css', 'style.css']);
 const reportTypes = [{code: 'other', label: '其他', names: [], editable_name: true},
   {code: 'materials', label: '现场购材料', names: [], editable_name: true},
+  {code: 'printing', label: '打印', names: [], editable_name: true},
+  {code: 'express', label: '快递', names: [], editable_name: true},
   {code: 'living', label: '生活费', names: ['住宿费(附清单)'], editable_name: false}];
 
 (async () => {
@@ -30,7 +32,7 @@ const reportTypes = [{code: 'other', label: '其他', names: [], editable_name: 
       if (request.method() === 'POST') posts.push({path: url.pathname, body: request.postDataJSON()});
       if (url.pathname === '/api/runtime') return json({started_at:'synthetic-start',build_id:'synthetic-build'});
       if (url.pathname === '/api/state') return json({app_mode: 'invoice', logistics_available: false,
-        items, projects: [{id:'p1',name:'测试项目'}], inbox: [], categories: ['材料采购', '酒店', '其他'], roles: {invoice: '发票'},
+        items, projects: [{id:'p1',name:'测试项目'}], inbox: [], categories: ['材料采购', '酒店', '快递', '打印', '其他'], roles: {invoice: '发票'},
         stages: {draft: '待提交'}, token: 'synthetic', category_suggestion_ready: available,
         category_auto_ready: false, classification: {}});
       if (url.pathname === '/api/expense-print-preview') {

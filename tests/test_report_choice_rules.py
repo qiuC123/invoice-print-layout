@@ -14,7 +14,7 @@ def test_explicit_invoice_transaction_aliases_suggest_one_name(alias: str) -> No
     item = {'title': '电子发票（费用类别待核对）', 'category': '其他', 'amount_cents': 5000,
             'text': '项目名称\n*生产生活服务*' + alias + '\n49.50 0.50\n价税合计50.00'}
     before = deepcopy(item)
-    assert infer_report_choice(item) == validate_report_choice('other', '打印')
+    assert infer_report_choice(item) == validate_report_choice('printing', '打印')
     assert printing_report_suggestion(item)['evidence'] == alias
     assert item == before
 
@@ -36,6 +36,8 @@ def test_labelled_description_in_saved_text_is_usable(text: str) -> None:
     {'text': '*办公设备*打印机'}, {'text': '*设备*复印机'},
     {'text': '打印发票\n打印费'}, {'note': '历史登记：打印费'},
     {'goods': '打印机安装（不包含打印服务）'}, {'goods': '设计费，不包括打印制作'},
+    {'goods': '打印费、台式电脑'}, {'goods': '打印费、盒饭'},
+    {'recognition_sources': [{'goods': '打印费'}, {'goods': '胶带'}]},
     {}, {'goods': '', 'payment_note': None},
 ])
 def test_merchant_equipment_footer_unlabelled_and_missing_details_do_not_infer(item: dict[str, Any]) -> None:

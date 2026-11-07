@@ -37,7 +37,7 @@ def native_service(head: str, canonical: str, *, carrier: str = '') -> tuple[lis
 
 
 @pytest.mark.parametrize('head,canonical,category', [
-    ('收派服务', '顺丰快递费', '顺丰'), ('打印制作', '打印制作费', '其他'),
+    ('收派服务', '顺丰快递费', '快递'), ('打印制作', '打印制作费', '打印'),
 ])
 def test_native_name_column_wrap_covers_intervening_numeric_columns(
         head: str, canonical: str, category: str) -> None:
@@ -73,7 +73,7 @@ def test_native_wrap_does_not_license_missing_products_or_service_qualifiers(mut
         source['issues'] = ['原件未完整读取']
     else:
         source['source_text'] += '\n项目名称\n*设备*安装租赁服务'
-    result = inspect_product_rules(goods, [source], {'打印制作费': '其他'})
+    result = inspect_product_rules(goods, [source], {'打印制作费': '打印'})
     assert result['status'] != 'exact'
     if mutation != 'extra_qualifier':
         assert result['status'] == 'needs_input'
@@ -93,8 +93,8 @@ def test_each_source_is_checked_when_service_invoice_has_a_dedicated_detail() ->
     goods, invoice = native_service('收派服务', '顺丰快递费', carrier='示例顺丰速运有限公司')
     detail = courier_detail()
     goods.append({**detail['goods'][0], 'material_id': 'detail', 'sha256': detail['sha256']})
-    result = inspect_product_rules(goods, [invoice, detail], {'顺丰快递费': '顺丰', '收派服务费': '顺丰'})
-    assert result['status'] == 'exact' and result['category'] == '顺丰'
+    result = inspect_product_rules(goods, [invoice, detail], {'顺丰快递费': '快递', '收派服务费': '快递'})
+    assert result['status'] == 'exact' and result['category'] == '快递'
     assert len(result['products']) == 2
     invoice['source_text'] += '\n商品名称：鼠标蛋糕'
     assert inspect_product_rules(goods, [invoice, detail], CONTENT_CATEGORIES)['status'] == 'needs_input'
@@ -182,10 +182,10 @@ def test_source_qualified_wrapped_carrier_alias_has_no_cross_source_leak(environ
     goods, source = native_service('收派服务', '顺丰快递费', carrier='示例顺丰速运有限公司')
     monkeypatch.setattr(agent_evidence, 'material_facts', lambda *_args, **_kwargs: deepcopy(source))
     checked = tools.content._inspect_products({'goods': goods}, [{'id': 'invoice'}])
-    assert checked['status'] == 'exact' and checked['category'] == '顺丰'
+    assert checked['status'] == 'exact' and checked['category'] == '快递'
     source['source_text'] = source['source_text'].replace('顺丰', '中通')
     checked = tools.content._inspect_products({'goods': goods}, [{'id': 'invoice'}])
-    assert checked['status'] != 'exact' or checked['category'] != '顺丰'
+    assert checked['status'] != 'exact' or checked['category'] != '快递'
 
 
 def confirmed_entries(env: Any) -> tuple[list[dict[str, Any]], dict[str, Any]]:

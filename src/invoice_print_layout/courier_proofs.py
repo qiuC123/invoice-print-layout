@@ -13,7 +13,7 @@ from invoice_print_layout.file_cache import FileSignature, file_signature
 
 _COURIER_NAMES = frozenset({
     '顺丰', '顺丰快递', '顺丰快递费', '顺丰速运', '顺丰速运费', '顺丰同城', '顺丰同城配送',
-    '快递', '快递费', '快递运费', '同城配送', '同城配送费',
+    '快递', '快递费', '快递运费', '同城配送', '同城配送费', '闪送', '闪送费',
 })
 
 
@@ -25,8 +25,8 @@ def invoice_waybill_required(item: dict[str, Any]) -> bool:
     """
     if item.get('legacy') or item.get('material_basis', 'standard') == 'payment_only':
         return False
-    if (item.get('courier_waybill_required') is True or item.get('category') == '顺丰' or
-            item.get('report_section') == 'sf'):
+    if (item.get('courier_waybill_required') is True or item.get('category') in {'快递', '顺丰'} or
+            item.get('report_section') in {'express', 'sf'}):
         return True
     return (item.get('project_type') in {'other', '其他'} and
             re.sub(r'\s+', '', str(item.get('project_name') or '')) in _COURIER_NAMES)

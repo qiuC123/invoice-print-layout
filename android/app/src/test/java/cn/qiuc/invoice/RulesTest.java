@@ -29,6 +29,21 @@ public class RulesTest {
         assertTrue(Rules.missing("材料采购",Set.of("receipt","payment")).isEmpty());
         assertFalse(Rules.missing("其他",Set.of("invoice")).isEmpty());
     }
+    @Test public void printingAndExpressCategories() {
+        assertTrue(Rules.CATEGORIES.containsAll(List.of("打印","快递")));
+        assertFalse(Rules.CATEGORIES.contains("顺丰"));
+        for(String name:List.of("打印费","打印、胶带","复印费\n文件夹","商品明细\n打印费\n胶带"))
+            assertEquals(name,"打印",Rules.categoryFromGoods(name));
+        for(String name:List.of("顺丰快递费","同城配送费","闪送费","快递寄付","快递到付"))
+            assertEquals(name,"快递",Rules.categoryFromGoods(name));
+        for(String voucher:List.of("invoice","receipt","purchase")) {
+            assertTrue(Rules.missing("打印",Set.of(voucher,"payment")).isEmpty());
+            assertFalse(Rules.missing("打印",Set.of(voucher)).isEmpty());
+        }
+        assertFalse(Rules.missing("打印",Set.of("payment")).isEmpty());
+        assertTrue(Rules.missing("快递",Set.of("invoice","detail")).isEmpty());
+        assertEquals("快递",Rules.category("顺丰"));
+    }
     @Test public void invoiceFieldsNeedExplicitLabels() {
         Map<String,String> parsed=Rules.parse("电子发票\n发票号码：12345678901234567890\n价税合计（小写）：￥1353.00\n销售方名称：样本酒店");
         assertEquals("invoice",parsed.get("role"));assertEquals("1353.00",parsed.get("amount"));assertEquals("样本酒店",parsed.get("merchant"));
@@ -41,7 +56,7 @@ public class RulesTest {
         assertFalse(Rules.parse("资金来源：建设银行卡").containsKey("payment_channel"));
     }
     @Test public void basisCannotSilentlyRemoveTaxiTripRequirement(){assertEquals(List.of("行程单"),Rules.missing("打车",Set.of("invoice","payment"),"invoice_payment"));assertTrue(Rules.missing("其他",Set.of("payment"),"payment_only").isEmpty());assertEquals(List.of("支付凭证"),Rules.missing("高铁",Set.of("invoice"),"payment_only"));}
-    @Test public void categoryNeedsGoodsAndMixedPurchasesStayForReview(){assertEquals("其他",Rules.categoryFromGoods(Rules.goods("商家：滴滴出行\n支付成功")));assertEquals("材料采购",Rules.categoryFromGoods(Rules.goods("销售方：酒店有限公司\n商品明细\n螺丝\n实付17.00")));assertEquals("其他",Rules.categoryFromGoods("螺丝、盒饭"));assertEquals("顺丰",Rules.categoryFromGoods("顺丰快递费"));}
+    @Test public void categoryNeedsGoodsAndMixedPurchasesStayForReview(){assertEquals("其他",Rules.categoryFromGoods(Rules.goods("商家：滴滴出行\n支付成功")));assertEquals("材料采购",Rules.categoryFromGoods(Rules.goods("销售方：酒店有限公司\n商品明细\n螺丝\n实付17.00")));assertEquals("其他",Rules.categoryFromGoods("螺丝、盒饭"));assertEquals("快递",Rules.categoryFromGoods("顺丰快递费"));}
     @Test public void deliveredShoppingScreenshotUsesPaidTotalAndActualShop(){
         Map<String,String> fields=Rules.parse("订单己送达 >\n感谢你对淘宝闪购的信任，期待再次光临\n闪购 样本便利店（南湖店） >\n有线鼠标 ¥16\n打包费 ¥1\n总价 ¥20\n总优惠 ¥3 实付款 ¥17");
         assertEquals("purchase",fields.get("role"));assertEquals("17.00",fields.get("amount"));assertEquals("样本便利店(南湖店)",fields.get("merchant"));assertEquals(fields.get("merchant"),fields.get("shop_name"));assertEquals("淘宝闪购",fields.get("shopping_platform"));

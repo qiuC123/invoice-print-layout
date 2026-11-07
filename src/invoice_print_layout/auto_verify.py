@@ -103,7 +103,7 @@ def assess(store: ExpenseStore, db: sqlite3.Connection, row: sqlite3.Row) -> dic
         'invoice_agent_jobs' in tables) else None
     checks['organizer_finished'] = bool(job and job['state'] == 'ready')
     from invoice_print_layout.agent_content import ContentTools
-    checks['category'] = bool(data.get('category') in {'材料采购', '酒店', '高铁', '餐饮', '外卖', '打车', '顺丰'} and
+    checks['category'] = bool(data.get('category') in {'材料采购', '酒店', '高铁', '餐饮', '外卖', '打车', '快递', '打印'} and
         content.get('status') == 'ready' and content.get('base') == ContentTools._base(data) and
         content.get('decision', {}).get('category') == data.get('category'))
     # Only this exact registration's generic flag may be discharged. A later

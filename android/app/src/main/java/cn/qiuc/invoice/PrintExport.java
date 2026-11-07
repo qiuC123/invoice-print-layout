@@ -42,7 +42,7 @@ public final class PrintExport {
                 for(int i=0;i<materials.length();i++)hasInvoice|=materials.getJSONObject(i).getString("role").equals("invoice");
                 for(int i=0;i<materials.length();i++) {
                     JSONObject material=materials.getJSONObject(i);String role=material.getString("role");
-                    if(hasInvoice && Set.of("高铁","打车","顺丰").contains(expense.getString("category")) && role.equals("payment"))continue;
+                    if(hasInvoice && Set.of("高铁","打车","快递","顺丰").contains(expense.getString("category")) && role.equals("payment"))continue;
                     File file=ledger.materialFile(material.getString("id"));if(!sha(file).equals(material.getString("digest")))throw new IOException("原件内容已变化，请检查材料");
                     if(material.getString("mime").equals("application/pdf")) {
                         try(PDDocument source=PDDocument.load(file)) { if(source.isEncrypted())throw new IOException("加密PDF暂不能合成，原件已保留");merger.appendDocument(document,source); }

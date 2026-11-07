@@ -205,7 +205,7 @@ def candidates(entries: list[dict[str, Any]], states: dict[str, dict[str, Any]],
         views=[e for e in orders if e is order or similar_views(order,e,facts)]
         groups = amount_groups(invoices, cents(order), cents, budget, maximum=4) or []
         for group in groups:
-            if any(_category(e,facts[e['id']]) in {'酒店','高铁','打车','顺丰'} for e in group):
+            if any(_category(e,facts[e['id']]) in {'酒店','高铁','打车','快递'} for e in group):
                 continue
             invoice_families=set().union(*(_families(facts[e['id']]) for e in group))
             if family and invoice_families and family.isdisjoint(invoice_families):
@@ -233,7 +233,7 @@ def candidates(entries: list[dict[str, Any]], states: dict[str, dict[str, Any]],
         if budget.exhausted:
             return []
         kind=_category(invoice,facts[invoice['id']])
-        if kind in {'高铁','打车','顺丰'}:
+        if kind in {'高铁','打车','快递'}:
             continue
         if kind!='酒店' and not _goods(facts[invoice['id']]):
             continue

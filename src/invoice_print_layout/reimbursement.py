@@ -76,8 +76,9 @@ def selected_attachments(item: dict[str, Any]) -> list[dict[str, Any]]:
     # Hotel payments already bound to this fee are supporting originals, not
     # additional charges. Preserve them alongside the invoice when printing.
     required = {'酒店': {'invoice', 'payment'}, '高铁': {'invoice'}, '打车': {'trip', 'invoice'},
-                '外卖': {'order', 'invoice'}, '顺丰': {'detail', 'invoice'},
+                '外卖': {'order', 'invoice'}, '快递': {'detail', 'invoice'},
                 '餐饮': {'invoice', 'order', 'purchase'},
+                '打印': {'invoice', 'receipt', 'purchase', 'payment'},
                 '材料采购': {'purchase', 'payment' if item['alternative'] else 'invoice'}}
     return sorted((a for a in item['attachments'] if a['role'] in required[item['category']] and a['available']),
                   key=lambda a: (a['role'] in {'invoice', 'payment'}, a['name']))
@@ -157,11 +158,11 @@ def compose_matter(store: ExpenseStore, item: dict[str, Any], folder: Path) -> t
     if invoice_waybill_required(item):
         validate_courier_originals(store, item)
         if len(grouped.get('detail', [])) != 1 or len(grouped.get('invoice', [])) != 1 or any(p.suffix.lower() != '.pdf' for _, p in paths):
-            raise ValueError('顺丰请保留一份运单明细PDF和一份对应电子发票PDF')
+            raise ValueError('快递请保留一份运单明细PDF和一份对应电子发票PDF')
         detail, invoice = grouped['detail'][0], grouped['invoice'][0]
         d, bill = inspect_courier_pdf(detail), inspect_courier_pdf(invoice)
         if d.is_invoice or not bill.is_invoice or d.kind != bill.kind or d.amount != bill.amount or bill.amount != amount:
-            raise ValueError('顺丰明细、发票与台账金额不一致')
+            raise ValueError('快递明细、发票与台账金额不一致')
         if d.kind == '顺丰' and d.invoice_number != bill.invoice_number:
             raise ValueError('顺丰明细与发票号码不对应')
         compose_courier_package(detail, invoice, destination, amount)

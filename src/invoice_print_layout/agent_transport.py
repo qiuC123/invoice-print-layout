@@ -206,7 +206,7 @@ def project_transport(entry: dict[str, Any]) -> dict[str, Any]:
     profile = transport_profile(entry)
     if not profile:
         return {}
-    category = '打车' if profile['kind'].startswith('ride_') else '顺丰'
+    category = '打车' if profile['kind'].startswith('ride_') else '快递'
     fields: dict[str, Any] = {'category': category, 'amount': f"{profile['amount_cents'] / 100:.2f}"}
     if profile['invoice_number']:
         fields['invoice_number'] = profile['invoice_number']
@@ -376,7 +376,7 @@ def transport_relation_candidates(entries: list[dict[str, Any]], states: dict[st
             if (support.get('role') not in {'trip', 'trip_sheet', 'detail'} or
                     pair_status(invoice, support, profiles, trusted_mail_origins=trusted_mail_origins) != 'needs_fact'):
                 continue
-            category = '打车' if a['kind'] == 'ride_invoice' else '顺丰'
+            category = '打车' if a['kind'] == 'ride_invoice' else '快递'
             identity = {'voucher_keys': ['q:' + invoice['id']], 'payment_ids': [],
                         'support_ids': [support['id']], 'category': category,
                         'material_basis': 'standard', 'amount_cents': a['amount_cents']}

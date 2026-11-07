@@ -4,7 +4,7 @@ async function run(pw){
  const browser=await pw.chromium.launch({headless:true}),context=await browser.newContext({viewport:{width:393,height:852}}),errors=[];
  try{
   await context.addInitScript(()=>{
-   const categories=['材料采购','酒店','高铁','外卖','餐饮','打车','顺丰','其他'];
+   const categories=['材料采购','酒店','高铁','外卖','餐饮','打车','快递','打印','其他'];
    const catalog={categories,projects:[{id:'p1',name:'合成项目一',main_person_id:'lead',people:[{id:'lead',label:'负责人一'}]},{id:'p2',name:'合成项目二',people:[{id:'person2',label:'负责人二'}]}]};
    window.__calls=[];window.__ocr={done:false};window.__inbox={rows:[],paired:false,catalog:{categories,projects:[]}};
    window.Native={invoke(raw){const r=JSON.parse(raw);window.__calls.push(r);let value=true;

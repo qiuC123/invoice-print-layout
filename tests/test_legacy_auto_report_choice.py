@@ -468,7 +468,7 @@ def test_public_reused_registration_preserves_choice_after_pre_registration_note
     assert 'manual_report_choice' not in current
 
 
-@pytest.mark.parametrize('automatic_category', ['打车', '顺丰'])
+@pytest.mark.parametrize('automatic_category', ['打车', '快递'])
 @pytest.mark.parametrize('old_acknowledgement', [False, True])
 def test_effective_manual_choice_drives_material_requirements_and_invalidates_old_acknowledgements(
         tmp_path: Path, monkeypatch: pytest.MonkeyPatch, automatic_category: str,

@@ -22,7 +22,7 @@ async function run(pw) {
       material_basis: 'standard', attachments: [{id: 'proof-complete', name: 'complete.pdf', role: 'invoice', available: true}]})];
   let items = [], failId = '', heldId = '', started = null, gate = null;
   const state = () => ({app_mode: 'invoice', token: 'synthetic', items, inbox: [], projects: [{id: 'p1', name: 'Synthetic project'}],
-    categories: ['打车', '餐饮', '高铁', '酒店', '材料采购', '外卖', '其他', '顺丰'],
+    categories: ['打车', '餐饮', '高铁', '酒店', '材料采购', '外卖', '其他', '快递', '打印'],
     roles: {invoice: '发票', receipt: '收据', trip: '行程单', payment: '付款截图'},
     stages: {draft: '待核对', submitted: '已提交'}, category_auto_ready: false, report_template_ready: true});
   page.on('pageerror', error => errors.push(error.message));

@@ -17,7 +17,7 @@ async function run(pw){
   material_match:{provisional:true,voucher_count:1,voucher_total_cents:4300,payment_count:1,
    payment_total_cents:9999,support_count:1,alignment_status:'balanced'}};
  const state={app_mode:'invoice',items:[courier],projects:[{id:'p1',name:'合成项目'}],inbox:[],
-  categories:['其他','顺丰'],roles:{invoice:'发票',detail:'运单明细',payment:'付款截图'},
+  categories:['其他','快递','打印'],roles:{invoice:'发票',detail:'运单明细',payment:'付款截图'},
   stages:{draft:'待核对',submitted:'可提交'},token:'synthetic-token',report_template_ready:true};
  page.on('pageerror',e=>errors.push(e.message));
  await page.route(origin+'/**',async route=>{

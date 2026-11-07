@@ -13,7 +13,7 @@ from typing import Any
 import unicodedata
 
 
-PRODUCT_RULES_VERSION = 'whole-product-rules-v8'
+PRODUCT_RULES_VERSION = 'whole-product-rules-v9-printing-express'
 EXACT_PRODUCT_CATEGORIES = {'亚克力导视牌': '材料采购', '透明亚克力导视牌': '材料采购',
                             '办公鼠标': '材料采购', '娃哈哈饮用水596ml*12瓶': '餐饮'}
 _LABEL = re.compile(r'^(?:商品名称|商品说明|购买内容|货物或应税劳务名称|商品明细|'
@@ -630,6 +630,10 @@ def inspect_product_rules(goods: Sequence[Mapping[str, Any]], sources: Sequence[
     resolved = ['餐饮' if _compact(row['name']) == '餐饮服务' and row['material_id'] in service_proofs else
                 exact_categories.get(_compact(row['name'])) for row in products]
     known = {category for category in resolved if category is not None}
+    from invoice_print_layout.report_choice_rules import printing_basket
+    if products and all(printing_basket([row['name'] for row in products if row['material_id'] == ident])
+                        for ident in {row['material_id'] for row in products}):
+        return result('exact', '同一收据的打印服务及顺带小物件归打印', '打印')
     material = any(category == '材料采购' for category in resolved)
     mixed_food = material and any(_FOOD_END.search(_compact(row['name'])) for row in products)
     mixed_service = material and any(category is None and _SERVICE_END.search(_compact(row['name']))

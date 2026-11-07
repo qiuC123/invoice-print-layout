@@ -34,11 +34,12 @@ FIXED_ITEMS: tuple[tuple[str, str, int, str, str], ...] = (
 _TYPE_INFO = (
     ('expansion', '拓展', 8, 9), ('transport', '车费', 10, 15),
     ('living', '生活费', 16, 19), ('personnel', '人员', 20, 23),
-    ('materials', '现场购材料', 24, 28), ('other', '其他', 29, 34),
+    ('materials', '现场购材料', 24, 28), ('express', '快递', 29, 29),
+    ('printing', '打印', 29, 34), ('other', '其他', 29, 34),
 )
 REPORT_TYPES: list[dict[str, Any]] = [
     {'code': code, 'label': label, 'names': [name for kind, name, *_ in FIXED_ITEMS if kind == code],
-     'editable_name': code in {'materials', 'other'}, 'rows': list(range(start, end + 1)),
+     'editable_name': code in {'materials', 'express', 'printing', 'other'}, 'rows': list(range(start, end + 1)),
      'items': [{'name': name, 'row': row, 'category': category, 'report_section': section}
                for kind, name, row, category, section in FIXED_ITEMS if kind == code]}
     for code, label, start, end in _TYPE_INFO
@@ -46,7 +47,7 @@ REPORT_TYPES: list[dict[str, Any]] = [
 REPORT_ROWS = {section: row for _, _, row, _, section in FIXED_ITEMS}
 REPORT_LABELS = {row: name for _, name, row, _, _ in FIXED_ITEMS}
 REPORT_SECTIONS = {section: name for _, name, _, _, section in FIXED_ITEMS}
-REPORT_SECTIONS.update(materials='材料采购', sf='顺丰同城', other='其他')
+REPORT_SECTIONS.update(materials='材料采购', express='快递', sf='快递', printing='打印', other='其他')
 
 
 def report_types() -> list[dict[str, Any]]:
@@ -68,7 +69,8 @@ def validate_report_choice(project_type: Any, project_name: Any) -> dict[str, st
         raise ValueError('项目名称不能超过200字')
     code = str(choice['code'])
     if choice['editable_name']:
-        category, section = ('材料采购', 'materials') if code == 'materials' else ('其他', 'other')
+        category = {'materials': '材料采购', 'express': '快递', 'printing': '打印', 'other': '其他'}[code]
+        section = code
     else:
         fixed = next((item for item in choice['items'] if name == item['name']), None)
         if fixed is None:
@@ -99,7 +101,8 @@ def infer_report_choice(item: dict[str, Any]) -> dict[str, str]:
     if fixed is None and not section:
         category = str(item.get('category') or '')
         section = {'高铁': 'rail', '打车': 'taxi', '酒店': 'hotel', '外卖': 'takeout',
-                   '餐饮': 'dining', '材料采购': 'materials', '顺丰': 'sf'}.get(category, 'other')
+                   '餐饮': 'dining', '材料采购': 'materials', '顺丰': 'express',
+                   '快递': 'express', '打印': 'printing'}.get(category, 'other')
         if section == 'takeout' and re.search('咖啡|奶茶|饮品|饮用水|蜜雪冰城',
                                             str(item.get('title') or '') + str(item.get('merchant') or '')):
             section = 'dining'
@@ -107,11 +110,10 @@ def infer_report_choice(item: dict[str, Any]) -> dict[str, str]:
     if fixed is not None:
         return validate_report_choice(fixed[0], fixed[1])
     name = _legacy_name(item)
-    if section == 'sf' or (section == 'other' and '顺丰' in str(item.get('merchant') or '')):
-        name = '顺丰同城'
-    kind = 'materials' if section == 'materials' else 'other'
+    kind = 'express' if section == 'sf' else section if section in {'materials', 'express', 'printing'} else 'other'
     if not name:
-        return {'project_type': kind, 'project_name': '', 'category': '材料采购' if kind == 'materials' else '其他',
+        return {'project_type': kind, 'project_name': '',
+                'category': {'materials': '材料采购', 'express': '快递', 'printing': '打印', 'other': '其他'}[kind],
                 'report_section': kind, 'report_group': '', 'display_name': '', 'title': ''}
     return validate_report_choice(kind, name[:200])
 
@@ -146,11 +148,12 @@ def legacy_auto_category_report_choice(item: dict[str, Any], events: list[dict[s
            for message in messages):
         return {}
     category = str(item['category'])
-    if '自动分类已保存：' + category + '；材料和金额仍需核对' not in messages:
+    if not any('自动分类已保存：' + label + '；材料和金额仍需核对' in messages
+               for label in ({category, '顺丰'} if category == '快递' else {category})):
         return {}
     # Only the saved category and original name participate. In particular, a
     # hotel-looking merchant must never turn an Other expense into lodging.
-    if category not in {'材料采购', '酒店', '高铁', '外卖', '餐饮', '打车', '顺丰'}:
+    if category not in _AUTO_CATEGORIES:
         return {}
     name = _legacy_name(item)
     candidate = infer_report_choice({'category': category, 'title': name})
@@ -158,7 +161,7 @@ def legacy_auto_category_report_choice(item: dict[str, Any], events: list[dict[s
 
 
 _EDIT_PREFIXES = ('更新事项', '编辑报销项目类型', '批量修改报销项目类型', '确认购买内容与实际支出：')
-_AUTO_CATEGORIES = {'材料采购', '酒店', '高铁', '外卖', '餐饮', '打车', '顺丰'}
+_AUTO_CATEGORIES = {'材料采购', '酒店', '高铁', '外卖', '餐饮', '打车', '顺丰', '快递', '打印'}
 
 
 def _exact_report_choice(value: Any, *, ignore_category: bool = False) -> dict[str, str]:
@@ -270,5 +273,6 @@ def legacy_manual_category_report_choice(item: dict[str, Any], events: list[dict
     initial_events = group['aggregate_after']['events']
     automatic = [str(event.get('message') or '') for event in events[len(initial_events):]
                  if str(event.get('message') or '').startswith('自动分类已保存：')]
-    expected = '自动分类已保存：' + str(category) + '；材料和金额仍需核对'
-    return choice if automatic and automatic[-1] == expected else {}
+    labels = {category, '顺丰'} if category == '快递' else {category}
+    expected = {'自动分类已保存：' + label + '；材料和金额仍需核对' for label in labels}
+    return choice if automatic and automatic[-1] in expected else {}

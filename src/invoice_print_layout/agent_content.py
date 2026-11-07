@@ -38,7 +38,7 @@ CONTENT_CATEGORIES = {
        {'矿泉水', '饮用水', '纯净水', '奶茶', '茶饮料', '盒饭'}},
     **{word: '餐饮' for word in ('矿泉水', '饮用水', '纯净水', '奶茶', '茶饮料', '咖啡饮品')},
     **{word: '餐饮' for word in ('早餐', '午餐', '晚餐', '餐食')},
-    '铁路退票费': '高铁', '打印制作费': '其他',
+    '铁路退票费': '高铁', '打印制作费': '打印',
 }
 
 
@@ -800,11 +800,6 @@ class ContentTools:
                     raise ValueError('报销名称过长，请在人工工作台填写200字以内的名称；完整商品信息保留')
                 choice = infer_report_choice({'title': title, 'category': category,
                                              **({'report_section': preferred['report_section']} if preferred.get('report_section') else {})})
-                # The company template puts courier services in the editable
-                # Other rows, but that must not erase the proven carrier class.
-                if category == '顺丰' and choice['project_type'] == 'other':
-                    choice = validate_report_choice('other', title)
-                    choice.update(category='顺丰', report_section='sf')
                 # A template's drinks keyword must not erase an already proved
                 # delivery scene. Keep the concrete name in the detail fields.
                 if category == '外卖' and choice['category'] == '餐饮':

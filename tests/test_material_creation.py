@@ -419,7 +419,7 @@ def test_board_exposes_shared_report_hierarchy_and_readonly_machine_suggestions(
     original = queued(matcher, project, 'Dining machine suggestion', 'invoice', '14')
     before = snapshots(matcher)
     board = matcher.board(project)
-    assert [kind['code'] for kind in board['report_types']] == ['expansion', 'transport', 'living', 'personnel', 'materials', 'other']
+    assert [kind['code'] for kind in board['report_types']] == ['expansion', 'transport', 'living', 'personnel', 'materials', 'express', 'printing', 'other']
     card = next(card for card in board['vouchers'] if card['id'] == original['id'])
     assert card['report_choice']['project_type'] == 'living'
     assert card['report_choice']['project_name'] == '现场饮用水、夜宵'

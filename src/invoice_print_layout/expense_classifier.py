@@ -15,6 +15,7 @@ import pymupdf
 from invoice_print_layout.http_utils import NoRedirect
 from invoice_print_layout.receipt_intake import read_receipt, rows_of, validate_image
 from invoice_print_layout.workbench import ExpenseStore, MAX_BYTES
+from invoice_print_layout.report_choice_rules import PRINTING_ALIASES, printing_basket
 
 MODEL = 'jev-1.13.0'
 CRITERIA = {
@@ -24,10 +25,11 @@ CRITERIA = {
     'food': '外卖：餐食、饮品订单，不是餐具、厨具、食品包装或其他物资。',
     'dining': '餐饮：店内用餐、途中餐饮，不是外卖配送订单。明确食品和场景才判断，不能仅凭便利店名。',
     'taxi': '打车：人员出行的出租车或网约车客运，不含搬家、货拉拉、物流货运。',
-    'sf': '顺丰：明确由顺丰提供的快递服务，不是其他物流或货运。',
+    'express': '快递：任何平台的快递和同城配送，包括寄付、到付、闪送；不含搬家、整车货运，也不把餐食订单中的配送费单独归快递。',
+    'printing': '打印：打印、复印、快印、印刷等服务；同一张打印收据上顺带买的小物件一起归打印，不合并其他收据或无关大件。',
     'unknown': '其他：完全没有具体商品或服务，只有商家名称或笼统日用百货；或者多种不同类别混合、未覆盖的费用。明确的物品无需额外提供项目用途。',
 }
-CATEGORY = dict(zip(CRITERIA, ('材料采购', '酒店', '高铁', '外卖', '餐饮', '打车', '顺丰', '其他')))
+CATEGORY = dict(zip(CRITERIA, ('材料采购', '酒店', '高铁', '外卖', '餐饮', '打车', '快递', '打印', '其他')))
 RULES = {
     'materials': ('口罩', '胶带', '螺丝', '电线', '插座', '垃圾袋', '手套', '文具', '纸巾'),
     'hotel': ('住宿费', '客房费', '房费'),
@@ -35,7 +37,9 @@ RULES = {
     'food': ('奶茶', '咖啡饮品', '盒饭', '外卖餐费'),
     'dining': ('店内餐饮', '途中餐饮', '堂食餐费'),
     'taxi': ('网约车客运', '出租汽车客运', '出租车费'),
-    'sf': ('顺丰快递费', '顺丰速运费'),
+    'express': ('顺丰快递费', '顺丰速运费', '快递费', '快递服务', '同城配送', '同城配送费',
+                '闪送', '闪送费', '快递寄付', '快递到付'),
+    'printing': (*PRINTING_ALIASES, '打印', '复印'),
 }
 PRIVATE_LABEL = re.compile(r'收货|收件|寄件|地址|电话|手机|联系人|税号|识别号|发票号码|订单号|账号|开户|姓名|购买方|销售方|开票人|纳税|身份证|https?://|@', re.I)
 
@@ -80,7 +84,7 @@ def collect(store: ExpenseStore, item: dict[str, Any]) -> tuple[dict[str, str], 
     texts: list[str] = []
     with store.connect() as db:
         files = db.execute('SELECT path,role FROM attachments WHERE item_id=? ORDER BY rowid', (item['id'],)).fetchall()
-    usable = [row for row in files if row['role'] in {'purchase', 'order', 'invoice', 'detail'}]
+    usable = [row for row in files if row['role'] in {'purchase', 'receipt', 'order', 'invoice', 'detail'}]
     if len(usable) > 6:
         warnings.append('仅检查前6份购买、订单、发票或明细附件，请确认它们覆盖本笔费用。')
     for row in usable[:6]:
@@ -106,7 +110,7 @@ def collect(store: ExpenseStore, item: dict[str, Any]) -> tuple[dict[str, str], 
                 warnings.append('一份附件未提取到明确商品或服务文字，可在用途备注中补充。')
         except Exception:
             warnings.append('一份附件无法读取，可补充用途或手动分类。')
-    evidence['goods'] = '\n'.join(dict.fromkeys(texts))[:3000]
+    evidence['goods'] = '\n\n'.join(dict.fromkeys(texts))[:3000]
     return evidence, list(dict.fromkeys(warnings))
 
 
@@ -131,7 +135,8 @@ def ask_jev(evidence: dict[str, str]) -> dict[str, Any]:
             '商家、标题中的旧类别不是分类依据。日用百货本身不足以判断。'
             'goods是本地提取的商品/服务文字，可能有OCR错字、换行及折扣符号。按其实际内容判断。'
             '具体实物明确时无需额外注明项目用途；不用判断是否用于公司或能否报销。'
-            '存在不同类别混合、矛盾或不足时选unknown。',
+            'goods中空行分隔不同材料。同一张打印收据顺带的小物件一起归printing；'
+            '除此之外存在不同类别混合、矛盾或不足时选unknown。',
             'criteria': CRITERIA}}}
     key = api_key()
     request = urllib.request.Request('https://api.typesafe.ai/v1/systemone',
@@ -168,6 +173,11 @@ def decide(evidence: dict[str, str], *,
         return {**base, 'reason': '货运费用尚无专门材料规则，请人工确认；不能归为打车。'}
     # Only product/service/purpose evidence drives deterministic rules, not merchant/title.
     basis = evidence.get('goods', '') + '\n' + evidence.get('purpose', '')
+    blocks = [block for block in evidence.get('goods', '').split('\n\n') if block.strip()]
+    if blocks and not evidence.get('purpose', '').strip() and all(
+            printing_basket(re.split(r'[、,，;；+＋\n]+', block)) for block in blocks):
+        return {**base, 'category': '打印', 'source': 'rules',
+                'reason': '打印服务及同张收据顺带的小物件归打印；请核对完整原件。'}
     hits = {key: [word for word in words if word in basis] for key, words in RULES.items()}
     found = [key for key, words in hits.items() if words]
     if len(found) > 1:

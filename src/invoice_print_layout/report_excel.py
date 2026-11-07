@@ -44,6 +44,8 @@ def validate_template(path: Path) -> None:
                 if re.sub(r'\s+', '', cells.get(f'B{row}', '')) != label:
                     raise ValueError('模板二级分类不同，不能自动填写')
             for section in report_types():
+                if section['code'] in {'express', 'printing'}:
+                    continue  # These expense types share the template's editable Other area.
                 if re.sub(r'\s+', '', cells.get(f"A{section['rows'][0]}", '')) != section['label']:
                     raise ValueError('模板一级分类不同，不能自动填写')
     except (zipfile.BadZipFile, KeyError, ET.ParseError, IndexError) as exc:

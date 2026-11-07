@@ -174,7 +174,7 @@ def _transport_support(item: Mapping[str, Any], facts: Sequence[Mapping[str, Any
               {(f['id'], f['sha256']) for f in facts})
     if not (confirmed or native):
         return None
-    category = '打车' if invoice_profile['kind'] == 'ride_invoice' else '顺丰'
+    category = '打车' if invoice_profile['kind'] == 'ride_invoice' else '快递'
     aliases = ({'客运服务费': category, '客运服务': category} if category == '打车' else
                {'收派服务': category, '收派服务费': category})
     checked = inspect_product_rules(goods, [invoice], {**categories, **aliases})
