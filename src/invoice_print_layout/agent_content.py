@@ -18,10 +18,11 @@ from invoice_print_layout.agent_product_rules import (PRODUCT_RULES_VERSION, ins
 from invoice_print_layout.agent_jobs import Jobs, ModelBudgetExceeded, digest, encoded
 from invoice_print_layout.glm_invoice_ai import GlmAIError
 from invoice_print_layout.intake_queue import IntakeQueue
+from invoice_print_layout.report_choice_rules import printing_basket
 from invoice_print_layout.report_types import infer_report_choice, validate_report_choice
 from invoice_print_layout.workbench import now
 
-GOODS_RULES_VERSION = 'goods-v9-native-ride-pairs'
+GOODS_RULES_VERSION = 'goods-v10-printing-boundaries'
 PLACEHOLDERS = {'', '待核对购买凭证', '待核对费用', '日用百货', '超市服务', '商品', '商品不明', '其他'}
 EXTRA_GOODS = ('鼠标垫', '鼠标', '键盘', '显示器', '笔记本电脑', '台式电脑', '电脑', '打印机', '测试耗材',
                '办公耗材', '工具', '雨衣', '矿泉水', '饮用水', '纯净水', '奶茶', '茶饮料', '盒饭')
@@ -244,6 +245,9 @@ def goods_from_text(text: str, fields: dict[str, Any]) -> list[dict[str, str]]:
         if not service:
             spans: list[tuple[int, int]] = []
             for noun in nouns:
+                # Printing keywords inside supplies are not a purchased service.
+                if noun in classifier.RULES['printing'] and not printing_basket([value]):
+                    continue
                 for match in re.finditer(re.escape(noun), value):
                     if any(start <= match.start() and match.end() <= end for start, end in spans):
                         continue

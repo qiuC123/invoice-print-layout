@@ -5,6 +5,10 @@ import static org.junit.Assert.*;
 import java.util.*;
 
 public class RulesTest {
+    @Test public void printingServiceAliasesDoNotClassifyPaperAsServices() {
+        for(String service:List.of("图文快印服务","数码快印服务"))assertEquals("打印",Rules.categoryFromGoods(service));
+        for(String paper:List.of("价格标签打印纸","彩色打印纸","复印纸","图文快印纸"))assertEquals("其他",Rules.categoryFromGoods(paper));
+    }
     @Test public void centsAreExactAndNeverRound() {
         assertEquals(999,Rules.cents("9.99"));assertEquals(1387220,Rules.cents("13872.20"));
         for(String bad:List.of("0","-1","9.999","NaN","1e3","","1,000","1000000000"))assertThrows(IllegalArgumentException.class,()->Rules.cents(bad));

@@ -222,6 +222,7 @@ def test_saved_queue_evidence_suggests_printing_without_changing_fee_or_rereadin
     before = snapshots(matcher)
     card = matcher._queue_card(entry)
     assert card['report_choice_suggestion']['project_name'] == card['report_choice']['project_name'] == '打印'
+    assert card['report_choice_suggestion']['project_type'] == card['report_choice']['project_type'] == 'printing'
     assert 'text' not in card and snapshots(matcher) == before
     item = matcher.store.create({'title': '电子发票', 'project_id': project, 'amount': '14', 'category': '其他'},
                                 source='intake:' + entry['id'])
@@ -234,6 +235,7 @@ def test_saved_queue_evidence_suggests_printing_without_changing_fee_or_rereadin
     monkeypatch.setattr(Path, 'read_bytes', fail_read)
     viewed = matcher.store.get(item['id'])
     assert viewed['report_choice']['project_name'] == viewed['report_choice_suggestion']['project_name'] == '打印'
+    assert viewed['report_choice']['project_type'] == viewed['report_choice_suggestion']['project_type'] == 'printing'
     assert viewed['title'] == '电子发票' and viewed['amount_cents'] == 1400
     assert 'recognition_sources' not in viewed and 'text' not in viewed and snapshots(matcher) == before
 
@@ -260,8 +262,10 @@ def test_review_fields_http_state_auth_stale_and_classification_assets(tmp_path:
     try:
         with urlopen(root + '/api/state') as response:
             state = json.load(response)
-        assert len(state['report_types']) == 6 and 'returned_to_synthesis' in state['items'][0]
-        body = {'id': item['id'], 'expected_version': item['version'], 'project_type': 'other', 'project_name': '打印', 'amount': '12.30'}
+        assert [choice['code'] for choice in state['report_types']] == [
+            'expansion', 'transport', 'living', 'personnel', 'materials', 'express', 'printing', 'other']
+        assert 'returned_to_synthesis' in state['items'][0]
+        body = {'id': item['id'], 'expected_version': item['version'], 'project_type': 'printing', 'project_name': '打印', 'amount': '12.30'}
         def post(token: str) -> Any:
             with urlopen(Request(root + '/api/review/edit-fields', data=json.dumps(body).encode(),
                                  headers={'Content-Type': 'application/json', 'X-Workbench-Token': token})) as response:
@@ -271,6 +275,7 @@ def test_review_fields_http_state_auth_stale_and_classification_assets(tmp_path:
         assert unauthenticated.value.code == 403
         edited = post(state['token'])
         assert edited['project_name'] == '打印' and edited['amount_cents'] == 1230 and edited['pending_review']
+        assert edited['category'] == '打印' and edited['report_section'] == edited['project_type'] == 'printing'
         with pytest.raises(HTTPError) as stale:
             post(state['token'])
         assert stale.value.code == 400 and '变化' in json.load(stale.value)['error']

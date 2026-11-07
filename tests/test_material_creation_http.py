@@ -47,7 +47,7 @@ def test_create_from_one_material_http_required_choice_preview_and_undo(tmp_path
         with urlopen(root + '/api/material-matching?project=' + pid) as response:
             board = json.load(response)
         assert [choice['label'] for choice in board['report_types']] == [
-            '拓展', '车费', '生活费', '人员', '现场购材料', '其他']
+            '拓展', '车费', '生活费', '人员', '现场购材料', '快递', '打印', '其他']
         card = next(card for lane in ('vouchers', 'payments', 'other') for card in board[lane]
                     if card['id'] == entry['id'])
         assert card['report_choice']['project_type'] == 'living'

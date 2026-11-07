@@ -58,7 +58,7 @@ public final class Rules {
             String name=raw.replaceFirst("^[*＊][^*＊]+[*＊]", "").trim();
             name=name.replaceFirst("^(?:商品明细|购买明细|商品[:：]|服务[:：])", "").trim();
             if(name.isEmpty())continue;
-            if(name.matches("(?:打印制作费|打印制作|打印服务|打印费|复印服务|复印费|图文快印|数码快印|印刷服务|印刷费|打印|复印)[\\s\\d.元份个只包盒张页支卷×x]*"))printing=true;
+            if(name.matches("(?:打印制作费|打印制作|打印服务|打印费|复印服务|复印费|图文快印服务|图文快印|数码快印服务|数码快印|印刷服务|印刷费|打印|复印)[\\s\\d.元份个只包盒张页支卷×x]*"))printing=true;
             else if(!name.matches("(?:胶带|笔|铅笔|签字笔|订书钉|订书针|文件夹|文件袋|回形针|纸张|复印纸)[\\s\\d.元份个只包盒张页支卷×x]*"))return false;
         }
         return printing;

@@ -136,7 +136,7 @@ WAYBILL = '''运单起止日期：2030-01-01至2030-01-01
 
 
 @pytest.mark.parametrize('text,role,category,amount', [(TRIP, 'trip', '打车', '17.78'),
-                                                      (WAYBILL, 'detail', '顺丰', '13.75')])
+                                                      (WAYBILL, 'detail', '快递', '13.75')])
 def test_complete_native_trip_or_city_waybill_projects_actual_role_locally(queue: IntakeQueue,
         text: str, role: str, category: str, amount: str) -> None:
     data, original = prepare(queue, text, fields={'category': '其他'}, issues=['金额冲突'])
