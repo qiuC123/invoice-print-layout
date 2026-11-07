@@ -101,7 +101,7 @@ def test_historical_other_waybill_is_readonly_and_does_not_rewrite_basis_or_vers
     expected_version = hashlib.sha256(json.dumps(raw, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
     assert current['courier_waybill_required'] and current['complete'] and current['missing'] == []
     assert {attachment['role'] for attachment in current['attachments']} == {'invoice', 'detail'}
-    assert current['category'] == '顺丰' and current['material_basis'] == 'invoice_payment'
+    assert current['category'] == '快递' and current['material_basis'] == 'invoice_payment'
     assert current['version'] == expected_version and current['amount_cents'] == 4300
     assert not current['verified'] and not current['ready']
     assert store.get(item['id']) == current
@@ -256,7 +256,7 @@ def test_replaced_historical_waybill_stays_missing_without_writes_or_amount_chan
     before = _rows(store), _originals(store)
     reloaded = store.get(item['id'])
     assert reloaded['missing'] == ['运单明细'] and not reloaded['complete'] and not reloaded['ready']
-    assert reloaded['amount_cents'] == 4300 and reloaded['category'] == '顺丰'
+    assert reloaded['amount_cents'] == 4300 and reloaded['category'] == '快递'
     assert (_rows(store), _originals(store)) == before
 
 

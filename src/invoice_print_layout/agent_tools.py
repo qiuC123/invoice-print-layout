@@ -297,10 +297,6 @@ class InvoiceTools:
             key = digest(candidate)[:24]
             from invoice_print_layout.report_types import infer_report_choice
             choice = infer_report_choice({'category': candidate['category'], 'title': '待核对费用'})
-            # The public template maps courier's editable name to Other. Keep
-            # its stricter material category while retaining that native row.
-            if candidate['category'] == '顺丰':
-                choice.update(category='顺丰', report_section='sf')
             proposals[key] = {**candidate, 'id': key, 'automatic': True, 'fingerprint': fingerprint,
                               'revisions': {e['id']: e['revision'] for e in selected_entries},
                               'title': choice['title'], 'fields': {**choice,
@@ -338,7 +334,7 @@ class InvoiceTools:
                         continue
                     purchase_facts = [semantic['facts'][e['id']] for e in members if e['role'] != 'payment']
                     generic_invoice = any(e['role'] == 'invoice' and source_category(e) not in
-                                          {'高铁', '打车', '酒店', '顺丰'} for e in members)
+                                          {'高铁', '打车', '酒店', '快递'} for e in members)
                     named_purchase = any(g['name'] not in PLACEHOLDERS | ANCILLARY and not g.get('is_discount')
                                          for fact in purchase_facts for g in fact['goods'])
                     if generic_invoice and not named_purchase:
@@ -801,8 +797,8 @@ class InvoiceTools:
                 db.execute('UPDATE expenses SET data=? WHERE id=?', (encoded(created), ref['item_id']))
             if proposal.get('material_basis'):
                 created['material_basis'] = proposal['material_basis']
-                if proposal.get('category') == '顺丰':
-                    created.update(category='顺丰', report_section='sf')
+                if proposal.get('category') == '快递':
+                    created.update(category='快递', report_section='express')
                 # The same order may be a paid receipt in the shopping matcher
                 # and the original detail in a formal invoice path. Preserve
                 # the explicit support role for the standard category check.

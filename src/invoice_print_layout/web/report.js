@@ -26,8 +26,8 @@ function buildReportPreviewHtml(items, meta={}) {
       if(key!==null&&rainRows.has(key))row=rainRows.get(key);
       else{row=24+Math.min(materials++,4);if(key!==null)rainRows.set(key,row);}
     }
-    else if(x.category==='其他')row=30+Math.min(others++,4);
-    else row={'高铁':12,'打车':13,'酒店':16,'外卖':17,'餐饮':19,'顺丰':29}[x.category]||34;
+    else if(['其他','打印'].includes(x.category))row=30+Math.min(others++,4);
+    else row={'高铁':12,'打车':13,'酒店':16,'外卖':17,'餐饮':19,'快递':29,'顺丰':29}[x.category]||34;
     if(x.category==='外卖'&&/咖啡|奶茶|饮品|饮用水|蜜雪冰城/.test(x.title+' '+x.merchant))row=19;
     if(!buckets.has(row))buckets.set(row,[]);
     buckets.get(row).push(x);
@@ -39,7 +39,7 @@ function buildReportPreviewHtml(items, meta={}) {
   for(let r=8;r<=34;r++){
     const group=buckets.get(r)||[],amount=group.reduce((n,x)=>n+x.amount_cents,0);
     const seenRain=new Set();
-    const names=meta.rows&&r>=24?(meta.rows.find(row=>row.row===r)?.name?esc(meta.rows.find(row=>row.row===r).name):''):r>=24?(group.length&&group.every(x=>x.category==='顺丰')?'顺丰同城':group.filter(x=>{
+    const names=meta.rows&&r>=24?(meta.rows.find(row=>row.row===r)?.name?esc(meta.rows.find(row=>row.row===r).name):''):r>=24?(group.filter(x=>{
       const key=rainKey(x);if(key===null)return true;
       if(seenRain.has(key))return false;seenRain.add(key);return true;
     }).map(x=>{

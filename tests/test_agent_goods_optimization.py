@@ -70,7 +70,8 @@ def test_price_metadata_cannot_be_a_labelled_or_incoming_product(price: str) -> 
         {'id': 0, 'text': '定制收纳盒'}]
 
 
-@pytest.mark.parametrize('name', ['3M反光膜', '17号展示牌', 'A4文件夹', '价格标签打印纸'])
+@pytest.mark.parametrize('name', ['3M反光膜', '17号展示牌', 'A4文件夹', '价格标签打印纸',
+                                '彩色打印纸', '复印纸', '图文快印纸'])
 def test_numbered_product_names_are_not_price_metadata(name: str) -> None:
     assert [item['name'] for item in goods_from_text('商品名称：' + name, {'goods': name})] == [name]
 

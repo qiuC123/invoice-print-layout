@@ -18,10 +18,11 @@ from invoice_print_layout.agent_product_rules import (PRODUCT_RULES_VERSION, ins
 from invoice_print_layout.agent_jobs import Jobs, ModelBudgetExceeded, digest, encoded
 from invoice_print_layout.glm_invoice_ai import GlmAIError
 from invoice_print_layout.intake_queue import IntakeQueue
+from invoice_print_layout.report_choice_rules import printing_basket
 from invoice_print_layout.report_types import infer_report_choice, validate_report_choice
 from invoice_print_layout.workbench import now
 
-GOODS_RULES_VERSION = 'goods-v9-native-ride-pairs'
+GOODS_RULES_VERSION = 'goods-v10-printing-boundaries'
 PLACEHOLDERS = {'', '待核对购买凭证', '待核对费用', '日用百货', '超市服务', '商品', '商品不明', '其他'}
 EXTRA_GOODS = ('鼠标垫', '鼠标', '键盘', '显示器', '笔记本电脑', '台式电脑', '电脑', '打印机', '测试耗材',
                '办公耗材', '工具', '雨衣', '矿泉水', '饮用水', '纯净水', '奶茶', '茶饮料', '盒饭')
@@ -38,7 +39,7 @@ CONTENT_CATEGORIES = {
        {'矿泉水', '饮用水', '纯净水', '奶茶', '茶饮料', '盒饭'}},
     **{word: '餐饮' for word in ('矿泉水', '饮用水', '纯净水', '奶茶', '茶饮料', '咖啡饮品')},
     **{word: '餐饮' for word in ('早餐', '午餐', '晚餐', '餐食')},
-    '铁路退票费': '高铁', '打印制作费': '其他',
+    '铁路退票费': '高铁', '打印制作费': '打印',
 }
 
 
@@ -244,6 +245,9 @@ def goods_from_text(text: str, fields: dict[str, Any]) -> list[dict[str, str]]:
         if not service:
             spans: list[tuple[int, int]] = []
             for noun in nouns:
+                # Printing keywords inside supplies are not a purchased service.
+                if noun in classifier.RULES['printing'] and not printing_basket([value]):
+                    continue
                 for match in re.finditer(re.escape(noun), value):
                     if any(start <= match.start() and match.end() <= end for start, end in spans):
                         continue
@@ -800,11 +804,6 @@ class ContentTools:
                     raise ValueError('报销名称过长，请在人工工作台填写200字以内的名称；完整商品信息保留')
                 choice = infer_report_choice({'title': title, 'category': category,
                                              **({'report_section': preferred['report_section']} if preferred.get('report_section') else {})})
-                # The company template puts courier services in the editable
-                # Other rows, but that must not erase the proven carrier class.
-                if category == '顺丰' and choice['project_type'] == 'other':
-                    choice = validate_report_choice('other', title)
-                    choice.update(category='顺丰', report_section='sf')
                 # A template's drinks keyword must not erase an already proved
                 # delivery scene. Keep the concrete name in the detail fields.
                 if category == '外卖' and choice['category'] == '餐饮':

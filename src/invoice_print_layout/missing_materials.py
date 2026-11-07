@@ -14,7 +14,7 @@ if TYPE_CHECKING:
 _MATERIAL_GAPS = frozenset({
     '支付凭证', '发票', '行程单', '发票或收据', '付款截图', '购买明细／收据',
     '发票或微信／支付宝扣费记录', '12306发票', '订单记录或购买明细／收据',
-    '订单记录', '运单明细',
+    '订单记录', '运单明细', '发票或收据／购买明细', '微信／支付宝扣费记录',
 })
 _LIFECYCLE_FIELDS = frozenset({
     'verified', 'verification', 'stage', 'updated_at', 'review_requested', 'report_files',
@@ -52,11 +52,13 @@ def source_snapshot(attachments: list[dict[str, Any]], workspace: Path) -> list[
 
 def acknowledgement_valid(stored: dict[str, Any], item: dict[str, Any],
                           sources: list[dict[str, Any]]) -> bool:
+    from invoice_print_layout.category_migration import renamed_fields
     acknowledgement = stored.get('missing_material_acknowledgement')
     return (stored.get('verified') is True and can_acknowledge_missing(item)
             and isinstance(acknowledgement, dict)
             and acknowledgement.get('missing') == item['missing']
-            and acknowledgement.get('expense_scope') == expense_scope(stored)
+            and acknowledgement.get('expense_scope') in {
+                expense_scope(stored), expense_scope(renamed_fields(stored, legacy=True))}
             and acknowledgement.get('sources') == sources)
 
 

@@ -7,6 +7,7 @@
 - `F4-single`：逐笔核对后出现在已核对列表。
 - `F4-next`：下一行从列表底边以外开始，核对出现提示条后仍完整可见；连续核对两笔。
 - `F4-return`：已核对单笔退回待核对，再次核对。
+- 类别扩展：类别筛选含「打印」「快递」；登记、编辑报销类型可选这两项并保留名称。打印检查收据／发票＋支付记录，快递检查发票＋运单；旧显示名「顺丰同城」保留。自动全流程未覆盖这两个新增类型，专项合成契约见 `tests/test_printing_express_categories.py`、`tests/test_category_migration.py` 和 `tests/report_preview_grouping.cjs`，不能据此声称真实材料迁移或手机真机通过。
 
 ## 用户怎么进入
 

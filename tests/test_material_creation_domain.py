@@ -49,7 +49,7 @@ def test_custom_category_is_trimmed_persisted_and_presets_remain_suggestions(
     reopened = ExpenseStore(tmp_path).get(item['id'])
     assert reopened['category'] == expected and reopened['amount'] == '12.34'
     assert reopened['amount_cents'] == 1234 and not reopened['amount_pending']
-    assert CATEGORIES == ('材料采购', '酒店', '高铁', '外卖', '餐饮', '打车', '顺丰', '其他')
+    assert CATEGORIES == ('材料采购', '酒店', '高铁', '外卖', '餐饮', '打车', '快递', '打印', '其他')
     assert not reopened['complete'] and not reopened['verified']
 
 

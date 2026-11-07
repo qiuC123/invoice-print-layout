@@ -7,7 +7,8 @@ import java.util.regex.*;
 
 /** Pure rules: cents, explicit text evidence, material requirements; no network. */
 public final class Rules {
-    public static final List<String> CATEGORIES = List.of("材料采购","酒店","高铁","外卖","餐饮","打车","顺丰","其他");
+    public static final List<String> CATEGORIES = List.of("材料采购","酒店","高铁","外卖","餐饮","打车","快递","打印","其他");
+    public static String category(String value) { return value.equals("顺丰") ? "快递" : value; }
     public static long cents(String input) {
         if (input == null || !input.matches("[0-9]{1,9}(\\.[0-9]{1,2})?")) throw new IllegalArgumentException("金额须为正数，最多两位小数");
         long value = new BigDecimal(input).movePointRight(2).longValueExact();
@@ -21,9 +22,12 @@ public final class Rules {
     }
     public static List<String> missing(String category, Set<String> roles) {
         List<String> out = new ArrayList<>();
-        switch(category) {
+        switch(category(category)) {
             case "打车": need(out,roles,"invoice","发票"); need(out,roles,"trip","行程单"); break;
-            case "顺丰": need(out,roles,"invoice","发票"); need(out,roles,"detail","运单明细"); break;
+            case "快递": need(out,roles,"invoice","发票"); need(out,roles,"detail","运单明细"); break;
+            case "打印":
+                if (!roles.contains("invoice") && !roles.contains("receipt") && !roles.contains("purchase")) out.add("发票或收据／购买明细");
+                need(out,roles,"payment","付款凭证"); break;
             case "酒店": case "高铁": need(out,roles,"invoice","发票"); break;
             case "材料采购":
                 if (!roles.contains("purchase") && !roles.contains("receipt")) out.add("购买明细／收据");
@@ -43,11 +47,22 @@ public final class Rules {
     private static void need(List<String> out, Set<String> roles, String role, String title) { if (!roles.contains(role)) out.add(title); }
     public static List<String> missing(String category,Set<String> roles,String basis){
         if(basis.equals("payment_only"))return roles.contains("payment")?List.of():List.of("支付凭证");
-        if(category.equals("打车")||category.equals("顺丰"))return missing(category,roles);
+        if(category.equals("打车")||category(category).equals("快递"))return missing(category,roles);
         if(basis.equals("invoice_payment")){List<String> out=new ArrayList<>();if(!roles.contains("invoice")&&!roles.contains("receipt"))out.add("发票或收据");if(!roles.contains("payment"))out.add("付款凭证");return out;}
         return missing(category,roles);
     }
-    public static String categoryFromGoods(String text){Set<String> matched=new HashSet<>();String[][] groups={{"材料采购","口罩","胶带","螺丝","电线","电缆","插座","垃圾袋","手套","文具","纸巾"},{"酒店","住宿费","客房费","房费"},{"高铁","铁路客运","高铁车票","动车车票","铁路电子客票"},{"外卖","奶茶","咖啡饮品","盒饭","外卖餐费"},{"餐饮","店内餐饮","途中餐饮","堂食餐费"},{"打车","网约车客运","出租汽车客运","出租车费"},{"顺丰","顺丰快递费","顺丰速运费"}};for(String[] group:groups)for(int i=1;i<group.length;i++)if(text.contains(group[i]))matched.add(group[0]);return matched.size()==1?matched.iterator().next():"其他";}
+    public static String categoryFromGoods(String text){if(printingBasket(text))return "打印";Set<String> matched=new HashSet<>();String[][] groups={{"材料采购","口罩","胶带","螺丝","电线","电缆","插座","垃圾袋","手套","文具","纸巾"},{"酒店","住宿费","客房费","房费"},{"高铁","铁路客运","高铁车票","动车车票","铁路电子客票"},{"外卖","奶茶","咖啡饮品","盒饭","外卖餐费"},{"餐饮","店内餐饮","途中餐饮","堂食餐费"},{"打车","网约车客运","出租汽车客运","出租车费"},{"快递","顺丰快递费","顺丰速运费","快递费","快递服务","同城配送","闪送","快递寄付","快递到付"}};for(String[] group:groups)for(int i=1;i<group.length;i++)if(text.contains(group[i]))matched.add(group[0]);return matched.size()==1?matched.iterator().next():"其他";}
+    private static boolean printingBasket(String text) {
+        boolean printing=false;
+        for(String raw:text.split("[、,，;；+＋\n]+")) {
+            String name=raw.replaceFirst("^[*＊][^*＊]+[*＊]", "").trim();
+            name=name.replaceFirst("^(?:商品明细|购买明细|商品[:：]|服务[:：])", "").trim();
+            if(name.isEmpty())continue;
+            if(name.matches("(?:打印制作费|打印制作|打印服务|打印费|复印服务|复印费|图文快印服务|图文快印|数码快印服务|数码快印|印刷服务|印刷费|打印|复印)[\\s\\d.元份个只包盒张页支卷×x]*"))printing=true;
+            else if(!name.matches("(?:胶带|笔|铅笔|签字笔|订书钉|订书针|文件夹|文件袋|回形针|纸张|复印纸)[\\s\\d.元份个只包盒张页支卷×x]*"))return false;
+        }
+        return printing;
+    }
     public static String goods(String text){List<String> lines=new ArrayList<>();boolean section=false;for(String raw:text.split("\\n")){String line=raw.trim();if(line.matches("^[*＊].+")){lines.add(line);continue;}if(line.matches("^(商品明细|购买明细|商品[:：]|服务[:：]).*")){section=true;lines.add(line);continue;}if(line.matches("^(实付|合计|收货|订单号|支付|地址|电话|联系|开票|销售方|购买方).*"))section=false;if(section)lines.add(line);}return String.join("\n",lines);}
     public static Map<String,String> parse(String text) {
         Map<String,String> r=new HashMap<>(); String clean=java.text.Normalizer.normalize(text,java.text.Normalizer.Form.NFKC).replaceAll("[ \\t]", "");

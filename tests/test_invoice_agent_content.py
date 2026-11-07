@@ -149,8 +149,8 @@ def test_complete_content_classification_and_concrete_name_reach_preview(environ
     ('高铁车票', '高铁', '高铁车票', 'transport'),
     ('铁路退票费', '高铁', '铁路退票费', 'transport'),
     ('出租汽车客运', '打车', '出租汽车客运', 'transport'),
-    ('收派服务\n承运方：顺丰速运', '顺丰', '顺丰快递费', 'other'),
-    ('打印制作费', '其他', '打印制作费', 'other'),
+    ('收派服务\n承运方：顺丰速运', '快递', '顺丰快递费', 'express'),
+    ('打印制作费', '打印', '打印制作费', 'printing'),
     ('饮用水', '餐饮', '饮用水', 'living'),
     ('茶饮料', '餐饮', '茶饮料', 'living'),
 ])
@@ -166,8 +166,8 @@ def test_explicit_goods_and_services_are_named_without_an_extra_model_call(
     assert done['preview']['total_cents'] == 1700 and not item['verified']
     if category == '高铁':
         assert item['project_name'] == '火车、飞机'  # Company row label, not the concrete expense name.
-    if category == '顺丰':
-        assert item['project_name'] == '顺丰快递费' and item['report_section'] == 'sf'
+    if category == '快递':
+        assert item['project_name'] == '顺丰快递费' and item['report_section'] == 'express'
 
 
 @pytest.mark.parametrize('goods,expected', [

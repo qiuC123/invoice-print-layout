@@ -29,4 +29,13 @@ const overflow=render([...Array.from({length:5},(_,i)=>item('other'+i,'工具'+i
 assert.equal(cell(overflow,'H28'),'143.00');assert.equal(cell(overflow,'H35'),'147.00');
 assert.match(cell(overflow,'B28'),/工具4/);assert.match(cell(overflow,'B28'),/口罩采购/);
 assert.equal((cell(overflow,'B28').match(/雨衣采购/g)||[]).length,1);
+const categoryRows=render([
+  {...item('synthetic-print','Synthetic printing',1200),category:'打印'},
+  {...item('synthetic-express','Synthetic courier',800),category:'快递',display_name:'顺丰同城'},
+]);
+assert.equal(cell(categoryRows,'H29'),'8.00');
+assert.equal(cell(categoryRows,'H30'),'12.00');
+assert.match(cell(categoryRows,'B29'),/顺丰同城/);
+assert.match(cell(categoryRows,'B30'),/Synthetic printing/);
+assert.equal(cell(categoryRows,'H35'),'20.00');
 console.log('passed: combined raincoats, retained originals, separate projects, filtered selection, overflow and totals');

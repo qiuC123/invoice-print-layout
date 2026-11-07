@@ -104,12 +104,12 @@ def test_anonymous_city_waybill_is_present_but_identity_needs_fact(tmp_path: Pat
     original = entry(tmp_path, 'detail', 'other', city(), '30.00')
     before = copy.deepcopy(original)
     detail = projected(original)
-    assert original == before and detail['role'] == 'detail' and source_category(detail) == '顺丰'
+    assert original == before and detail['role'] == 'detail' and source_category(detail) == '快递'
     states, facts = context([invoice, detail])
     assert pair_status(invoice, detail) == 'needs_fact'
     assert not extended_candidates([invoice, detail], states)
     rows = transport_relation_candidates([invoice, detail], states, facts)
-    assert len(rows) == 1 and rows[0]['category'] == '顺丰'
+    assert len(rows) == 1 and rows[0]['category'] == '快递'
     q = missing_questions([invoice], context=[invoice, detail])[0]
     assert '已收到' in q['reason'] and '未标承运方' in q['reason'] and not q['requires_source']
     # Even an old role=other should not produce a false "not uploaded" message.
@@ -214,7 +214,7 @@ def test_carrier_seller_name_does_not_turn_packaging_goods_into_delivery_service
     row = entry(tmp_path, 'packaging', 'invoice',
                 bill('顺丰同城测试有限公司', '30.00', courier=True).replace('收派服务费', '包装纸箱'), '30.00')
     assert not project_transport(row)
-    assert source_category(row) != '顺丰'
+    assert source_category(row) != '快递'
 
 
 def mail_origins(rows: list[dict[str, Any]]) -> dict[str, MailOrigin]:

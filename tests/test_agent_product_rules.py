@@ -379,15 +379,15 @@ def test_wrapped_goods_need_the_validated_full_completion_span(quote: str, metho
 def test_explicit_carrier_label_is_not_a_second_purchased_service() -> None:
     goods, sources = evidence(['顺丰快递费'], text='商品名称：收派服务\n承运方：顺丰速运\n实付17.00')
     goods[0]['raw_name'] = '收派服务'  # Caller qualified this alias to this current source.
-    result = inspect_product_rules(goods, sources, {**CATEGORIES, '收派服务': '顺丰'})
-    assert result['status'] == 'exact' and result['category'] == '顺丰'
+    result = inspect_product_rules(goods, sources, {**CATEGORIES, '收派服务': '快递'})
+    assert result['status'] == 'exact' and result['category'] == '快递'
     assert result['goods_text'] == '收派服务'
 
 
 def test_carrier_metadata_does_not_hide_a_later_unlabelled_product() -> None:
     goods, sources = evidence(['顺丰快递费'], text='商品名称：收派服务\n承运方：顺丰速运\n未知仪器\n实付17.00')
     goods[0]['raw_name'] = '收派服务'
-    result = inspect_product_rules(goods, sources, {**CATEGORIES, '收派服务': '顺丰'})
+    result = inspect_product_rules(goods, sources, {**CATEGORIES, '收派服务': '快递'})
     assert result['status'] == 'needs_input' and result['coverage_complete'] is False
 
 

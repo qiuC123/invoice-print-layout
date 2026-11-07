@@ -17,7 +17,7 @@ def evidence(goods='', purpose=''):
 
 
 @pytest.mark.parametrize('text,category', [('螺丝', '材料采购'), ('住宿费', '酒店'),
-    ('铁路客运', '高铁'), ('盒饭', '外卖'), ('出租汽车客运', '打车'), ('顺丰快递费', '顺丰')])
+    ('铁路客运', '高铁'), ('盒饭', '外卖'), ('出租汽车客运', '打车'), ('顺丰快递费', '快递')])
 def test_rules_no_cloud(text, category, monkeypatch):
     monkeypatch.setattr(classifier, 'ask_jev', lambda _: pytest.fail('unneeded cloud call'))
     assert classifier.decide(evidence(text))['category'] == category

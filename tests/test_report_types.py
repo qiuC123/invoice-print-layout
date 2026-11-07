@@ -29,12 +29,12 @@ def chosen(kind: str, name: str, key: str, cents: int = 100) -> dict[str, Any]:
 
 def test_hierarchy_contains_exact_template_sections_and_all_fixed_rows() -> None:
     hierarchy = report_types()
-    assert [section['label'] for section in hierarchy] == ['拓展', '车费', '生活费', '人员', '现场购材料', '其他']
-    assert [section['editable_name'] for section in hierarchy] == [False] * 4 + [True] * 2
-    assert [len(section['names']) for section in hierarchy] == [2, 6, 4, 4, 0, 0]
-    assert [row for section in hierarchy for row in section['rows']] == list(range(8, 35))
+    assert [section['label'] for section in hierarchy] == ['拓展', '车费', '生活费', '人员', '现场购材料', '快递', '打印', '其他']
+    assert [section['editable_name'] for section in hierarchy] == [False] * 4 + [True] * 4
+    assert [len(section['names']) for section in hierarchy] == [2, 6, 4, 4, 0, 0, 0, 0]
+    assert sorted({row for section in hierarchy for row in section['rows']}) == list(range(8, 35))
     assert set(REPORT_LABELS) == set(range(8, 24))
-    assert len(json.loads(json.dumps(hierarchy, ensure_ascii=False))) == 6
+    assert len(json.loads(json.dumps(hierarchy, ensure_ascii=False))) == 8
     hierarchy[0]['names'].append('Never persist to shared contract')
     assert 'Never persist to shared contract' not in report_types()[0]['names']
 
@@ -56,7 +56,7 @@ def test_fixed_choices_roundtrip_to_the_actual_summary_row(kind: str, name: str,
     assert item == before
 
 
-@pytest.mark.parametrize('kind', ['materials', 'other'])
+@pytest.mark.parametrize('kind', ['materials', 'express', 'printing', 'other'])
 def test_only_open_sections_allow_a_trimmed_custom_project_name(kind: str) -> None:
     name = '现场材料及服务明细'
     choice = validate_report_choice(kind, '  ' + name + '  ')
@@ -86,7 +86,7 @@ def test_label_input_normalizes_to_code_and_legacy_machine_suggestions_are_read_
     assert [item['project_type'] for item in suggestions] == ['transport', 'transport', 'living', 'living',
                                                             'materials', 'other', 'living', 'other']
     assert [item['project_name'] for item in suggestions] == ['火车、飞机', '打的(出租车、滴滴等)', '住宿费(附清单)',
-                                                            '现场饮用水、夜宵', '口罩采购', '顺丰同城',
+                                                            '现场饮用水、夜宵', '口罩采购', '普通电子发票',
                                                             '现场饮用水、夜宵', '未知内容']
     assert legacy == before
     assert infer_report_choice({'category': '其他', 'title': ''})['project_name'] == ''

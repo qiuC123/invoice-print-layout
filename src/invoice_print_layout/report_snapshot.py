@@ -12,9 +12,9 @@ from invoice_print_layout.report_types import (REPORT_LABELS, REPORT_ROWS,
                                                REPORT_SECTIONS as TEMPLATE_SECTIONS,
                                                report_types, validate_report_choice)
 
-SECTIONS = {'高铁': 12, '打车': 13, '酒店': 16, '外卖': 17, '餐饮': 19, '顺丰': 29}
+SECTIONS = {'高铁': 12, '打车': 13, '酒店': 16, '外卖': 17, '餐饮': 19, '快递': 29, '顺丰': 29}
 REPORT_SECTIONS = {**TEMPLATE_SECTIONS, 'rail': '高铁', 'taxi': '打车', 'hotel': '酒店', 'takeout': '外卖'}
-ROWS = {**REPORT_ROWS, 'sf': 29}
+ROWS = {**REPORT_ROWS, 'express': 29, 'sf': 29}
 
 
 def display_name(item: dict[str, Any]) -> str:
@@ -27,15 +27,14 @@ def display_name(item: dict[str, Any]) -> str:
         return '雨衣采购'
     if title.startswith('口罩'):
         return '口罩采购'
-    if item['category'] == '顺丰':
-        return '顺丰同城'
     return str(title)
 
 
 def _section(item: dict[str, Any]) -> str:
     if item.get('project_type'):
         return validate_report_choice(item['project_type'], item.get('project_name'))['report_section']
-    return str(item.get('report_section') or {'材料采购': 'materials', '其他': 'other'}.get(item['category'], ''))
+    return str(item.get('report_section') or {'材料采购': 'materials', '打印': 'printing',
+                                            '其他': 'other'}.get(item['category'], ''))
 
 
 def _fixed_row(item: dict[str, Any], section: str) -> int:
@@ -50,7 +49,7 @@ def snapshot(items: list[dict[str, Any]]) -> dict[str, Any]:
     items = allocation_items(items)
     buckets: dict[int, dict[tuple[str, str, str], list[dict[str, Any]]]] = defaultdict(dict)
     grouped: dict[tuple[str, str, str], int] = {}
-    dynamic_sections = {'materials', 'other'}
+    dynamic_sections = {'materials', 'printing', 'other'}
     reserved = {_fixed_row(item, _section(item)) for item in items if _section(item) not in dynamic_sections}
     legacy_groups: dict[tuple[str, str, str], int] = {}
     legacy_counts = {'materials': 0, 'other': 0}
@@ -61,8 +60,9 @@ def snapshot(items: list[dict[str, Any]]) -> dict[str, Any]:
             group = item.get('report_group', '') or ('雨衣采购' if name == '雨衣采购' and section == 'materials' else '')
             key = (str(item.get('project_id') or item['project']), section, group or item['id'])
             if key not in legacy_groups:
-                legacy_groups[key] = (24 if section == 'materials' else 30) + min(legacy_counts[section], 4)
-                legacy_counts[section] += 1
+                lane = 'materials' if section == 'materials' else 'other'
+                legacy_groups[key] = (24 if lane == 'materials' else 30) + min(legacy_counts[lane], 4)
+                legacy_counts[lane] += 1
     reserved.update(legacy_groups.values())
     allocated: set[int] = set()
     for item in items:
