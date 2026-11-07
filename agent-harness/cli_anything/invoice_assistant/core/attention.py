@@ -3,10 +3,15 @@ from urllib.parse import urlencode
 from cli_anything.invoice_assistant.utils.client import CLIError
 
 
-def list_attention(client, project_id, offset, limit):
-    if project_id:
+def list_attention(client, project_id, offset, limit, all_statuses=False, fingerprint=''):
+    if project_id and not all_statuses:
         client.project(project_id)
-    return client.get('/api/attention?' + urlencode({'project': project_id or '', 'offset': offset, 'limit': limit}))
+    query = {'project': project_id or '', 'offset': offset, 'limit': limit}
+    if fingerprint and not all_statuses:
+        raise CLIError('--fingerprint 仅适用于 --all。')
+    if all_statuses:
+        query.update(all=1, fingerprint=fingerprint)
+    return client.get('/api/attention?' + urlencode(query))
 
 
 def context(client, project_id, obj):

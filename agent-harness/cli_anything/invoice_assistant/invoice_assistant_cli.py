@@ -5,7 +5,7 @@ import sys
 import click
 
 from cli_anything.invoice_assistant import __version__
-from cli_anything.invoice_assistant.core import reports, workflow as flow
+from cli_anything.invoice_assistant.core import knowledge, reports, workflow as flow
 from cli_anything.invoice_assistant.utils.client import Client, CLIError, configuration, read_json
 
 
@@ -143,10 +143,62 @@ def attention(): """Inspect source-bound questions and return evidenced answers.
 
 @attention.command('list')
 @paging
+@click.option('--all', 'all_statuses', is_flag=True, help='Include every stored status, deleted objects and unassigned objects.')
+@click.option('--fingerprint', default='', help='Require the same snapshot on subsequent --all pages.')
 @click.pass_context
-def list_attention(ctx, offset, limit):
+def list_attention(ctx, offset, limit, all_statuses, fingerprint):
     from cli_anything.invoice_assistant.core import attention as att
-    emit(ctx, att.list_attention(ctx.obj['client'], ctx.obj['project'], offset, limit))
+    emit(ctx, att.list_attention(ctx.obj['client'], ctx.obj['project'], offset, limit, all_statuses, fingerprint))
+
+
+@cli.group()
+def audit(): """Read workspace audit history, including SQL IDs."""
+
+
+@cli.group()
+def corrections(): """Read saved recognition corrections without recognizing again."""
+
+
+@audit.command('list')
+@click.option('--after-id', type=click.IntRange(0), default=0)
+@click.option('--limit', type=click.IntRange(1, 1000), default=200)
+@click.pass_context
+def list_audit(ctx, after_id, limit):
+    emit(ctx, knowledge.listing(ctx.obj['client'], ctx.obj['project'], 'audit', after_id=after_id, limit=limit))
+
+
+@corrections.command('list')
+@click.option('--after-id', type=click.IntRange(0), default=0)
+@click.option('--limit', type=click.IntRange(1, 1000), default=200)
+@click.pass_context
+def list_corrections(ctx, after_id, limit):
+    emit(ctx, knowledge.listing(ctx.obj['client'], ctx.obj['project'], 'corrections', after_id=after_id, limit=limit))
+
+
+@cli.group()
+def classification(): """Read stored attempts, including deleted and unassigned expenses."""
+
+
+@cli.group()
+def experience(): """Read learned category experience without applying it."""
+
+
+@cli.group()
+def preferences(): """Read saved rules without updating last_used."""
+
+
+@click.command('list')
+@paging
+@click.option('--fingerprint', default='', help='Require the same snapshot on subsequent pages.')
+@click.pass_context
+def list_snapshot(ctx, offset, limit, fingerprint):
+    emit(ctx, knowledge.listing(ctx.obj['client'], ctx.obj['project'], ctx.parent.info_name,
+                               offset=offset, limit=limit, fingerprint=fingerprint))
+
+
+classification.add_command(list_snapshot)
+experience.add_command(list_snapshot)
+preferences.add_command(list_snapshot)
 
 
 @attention.command('show')
