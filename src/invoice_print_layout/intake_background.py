@@ -1,17 +1,22 @@
-"""One explicitly started, serial recognition worker per workbench process.
+"""One serial recognition worker per workbench process.
 
-Saved intake rows are the recovery record. Constructing this service does not
-start work, and a restart never calls an OCR engine or model on its own.
+Construction does not start work. The workbench may rescue overdue uploads;
+durable attempt records prevent automatic retries, including after a restart.
 """
 from __future__ import annotations
 
 from collections import OrderedDict
 from copy import deepcopy
+from datetime import datetime
+import json
 import queue
 import threading
 from typing import Any, Callable
 
 from invoice_print_layout.intake_queue import IntakeQueue
+from invoice_print_layout.organize_settings import OrganizeSettings
+
+RECOGNITION_GRACE_SECONDS = 180
 
 
 class BackgroundIntake:
@@ -24,6 +29,44 @@ class BackgroundIntake:
         self._owners: dict[str, str] = {}
         self._thread: threading.Thread | None = None
         self._closed = False
+        with intake.store.connect() as db:
+            db.execute('CREATE TABLE IF NOT EXISTS intake_recognition_attempts (entry_id TEXT PRIMARY KEY)')
+
+    def rescue_unrecognized(self, *, now: datetime | None = None) -> None:
+        if not OrganizeSettings(self.intake.store.root).read()['auto_after_upload']:
+            return
+        current = now if now is not None else datetime.now()
+        with self.intake.store.connect() as db:
+            # Keep job creation and edits behind the eligibility check and enqueue.
+            db.execute('BEGIN IMMEDIATE')
+            busy = {key for row in db.execute(
+                "SELECT data FROM invoice_agent_jobs WHERE state IN ('queued','running')")
+                for key in json.loads(row['data'])['material_ids']}
+            attempted = {row['entry_id'] for row in db.execute('SELECT entry_id FROM intake_recognition_attempts')}
+            attached = {row['digest'] for row in db.execute(
+                'SELECT digest FROM attachments UNION SELECT digest FROM automatic_ride_files')}
+            with self._lock:
+                owned = set(self._owners)
+            excluded = busy | attempted | owned
+            for row in db.execute("SELECT data FROM intake_queue WHERE json_extract(data,'$.status')='received'"):
+                entry = json.loads(row['data'])
+                if (entry['id'] in excluded or entry.get('source') != 'upload'
+                        or not entry.get('project_id') or entry.get('text') or entry.get('fields')
+                        or entry.get('result') != '已保存，等待识别' or entry.get('item_id')
+                        or entry.get('duplicate_of') or entry.get('replacement_id') or entry.get('material_match_id')
+                        or entry.get('qr_status') == 'converted' or entry['digest'] in attached):
+                    continue
+                try:
+                    age = (current - datetime.fromisoformat(entry.get('received_at', ''))).total_seconds()
+                except (ValueError, TypeError):
+                    continue
+                if age <= RECOGNITION_GRACE_SECONDS:
+                    continue
+                try:
+                    self.enqueue('fallback-' + entry['id'], [entry['id']])
+                except ValueError:
+                    # A concurrent explicit enqueue owns it, or the queue is full/closing.
+                    continue
 
     def enqueue(self, batch: Any, ids: Any, *, force_ai: Any = False) -> dict[str, Any]:
         if (not isinstance(batch, str) or not batch.strip() or len(batch) > 128 or
@@ -101,6 +144,8 @@ class BackgroundIntake:
                             if self._closed:
                                 return
                             job['running'] = 1
+                        with self.intake.store.connect() as db:
+                            db.execute('INSERT OR IGNORE INTO intake_recognition_attempts VALUES (?)', (key,))
                         self.intake.prepare_batch_entry(key, force_ai=job['force_ai'])
                     with self._lock:
                         job['completed'] += 1
