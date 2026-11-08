@@ -17,6 +17,7 @@ from typing import Any, TYPE_CHECKING, cast
 from urllib.parse import parse_qs, quote, unquote, urlparse
 
 from invoice_print_layout.workbench import ExpenseStore, CATEGORIES, ROLES, STAGES
+from invoice_print_layout.agent_jobs import ProjectBusy
 from invoice_print_layout.storage import ensure_workspace
 from invoice_print_layout.reliability import read_json, save_json
 from invoice_print_layout.workbench_runtime import APP_MODES, runtime_info, source_build_id
@@ -925,6 +926,8 @@ def make_server(workspace: Path, port: int = 8765, *, mode: str = 'workbench',
                     else:
                         raise ValueError('操作不存在')
                 self.respond(result)
+            except ProjectBusy as exc:
+                self.respond({'error': str(exc), 'code': 'project_busy'}, 409)
             except (ValueError, KeyError, TypeError, OSError, sqlite3.Error) as exc:
                 self.respond({'error': str(exc)}, 400)
             except Exception:

@@ -16,13 +16,17 @@ async function run(pw) {
     limits:{models:6,tools:48,seconds:180},events:[],item_ids:[],message:'等待后台整理',question:null,preview:null,...values});
   const clone = value => JSON.parse(JSON.stringify(value));
   const originalStyle = await fs.readFile(path.resolve(__dirname,'../src/invoice_print_layout/web/style.css'));
+  const appSource = await fs.readFile(path.resolve(__dirname,'../src/invoice_print_layout/web/app.js'),'utf8');
+  const postApi = appSource.slice(appSource.indexOf('async function api('),appSource.indexOf('async function act('));
   page.on('pageerror', reason => errors.push(reason.message));
   await page.route(origin+'/**', async route => {
     const request = route.request(), url = new URL(request.url());
     const json = value => route.fulfill({contentType:'application/json',body:JSON.stringify(value)});
     if (url.pathname === '/') return route.fulfill({contentType:'text/html',body:`<!doctype html><html lang="zh-CN" class="invoice-assistant"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="stylesheet" href="/style.css"><link rel="stylesheet" href="/workbench-theme.css"><link rel="stylesheet" href="/manual-agent.css"></head><body><main style="width:100%;margin:0;padding:12px;min-width:0"><label>原费用名称<input id="manualEdit" value="人工修改尚未保存"></label><div id="agentHost"></div><button id="originalControl">原工作台操作</button></main><script src="/manual-agent.js"></script><script>
       window.selectedProject='alpha';window.callbacks=[];window.parentLoads=0;window.deferredChanges=[];window.manualEditing=false;window.settingsOpened=[];window.invoiceSettings={open:tab=>settingsOpened.push(tab)};
-      window.injectedApi=async(path,body)=>{const response=await fetch(path,body===undefined?{cache:'no-store'}:{method:'POST',headers:{'Content-Type':'application/json','X-Workbench-Token':'synthetic'},body:JSON.stringify(body)});const data=await response.json();if(!response.ok)throw new Error(data.error||'处理未完成');return data;};
+      const projectScope='',state={token:'synthetic'};
+      ${postApi}
+      window.injectedApi=async(path,body)=>{if(body!==undefined)return api(path.slice(5),body);const response=await fetch(path,{cache:'no-store'});const data=await response.json();if(!response.ok)throw new Error(data.error||'处理未完成');return data;};
       window.mountTest=()=>window.controller=window.manualInvoiceAgent.mount({host:document.getElementById('agentHost'),api:window.injectedApi,getProject:()=>window.selectedProject,
         onChanged:data=>{if(window.failChanged)throw Error('合成结果回调失败');window.callbacks.push(['changed',data]);if(window.manualEditing)window.deferredChanges.push(data);else window.parentLoads++;},
         onOpenMaterial:data=>window.callbacks.push(['material',data]),onOpenExpense:data=>window.callbacks.push(['expense',data]),onPreview:data=>window.callbacks.push(['preview',data])});
@@ -44,6 +48,7 @@ async function run(pw) {
       const body = request.postDataJSON(); posts.push({path:url.pathname,body});
       assert.equal(request.headers()['x-workbench-token'],'synthetic');
       if (url.pathname === '/api/agent/start') {
+        if (state.startError) return route.fulfill({status:state.startError.status,contentType:'application/json',body:JSON.stringify(state.startError.body)});
         const prior = cache.get(body.idempotency_key);
         if (prior) { assert.deepEqual(prior.body,body); return json({job:prior.job}); }
         const job = base(body.project_id,'created-'+(++sequence));
@@ -301,8 +306,54 @@ async function run(pw) {
     await page.evaluate(()=>window.failChanged=false);
     await page.evaluate(()=>window.controller.startReceived({projectId:'alpha',entryIds:['error-recovery'],batch:'error-recovery'}));
     await refresh();assert.equal(await page.locator('#agentHost').isVisible(),false,'successful operation clears the error panel');
+    // Busy starts persist across a real reload, then drain in upload order.
+    state.jobs.alpha=[base('alpha','synthetic-existing',{state:'running'})];
+    state.startError={status:409,body:{error:'当前项目已有任务，请等待或取消后再开始',code:'project_busy'}};
+    const busyOffset=posts.length;
+    const busyRequest={projectId:'alpha',entryIds:['busy-first'],batch:'busy-batch'};
+    assert.deepEqual(await page.evaluate(request=>window.controller.startReceived(request),busyRequest),{queued:true});
+    const busyBody=posts.at(-1).body;
+    await page.getByText('1 份材料已保存，等当前整理结束后自动开始。',{exact:true}).waitFor();
+    assert.equal(await page.locator('.mia-summary-status').innerText(),'等待项目空闲');
+    assert.equal(await page.locator('.mia-error').isVisible(),false);
+    assert.equal(await page.getByRole('button',{name:'重试启动本批整理'}).count(),0);
+    await page.evaluate(()=>window.controller.startReceived({projectId:'alpha',entryIds:['busy-second'],batch:'busy-batch'}));
+    await page.evaluate(()=>window.controller.startReceived({projectId:'alpha',entryIds:['busy-third'],batch:'independent-batch'}));
+    const thirdBody=posts.at(-1).body;
+    await page.reload();await refresh();
+    assert.equal(await page.locator('.mia-pending-starts p').count(),2);
+    assert.equal(await page.locator('.mia-summary-status').innerText(),'等待项目空闲');
+    assert.equal(posts.slice(busyOffset).length,2,'running project cannot trigger polling starts');
+    state.jobs.alpha=[];
+    await refresh();
+    await page.waitForFunction(()=>JSON.parse(localStorage.getItem('invoice-manual-agent-v1:requests:alpha')).find(row=>row.batch==='busy-batch').waitingForIdle);
+    await page.waitForTimeout(50);
+    assert.equal(posts.slice(busyOffset).length,3,'idle polling retries even when the server reports busy again');
+    assert.deepEqual(posts.at(-1).body,busyBody,'another busy response preserves the original request');
+    assert.equal(await page.locator('.mia-error').isVisible(),false);
+    state.startError=null;
+    await refresh();
+    await page.waitForFunction(()=>JSON.parse(localStorage.getItem('invoice-manual-agent-v1:requests:alpha')).find(row=>row.batch==='busy-batch').accepted);
+    assert.deepEqual(posts.at(-1).body,busyBody,'idle retry preserves the complete body and idempotency key');
+    const afterFirst=posts.length;
+    await refresh();assert.equal(posts.length,afterFirst,'next batch waits for the accepted job to finish');
+    state.jobs.alpha=[];await refresh();
+    await page.waitForFunction(()=>JSON.parse(localStorage.getItem('invoice-manual-agent-v1:requests:alpha')).find(row=>row.ids.includes('busy-second')).accepted);
+    assert.deepEqual(posts.at(-1).body.material_ids,['busy-second'],'chained batch precedes later independent upload');
+    state.jobs.alpha=[];await refresh();
+    await page.waitForFunction(()=>JSON.parse(localStorage.getItem('invoice-manual-agent-v1:requests:alpha')).find(row=>row.ids.includes('busy-third')).accepted);
+    assert.deepEqual(posts.at(-1).body,thirdBody);
+    // Other failures during an automatic retry retain the existing manual recovery.
+    state.startError={status:409,body:{error:'项目忙',code:'project_busy'}};
+    await page.evaluate(()=>window.controller.startReceived({projectId:'alpha',entryIds:['busy-failure'],batch:'busy-failure'}));
+    state.startError={status:400,body:{error:'材料已关联、移除或不属于当前项目，请刷新'}};
+    state.jobs.alpha=[];await refresh();
+    await page.getByRole('button',{name:'重试启动本批整理',exact:true}).waitFor();
+    assert.equal(await page.locator('.mia-summary-status').innerText(),'需要处理');
+    assert.match(await page.locator('.mia-error').innerText(),/材料已关联/);
     assert.deepEqual(errors,[]);
-    return {passed:true,globalPreferences:true,settingsFailureDefaults:true,noProjectPanelHidden:true,configuredModelOnly:true,oneBatchOneStart:true,networkRetryKeepsIdentity:true,
+    return {passed:true,projectBusyWaitPersists:true,busyRetryKeepsIdentity:true,waitingBatchesStartInOrder:true,busyRetryOtherErrorVisible:true,
+      globalPreferences:true,settingsFailureDefaults:true,noProjectPanelHidden:true,configuredModelOnly:true,oneBatchOneStart:true,networkRetryKeepsIdentity:true,
       pollingNeverPosts:true,pollingKeepsManualInput:true,parentControlsManualEditRefresh:true,sourceBoundAnswer:true,sameJobRemainingBudget:true,
       exactPreviewCallbacks:true,projectLateResponseFence:true,missingEvidenceNeedsManual:true,guardedLegacyRefresh:true,unlinkedCurrentProjectOnly:true,jobRetry:true,
       normalPanelHidden:true,questionsAutoExpand:true,answeredPanelHidden:true,startFailureVisible:true,retrySuccessHidden:true,manualModeEntry:true,operationErrorVisible:true,mobile390:true,pageErrors:errors};

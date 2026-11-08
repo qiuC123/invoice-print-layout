@@ -55,6 +55,10 @@ def new_job(project: str, entries: list[dict[str, Any]], *, use_model: bool,
     }
 
 
+class ProjectBusy(ValueError):
+    """The project already has a queued or running job."""
+
+
 class ModelBudgetExceeded(ValueError):
     """All model providers share the same durable task budget."""
 
@@ -269,7 +273,7 @@ class Jobs:
                 return self.get(prior['job_id'])
             if db.execute("SELECT 1 FROM invoice_agent_jobs WHERE project_id=? AND state IN ('queued','running')",
                           (project,)).fetchone():
-                raise ValueError('当前项目已有任务，请等待或取消后再开始')
+                raise ProjectBusy('当前项目已有任务，请等待或取消后再开始')
             entries = [queue.get(i) for i in ids]
             if any(e['project_id'] != project or e['status'] not in {'received', 'review'} or
                    e.get('item_id') for e in entries):

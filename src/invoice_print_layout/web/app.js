@@ -96,7 +96,7 @@ async function api(route,body){
   if(['intake/receive','intake/claim','mail'].includes(route))body={...body,project_id:project.id};
   if(route==='intake/resolve')body={...body,fields:{...body.fields,project_id:project.id,project:project.name}};
  }
- const res=await fetch('/api/'+route,{method:'POST',headers:{'Content-Type':'application/json','X-Workbench-Token':state.token},body:JSON.stringify(body||{})});const result=await res.json();if(!res.ok){const error=Error(result.error||'操作未完成');error.status=res.status;throw error;}return result;}
+ const res=await fetch('/api/'+route,{method:'POST',headers:{'Content-Type':'application/json','X-Workbench-Token':state.token},body:JSON.stringify(body||{})});const result=await res.json();if(!res.ok){const error=Error(result.error||'操作未完成');error.status=res.status;error.code=result.code;throw error;}return result;}
 async function act(fn){try{await fn();}catch(e){notify(e.message,true);}}
 let loadRetryTimer=null,loadDisconnected=false;
 let loadedRuntime=null,loadCompleted=false,runtimeChecking=false,reloadPending=false;
