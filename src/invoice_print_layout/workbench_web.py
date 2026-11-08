@@ -267,6 +267,7 @@ def make_server(workspace: Path, port: int = 8765, *, mode: str = 'workbench',
                 elif path == '/api/agent/jobs':
                     pid = parse_qs(urlparse(self.path).query).get('project', [''])[0]
                     self.respond({'jobs': invoice_agent.jobs.list(pid), 'token': token,
+                                  'pending_material_ids': intake.pending_organize_ids(pid),
                                   'model': invoice_ai.public_status()})
                 elif path == '/api/agent/job':
                     key = parse_qs(urlparse(self.path).query).get('id', [''])[0]

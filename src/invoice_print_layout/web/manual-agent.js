@@ -23,6 +23,7 @@
     if (active) active.destroy();
     let project = '', generation = 0, revision = 0, jobs = [], rendered = '', reading = null;
     let modelKnown = false, modelAvailable = false, destroyed = false, refreshError = '', actionError = '', settingsReading = null;
+    let actionErrorRequest = '', actionErrorCause = null;
     const watched = new Set(), notified = new Map(), jobLocks = new Set(), startLocks = new Map(), requests = new Map();
     const panel = node('details', undefined, 'manual-invoice-agent');
     const summary = node('summary', undefined, 'mia-summary');
@@ -45,7 +46,10 @@
       error.textContent = message; error.hidden = !message;
       updateControls();
     }
-    function actionFailure(reason) { actionError = reason && reason.message ? reason.message : String(reason); displayError(); }
+    function actionFailure(reason, requestKey = '') {
+      actionErrorRequest = requestKey || (reason === actionErrorCause ? actionErrorRequest : ''); actionErrorCause = reason;
+      actionError = reason && reason.message ? reason.message : String(reason); displayError();
+    }
     function requestRecords(projectId) {
       if (!requests.has(projectId)) {
         let value;
@@ -128,6 +132,18 @@
       callback('onChanged', {projectId:project, jobId:job.id, state:job.state, itemIds:itemIds.slice()}).catch(actionFailure);
     }
     function applyJobs(data, requestedProject) {
+      if (Array.isArray(data.pending_material_ids)) {
+        const pendingIds = new Set(data.pending_material_ids), records = requestRecords(requestedProject);
+        const obsolete = records.filter(row => !row.accepted && (row.failed || row.waitingForIdle) && !startLocks.has(requestedProject) && !row.ids.some(id => pendingIds.has(id)));
+        if (obsolete.length) {
+          requests.set(requestedProject, records.filter(row => !obsolete.includes(row)));
+          for (const row of requestRecords(requestedProject)) {
+            if (obsolete.some(prior => prior.key === row.after)) row.after = '';
+          }
+          if (obsolete.some(row => row.key === actionErrorRequest)) { actionError = ''; actionErrorRequest = ''; }
+          saveRequests(requestedProject); displayError(); renderPending();
+        }
+      }
       if (data.model && typeof data.model.available === 'boolean') { modelKnown = true; modelAvailable = data.model.available; }
       jobs = (Array.isArray(data.jobs) ? data.jobs : []).filter(job => job && job.project_id === requestedProject);
       for (const job of jobs) {
@@ -336,7 +352,7 @@
             return {queued:true};
           }
           record.failed = true; record.waiting = false; record.waitingForIdle = false; saveRequests(record.projectId);
-          if (current() === record.projectId) { setProject(); panel.open = true; actionFailure(reason); }
+          if (current() === record.projectId) { setProject(); panel.open = true; actionFailure(reason, record.key); }
           throw reason;
         } finally {
           if (startLocks.get(record.projectId) === lock) startLocks.delete(record.projectId);

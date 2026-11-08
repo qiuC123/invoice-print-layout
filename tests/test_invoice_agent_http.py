@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import base64
+import json
 from pathlib import Path
 import time
 from typing import Any
@@ -9,10 +10,39 @@ from typing import Any
 import pytest
 
 from invoice_print_layout.agent_jobs import AgentService, Jobs
+from invoice_print_layout.intake_queue import IntakeQueue
 from invoice_print_layout.workbench import ExpenseStore
 from invoice_print_layout.project_registry import ProjectRegistry
 from tests.test_invoice_agent import proof
 from tests.test_invoice_assistant import invoice_server
+
+
+def test_jobs_reports_only_current_project_materials_still_awaiting_organization(tmp_path: Path) -> None:
+    store = ExpenseStore(tmp_path)
+    registry = ProjectRegistry(tmp_path / '后勤' / 'tasks.sqlite3')
+    project = registry.create_project('Synthetic pending project')['id']
+    other = registry.create_project('Synthetic other project')['id']
+    queue = IntakeQueue(store)
+    variants = [{}, {'status': 'review'}, {'item_id': 'synthetic-expense'},
+                {'status': 'archived'}, {'status': 'deleted'}, {'status': 'converted'},
+                {'qr_status': 'converted'}, {'replacement_id': 'synthetic-replacement'},
+                {'duplicate_of': 'synthetic-original'}, {'material_match_id': 'synthetic-match'},
+                {'project_id': other}, {'project_id': ''}, {'status': 'unused'}]
+    entries = []
+    for index, changes in enumerate(variants):
+        entry = queue.receive(f'synthetic-{index}.pdf', proof(f'Synthetic {index}'), project_id=project)
+        entry.update(changes)
+        with store.connect() as db:
+            db.execute('UPDATE intake_queue SET data=? WHERE id=?', (json.dumps(entry), entry['id']))
+        entries.append(entry)
+    # An attachment is authoritative even when an old intake row lacks item_id.
+    item = store.create({'title': 'Synthetic expense', 'category': '其他', 'amount': '1', 'project_id': project})
+    store.add_attachment(item['id'], 'synthetic-attachment.pdf', Path(entries[0]['path']).read_bytes(), 'invoice')
+    with invoice_server(tmp_path) as client:
+        status, result = client.json('GET', '/api/agent/jobs?project=' + project)
+        assert status == 200
+        assert result['pending_material_ids'] == [entries[1]['id']]
+        assert client.json('GET', '/api/agent/jobs?project=' + other)[1]['pending_material_ids'] == [entries[10]['id']]
 
 
 @pytest.mark.parametrize('state', ['queued', 'running'])

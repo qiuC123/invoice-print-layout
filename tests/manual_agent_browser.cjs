@@ -39,6 +39,7 @@ async function run(pw) {
     if (url.pathname === '/api/agent/jobs') {
       const project = url.searchParams.get('project');
       const result = {jobs:clone(state.jobs[project] || []),model:{available:state.available},token:'synthetic'};
+      if (state.pendingIds) result.pending_material_ids = state.pendingIds[project] || [];
       if (delayedGet && delayedGet.project === project) { const delayed=delayedGet; delayedGet=null; delayed.entered=true; await delayed.gate.promise; }
       if (state.failGet) { state.failGet--; return route.fulfill({status:503,contentType:'application/json',body:'{"error":"temporary"}'}); }
       return json(result);
@@ -351,8 +352,40 @@ async function run(pw) {
     await page.getByRole('button',{name:'重试启动本批整理',exact:true}).waitFor();
     assert.equal(await page.locator('.mia-summary-status').innerText(),'需要处理');
     assert.match(await page.locator('.mia-error').innerText(),/材料已关联/);
+    // Only a successful server snapshot can retire an unaccepted request.
+    state.pendingIds={alpha:[]};await refresh();
+    assert.equal(await page.locator('#agentHost').isVisible(),false,'retiring a failed start clears its own error');
+    state.startError={status:503,body:{error:'Synthetic start failure'}};
+    await page.evaluate(()=>window.controller.startReceived({projectId:'alpha',entryIds:['linked-proof','pending-proof'],batch:'stale-check'}).catch(()=>{}));
+    state.queue=[{id:'linked-proof',project_id:'alpha',status:'review',item_id:'synthetic-expense'},
+      {id:'pending-proof',project_id:'alpha',status:'received',item_id:''}];
+    state.pendingIds.alpha=['pending-proof'];
+    const failedRecord=await page.evaluate(()=>JSON.parse(localStorage.getItem('invoice-manual-agent-v1:requests:alpha')).find(row=>row.batch==='stale-check'));
+    await page.reload();await refresh();
+    await page.getByRole('button',{name:'重试启动本批整理',exact:true}).waitFor();
+    assert.deepEqual(await page.evaluate(()=>JSON.parse(localStorage.getItem('invoice-manual-agent-v1:requests:alpha')).find(row=>row.batch==='stale-check')),failedRecord,'one pending material preserves the entire request');
+    await page.getByRole('button',{name:'重试启动本批整理',exact:true}).click();
+    await page.getByRole('alert').filter({hasText:'Synthetic start failure'}).waitFor();
+    state.queue[1].item_id='synthetic-expense';state.pendingIds.alpha=[];
+    state.failGet=2;await refresh();
+    assert.equal(await page.evaluate(()=>JSON.parse(localStorage.getItem('invoice-manual-agent-v1:requests:alpha')).some(row=>row.batch==='stale-check')),true,'failed reads cannot delete records');
+    state.failGet=0;
+    const pendingIds=state.pendingIds;delete state.pendingIds;await refresh();
+    assert.equal(await page.getByRole('button',{name:'重试启动本批整理',exact:true}).count(),1,'missing state cannot delete records');
+    state.pendingIds=pendingIds;await refresh();
+    assert.equal(await page.locator('#agentHost').isVisible(),false,'retiring a manually retried request clears its propagated error');
+    await page.reload();await refresh();
+    assert.equal(await page.evaluate(()=>JSON.parse(localStorage.getItem('invoice-manual-agent-v1:requests:alpha')).some(row=>row.batch==='stale-check')),false);
+    assert.equal(await page.locator('#agentHost').isVisible(),false,'linked materials retire the failed request after reload');
+    state.startError={status:409,body:{error:'Synthetic busy',code:'project_busy'}};
+    await page.evaluate(()=>window.controller.startReceived({projectId:'alpha',entryIds:['retired-waiting'],batch:'retired-waiting'}));
+    const beforeRetiring=posts.length;await refresh();
+    assert.equal(posts.length,beforeRetiring,'obsolete waiting starts are removed before automatic retry');
+    assert.equal(await page.evaluate(()=>JSON.parse(localStorage.getItem('invoice-manual-agent-v1:requests:alpha')).some(row=>row.batch==='retired-waiting')),false);
+    assert.equal(await page.locator('#agentHost').isVisible(),false);
     assert.deepEqual(errors,[]);
-    return {passed:true,projectBusyWaitPersists:true,busyRetryKeepsIdentity:true,waitingBatchesStartInOrder:true,busyRetryOtherErrorVisible:true,
+    return {passed:true,obsoleteFailedStartsRemoved:true,pendingFailedStartsPreserved:true,failedReadsPreserveStarts:true,obsoleteWaitingStartsRemoved:true,
+      projectBusyWaitPersists:true,busyRetryKeepsIdentity:true,waitingBatchesStartInOrder:true,busyRetryOtherErrorVisible:true,
       globalPreferences:true,settingsFailureDefaults:true,noProjectPanelHidden:true,configuredModelOnly:true,oneBatchOneStart:true,networkRetryKeepsIdentity:true,
       pollingNeverPosts:true,pollingKeepsManualInput:true,parentControlsManualEditRefresh:true,sourceBoundAnswer:true,sameJobRemainingBudget:true,
       exactPreviewCallbacks:true,projectLateResponseFence:true,missingEvidenceNeedsManual:true,guardedLegacyRefresh:true,unlinkedCurrentProjectOnly:true,jobRetry:true,
