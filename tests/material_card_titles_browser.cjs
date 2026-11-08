@@ -41,6 +41,7 @@ async function run(pw) {
       {issues: ['店铺分店不同，请核对原件。']}),
     material('payment-suffix', 'payment', {...actorFields, merchant: '淘宝闪购', shop_name: shop, goods: shopWithSuffix})];
   const other = ['trip', 'trip_sheet', 'detail', 'other'].map(role => material(role, role));
+  other.push(material('pending', 'other', {}, {status: 'received', fields: {}, pending_recognition: true}));
   other.push(material('qr', 'other', {}, {qr_status: 'manual', kind: 'invoice_qr'}));
   const archived = [material('archived', 'receipt', {merchant: '合成归档店'}, {status: 'archived', title: filename('archived')})];
   const deleted = [material('deleted', 'invoice', {shop_name: '合成删除店'}, {status: 'deleted', title: filename('deleted')})];
@@ -121,6 +122,9 @@ async function run(pw) {
     for (const [id, title] of [['trip', '行程单'], ['trip_sheet', '行程单'], ['detail', '明细'], ['other', '其他材料']]) {
       await expectCard(id, title);
     }
+    await expectCard('pending', '等待识别');
+    assert.equal(await page.locator('#matchingOther [data-support-id="pending"]').count(), 1,
+      'pending recognition keeps the existing other-material group');
     assert.equal(await page.locator('[data-title-injected]').count(), 0, 'shop names are text, never executable markup');
     const qr = page.locator('#matchingOther .matching-other-card').filter({has: page.locator('[data-prepare-id="qr"]')});
     assert.equal(await qr.locator('strong').innerText(), '领票二维码');

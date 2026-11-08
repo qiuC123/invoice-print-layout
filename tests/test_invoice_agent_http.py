@@ -6,10 +6,39 @@ from pathlib import Path
 import time
 from typing import Any
 
+import pytest
+
+from invoice_print_layout.agent_jobs import AgentService, Jobs
 from invoice_print_layout.workbench import ExpenseStore
 from invoice_print_layout.project_registry import ProjectRegistry
 from tests.test_invoice_agent import proof
 from tests.test_invoice_assistant import invoice_server
+
+
+@pytest.mark.parametrize('state', ['queued', 'running'])
+def test_agent_start_project_busy_returns_conflict_without_new_job(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, state: str,
+) -> None:
+    monkeypatch.setattr(AgentService, 'kick', lambda self: None)
+    project = ProjectRegistry(tmp_path / '后勤' / 'tasks.sqlite3').create_project('Synthetic busy project')['id']
+    with invoice_server(tmp_path) as client:
+        status, entry = client.json('POST', '/api/intake/receive', {
+            'name': 'synthetic-busy.pdf', 'data': base64.b64encode(proof('合成材料')).decode(),
+            'project_id': project})
+        assert status == 200
+        payload = {'project_id': project, 'material_ids': [entry['id']], 'idempotency_key': 'synthetic-first'}
+        status, result = client.json('POST', '/api/agent/start', payload)
+        assert status == 200
+        jobs = Jobs(ExpenseStore(tmp_path))
+        jobs.update(result['job']['id'], state=state)
+        with jobs.store.connect() as db:
+            before = [tuple(row) for row in db.execute('SELECT * FROM invoice_agent_jobs')]
+        status, result = client.json('POST', '/api/agent/start', {**payload, 'idempotency_key': 'synthetic-next'})
+        assert status == 409
+        assert result == {'error': '当前项目已有任务，请等待或取消后再开始', 'code': 'project_busy'}
+        with jobs.store.connect() as db:
+            assert [tuple(row) for row in db.execute('SELECT * FROM invoice_agent_jobs')] == before
+            assert db.execute('SELECT COUNT(*) FROM invoice_agent_requests').fetchone()[0] == 1
 
 
 def test_agent_and_manual_pages_are_both_available(tmp_path: Path) -> None:

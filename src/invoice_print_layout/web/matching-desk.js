@@ -85,6 +85,7 @@ async function readDroppedMaterialFiles(transfer) {
   const isCreateSupport = card => isSupplementCard(card) || (!isQr(card) && card.role === 'purchase');
   const reportChoice = card => card.report_choice || {project_type: card.project_type || '', project_name: card.project_name || ''};
   const materialTitle = card => {
+    if (card.pending_recognition) return '等待识别';
     const fields = card.fields || {}, text = value => typeof value === 'string' ? value.trim() : '';
     const shop = text(fields.shop_name);
     if (shop) return shop;

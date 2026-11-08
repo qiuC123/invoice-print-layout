@@ -62,7 +62,8 @@
     }
     function updateControls() {
       const attention = jobs.some(needsAttention) || (project && requestRecords(project).some(row => row.failed && !row.accepted)) || actionError || refreshError;
-      const visible = !!project && (!automatic(project) || !!attention);
+      const waitingForIdle = project && requestRecords(project).some(row => row.waitingForIdle && !row.accepted);
+      const visible = !!project && (!automatic(project) || !!attention || !!waitingForIdle);
       if (visible && (host.hidden || attention)) panel.open = true;
       host.hidden = !visible;
       hint.hidden = automatic(project);
@@ -70,7 +71,7 @@
       if (!project) badge.textContent = '';
       else {
         const waiting = jobs.filter(job => job.state === 'needs_input').length;
-        badge.textContent = waiting ? waiting + ' 项待确认' : attention ? '需要处理' : '上传后需手动整理';
+        badge.textContent = waiting ? waiting + ' 项待确认' : attention ? '需要处理' : waitingForIdle ? '等待项目空闲' : '上传后需手动整理';
       }
     }
     function needsAttention(job) { return ['needs_input', 'failed', 'stopped'].includes(job.state); }
@@ -284,6 +285,9 @@
     }
     function renderPending() {
       updateControls(); pending.replaceChildren(); if (!project) return;
+      for (const record of requestRecords(project).filter(row => row.waitingForIdle && !row.accepted)) {
+        pending.append(node('p', record.ids.length + ' 份材料已保存，等当前整理结束后自动开始。', 'mia-muted'));
+      }
       for (const record of requestRecords(project).filter(row => row.failed && !row.accepted)) {
         const card = node('div', undefined, 'mia-start-retry');
         card.append(node('span', record.ids.length + ' 份材料已保留，启动状态未确认。'));
@@ -294,7 +298,7 @@
     function startNextReceived() {
       if (startLocks.has(project) || jobs.some(job => ['queued', 'running'].includes(job.state))) return;
       const records = requestRecords(project), next = records.find(row => row.waiting && !row.accepted && !row.failed);
-      if (next && records.some(row => row.key === next.after && row.accepted)) void startRecord(next).catch(() => {});
+      if (next && (!next.after || records.some(row => row.key === next.after && row.accepted))) void startRecord(next).catch(() => {});
     }
     async function startRecord(record) {
       const existing = startLocks.get(record.projectId);
@@ -318,7 +322,7 @@
           }
           revision += 1;
           const result = await api('/api/agent/start', record.body);
-          record.accepted = true; record.waiting = false; record.failed = false; record.jobId = result.job.id; record.result = result;
+          record.accepted = true; record.waiting = false; record.waitingForIdle = false; record.failed = false; record.jobId = result.job.id; record.result = result;
           saveRequests(record.projectId); watched.add(result.job.id); revision += 1;
           if (current() === record.projectId) {
             setProject(); actionError = ''; displayError(); panel.open = true; replaceJob(result.job);
@@ -327,7 +331,11 @@
           // later GET failure must never make the caller repeat the upload/start.
           void refresh(); return result;
         } catch (reason) {
-          record.failed = true; record.waiting = false; saveRequests(record.projectId);
+          if (reason?.code === 'project_busy') {
+            record.waitingForIdle = true; record.waiting = true; record.failed = false; saveRequests(record.projectId);
+            return {queued:true};
+          }
+          record.failed = true; record.waiting = false; record.waitingForIdle = false; saveRequests(record.projectId);
           if (current() === record.projectId) { setProject(); panel.open = true; actionFailure(reason); }
           throw reason;
         } finally {

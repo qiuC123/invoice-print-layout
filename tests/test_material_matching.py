@@ -95,6 +95,33 @@ def native_seller_invoice(matcher: MaterialMatching, project: str, seller: str,
     return entry
 
 
+def test_board_marks_unrecognized_material_until_local_recognition(setup: Any) -> None:
+    matcher, project, _ = setup
+    entry = matcher.intake.receive('synthetic-pending.pdf', proof('Synthetic unclassified material'), project_id=project)
+    card = matcher.board(project)['other'][0]
+    assert card['id'] == entry['id'] and card['role'] == 'other'
+    assert card['pending_recognition'] is True
+    recognized = matcher.intake.analyze_local(entry['id'])
+    assert recognized['status'] == 'review' and recognized['role'] == 'other'
+    assert 'pending_recognition' not in matcher.board(project)['other'][0]
+
+
+@pytest.mark.parametrize('changes', [
+    {'text': 'Synthetic extracted text'},
+    {'fields': {'category': '其他'}},
+    {'result': '识别完成'},
+    {'status': 'review', 'result': '识别未完成：合成识别失败'},
+])
+def test_board_does_not_mark_analyzed_or_edited_material_as_pending(setup: Any, changes: dict[str, Any]) -> None:
+    matcher, project, _ = setup
+    entry = matcher.intake.receive('synthetic-analyzed.pdf', proof('Synthetic material'), project_id=project)
+    entry.update(changes)
+    with matcher.store.connect() as db:
+        matcher._write_queue(db, entry)
+    card = matcher.board(project)['other'][0]
+    assert card['role'] == 'other' and 'pending_recognition' not in card
+
+
 def test_new_voucher_and_two_payments_record_one_expense_and_preserve_originals(setup: Any) -> None:
     matcher, project, _ = setup
     voucher = queued(matcher, project, 'Invoice', 'invoice', '14')
