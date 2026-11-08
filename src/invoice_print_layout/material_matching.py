@@ -1760,6 +1760,30 @@ class MaterialMatching:
                 'events': [dict(row) for row in db.execute('SELECT * FROM events WHERE item_id=? ORDER BY id', (item_id,))]}
 
     @staticmethod
+    def remove_support_attachment(db: sqlite3.Connection, data: dict[str, Any],
+                                  attachment_id: str, digest: str) -> None:
+        matching = data.get('material_match') or {}
+        if attachment_id not in matching.get('support_attachment_ids', []):
+            return
+        MaterialMatching.preserve_edit_guard(db, data['id'])
+        group_id = matching['group_id']
+        group = _data(db.execute('SELECT data FROM material_matches WHERE id=?', (group_id,)).fetchone()['data'])
+        if group['item_id'] != data['id'] or group['status'] == 'undone':
+            raise ValueError('费用的材料组合已变化，请刷新后重试')
+        # Member attachments can precede queue supports, so list positions are not identities.
+        removed = {key for key, entry in group['queue_before'].items() if entry['digest'] == digest}
+        for record in (matching, group):
+            record['support_attachment_ids'] = [key for key in record.get('support_attachment_ids', [])
+                                                if key != attachment_id]
+            record['support_ids'] = [key for key in record.get('support_ids', []) if key not in removed]
+            record['support_count'] = len(record['support_ids'])
+            if 'recognition' in record:
+                record['recognition']['supports'] = [support for support in record['recognition'].get('supports', [])
+                                                     if support.get('queue_id') not in removed]
+        # Keep source ownership and undo snapshots; a manual role edit must still block undo.
+        db.execute('UPDATE material_matches SET data=? WHERE id=?', (json.dumps(group, ensure_ascii=False), group_id))
+
+    @staticmethod
     def preserve_edit_guard(db: sqlite3.Connection, item_id: str) -> None:
         """Older schema1 groups must retain the state before a manual edit."""
         state = MaterialMatching._member_state(db, item_id)

@@ -864,7 +864,7 @@ class ExpenseStore:
             raise ValueError('附件用途无效')
         with self.connect() as db:
             db.execute('BEGIN IMMEDIATE')
-            row = db.execute('SELECT item_id,role FROM attachments WHERE id=?', (attachment_id,)).fetchone()
+            row = db.execute('SELECT item_id,role,digest FROM attachments WHERE id=?', (attachment_id,)).fetchone()
             if not row or row['role'] == 'package':
                 raise ValueError('此附件不能修改用途')
             if self.get(row['item_id']).get('returned_to_synthesis'):
@@ -872,6 +872,9 @@ class ExpenseStore:
             data = json.loads(db.execute('SELECT data FROM expenses WHERE id=?', (row['item_id'],)).fetchone()['data'])
             if data.get('deleted') or data['stage'] != 'draft':
                 raise ValueError('请先退回待提交，再修改材料用途')
+            if role in {'invoice', 'receipt', 'payment'}:
+                from invoice_print_layout.material_matching import MaterialMatching
+                MaterialMatching.remove_support_attachment(db, data, attachment_id, row['digest'])
             db.execute('UPDATE attachments SET role=? WHERE id=?', (role, attachment_id))
             data.update(verified=False, updated_at=now())
             data.pop('review_requested', None)
