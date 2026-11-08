@@ -1,21 +1,26 @@
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
+from collections.abc import Iterator
+from datetime import datetime, timedelta
 import json
 from pathlib import Path
 import threading
 import time
 from typing import Any
+from unittest.mock import Mock
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
 import pytest
 
 from invoice_print_layout import workbench_web
+from invoice_print_layout.agent_jobs import Jobs
 from invoice_print_layout.expense_projects import ExpenseProjects
 from invoice_print_layout.glm_invoice_ai import LocalOnlyInvoiceAI
 from invoice_print_layout.intake_background import BackgroundIntake
 from invoice_print_layout.intake_queue import IntakeQueue
+from invoice_print_layout.organize_settings import OrganizeSettings
 from invoice_print_layout.workbench import ExpenseStore
 from tests.helpers import make_invoice_pdf
 
@@ -33,6 +38,144 @@ def finished(service: BackgroundIntake) -> dict[str, Any]:
             return status
         time.sleep(.005)
     pytest.fail('Background recognition did not finish')
+
+
+RECEIVED_AT = datetime(2030, 1, 1, 12)
+OVERDUE_AT = RECEIVED_AT + timedelta(seconds=181)
+
+
+@pytest.fixture
+def overdue(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[tuple[BackgroundIntake, Jobs, dict[str, Any]]]:
+    queue = IntakeQueue(ExpenseStore(tmp_path), ai=LocalOnlyInvoiceAI())
+    project = ExpenseProjects(queue.store).registry.create_project('Synthetic overdue upload')['id']
+    jobs = Jobs(queue.store)
+    entry = saved(queue, tmp_path, 1, project)
+    entry['received_at'] = RECEIVED_AT.isoformat()
+    with queue.store.connect() as db:
+        db.execute('UPDATE intake_queue SET data=? WHERE id=?', (json.dumps(entry), entry['id']))
+    service = BackgroundIntake(queue, threading.Lock(), lambda _: {})
+    # Drain the real worker synchronously; eligibility tests never sleep or start a thread.
+    monkeypatch.setattr(service, '_thread', Mock(spec=threading.Thread))
+    try:
+        yield service, jobs, entry
+    finally:
+        service.close()
+
+
+def drain(service: BackgroundIntake) -> None:
+    service._work.put(None)
+    service._run()
+
+
+def test_overdue_upload_is_recognized_once_and_late_agent_start_accepts_review(overdue: Any) -> None:
+    service, jobs, entry = overdue
+    service.rescue_unrecognized(now=OVERDUE_AT)
+    service.rescue_unrecognized(now=OVERDUE_AT)
+    assert len(service.progress()['batches']) == 1
+    assert service.progress()['batches'][0]['ids'] == [entry['id']]
+    drain(service)
+    recognized = service.intake.get(entry['id'])
+    assert recognized['status'] == 'review' and recognized['role'] == 'invoice'
+    assert recognized['text'] and recognized['fields']
+    service.rescue_unrecognized(now=OVERDUE_AT + timedelta(days=1))
+    assert len(service.progress()['batches']) == 1
+    job = jobs.create(entry['project_id'], [entry['id']], 'synthetic-late-start')
+    assert job['state'] == 'queued' and job['material_revisions'][entry['id']] == recognized['revision']
+
+
+@pytest.mark.parametrize('fallback', [True, False])
+def test_failed_recognition_is_not_automatically_retried_after_eviction_or_restart(
+        overdue: Any, monkeypatch: pytest.MonkeyPatch, fallback: bool) -> None:
+    service, _, entry = overdue
+    calls = []
+
+    def fail(key: str, **_kwargs: Any) -> Any:
+        calls.append(key)
+        raise RuntimeError('Synthetic recognition failure')
+
+    monkeypatch.setattr(service.intake, 'prepare_batch_entry', fail)
+    if fallback:
+        service.rescue_unrecognized(now=OVERDUE_AT)
+    else:
+        service.enqueue('synthetic-explicit', [entry['id']])
+        service.rescue_unrecognized(now=OVERDUE_AT)
+    assert len(service.progress()['batches']) == 1
+    drain(service)
+    assert service.progress()['batches'][0]['failed'] == 1
+    assert service.intake.get(entry['id'])['status'] == 'received'
+    service._jobs.clear()
+    service._owners.clear()
+    service.rescue_unrecognized(now=OVERDUE_AT)
+    assert service.progress()['batches'] == []
+    restarted = BackgroundIntake(service.intake, threading.Lock(), lambda _: {})
+    monkeypatch.setattr(restarted, '_thread', Mock(spec=threading.Thread))
+    try:
+        restarted.rescue_unrecognized(now=OVERDUE_AT + timedelta(days=1))
+        assert restarted.progress()['batches'] == [] and calls == [entry['id']]
+        restarted.enqueue('synthetic-manual-retry', [entry['id']])
+        drain(restarted)
+        assert calls == [entry['id'], entry['id']]
+    finally:
+        restarted.close()
+
+
+@pytest.mark.parametrize('seconds', [0, 179, 180])
+def test_recognition_rescue_leaves_uploads_within_grace_period(overdue: Any, seconds: int) -> None:
+    service, _, _ = overdue
+    service.rescue_unrecognized(now=RECEIVED_AT + timedelta(seconds=seconds))
+    assert service.progress()['batches'] == []
+
+
+@pytest.mark.parametrize('state', ['queued', 'running'])
+def test_recognition_rescue_leaves_materials_in_active_jobs(overdue: Any, state: str) -> None:
+    service, jobs, entry = overdue
+    job = jobs.create(entry['project_id'], [entry['id']], 'synthetic-active-job')
+    jobs.update(job['id'], state=state)
+    service.rescue_unrecognized(now=OVERDUE_AT)
+    assert service.progress()['batches'] == []
+    jobs.update(job['id'], state='ready')
+    service.rescue_unrecognized(now=OVERDUE_AT)
+    assert len(service.progress()['batches']) == 1
+
+
+def test_recognition_rescue_is_disabled_in_manual_mode(overdue: Any) -> None:
+    service, _, _ = overdue
+    OrganizeSettings(service.intake.store.root).update({'auto_after_upload': False})
+    service.rescue_unrecognized(now=OVERDUE_AT)
+    assert service.progress()['batches'] == []
+
+
+@pytest.mark.parametrize('changes', [
+    {'status': 'review'}, {'text': 'Synthetic text'}, {'fields': {'amount': '1'}},
+    {'result': 'Synthetic recognition failed'}, {'project_id': ''}, {'source': 'mail'},
+    {'item_id': 'synthetic-expense'}, {'duplicate_of': 'synthetic-original'},
+    {'qr_status': 'converted'}, {'replacement_id': 'synthetic-pdf'}, {'material_match_id': 'synthetic-match'},
+    {'received_at': 'invalid'}, {'received_at': None},
+])
+def test_recognition_rescue_only_takes_untouched_assigned_uploads(overdue: Any, changes: dict[str, Any]) -> None:
+    service, _, entry = overdue
+    entry.update(changes)
+    with service.intake.store.connect() as db:
+        db.execute('UPDATE intake_queue SET data=? WHERE id=?', (json.dumps(entry), entry['id']))
+    service.rescue_unrecognized(now=OVERDUE_AT)
+    assert service.progress()['batches'] == []
+
+
+def test_existing_server_loop_checks_overdue_uploads_periodically(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    calls = []
+    monkeypatch.setattr(BackgroundIntake, 'rescue_unrecognized', lambda self: calls.append(self))
+    server = workbench_web.make_server(tmp_path, 0, mode='invoice', device_port=0)
+    try:
+        server.service_actions()
+        assert len(calls) == 1
+        server.next_intake_check = float('inf')  # type: ignore[attr-defined]
+        server.service_actions()
+        assert len(calls) == 1
+        server.next_intake_check = 0  # type: ignore[attr-defined]
+        server.service_actions()
+        assert len(calls) == 2
+    finally:
+        server.server_close()
 
 
 def test_serial_idempotent_queue_counts_failures_and_scans_last(tmp_path: Path, monkeypatch: Any) -> None:

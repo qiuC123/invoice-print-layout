@@ -267,6 +267,7 @@ def make_server(workspace: Path, port: int = 8765, *, mode: str = 'workbench',
                 elif path == '/api/agent/jobs':
                     pid = parse_qs(urlparse(self.path).query).get('project', [''])[0]
                     self.respond({'jobs': invoice_agent.jobs.list(pid), 'token': token,
+                                  'pending_material_ids': intake.pending_organize_ids(pid),
                                   'model': invoice_ai.public_status()})
                 elif path == '/api/agent/job':
                     key = parse_qs(urlparse(self.path).query).get('id', [''])[0]
@@ -937,6 +938,7 @@ def make_server(workspace: Path, port: int = 8765, *, mode: str = 'workbench',
         # Edge requests ~30 page assets at once; the default backlog of 5 refuses some of them.
         request_queue_size = 128
         next_schedule_check = 0.0
+        next_intake_check = 0.0
 
         def server_close(self) -> None:
             project_events.close()
@@ -951,6 +953,13 @@ def make_server(workspace: Path, port: int = 8765, *, mode: str = 'workbench',
             receipt_devices.tick()
             invoice_agent.kick()
             if runtime['ready']:
+                if time.monotonic() >= self.next_intake_check:
+                    self.next_intake_check = time.monotonic() + 10
+                    try:
+                        background_intake.rescue_unrecognized()
+                    except (OSError, sqlite3.Error, ValueError):
+                        # Retry transient store/settings failures on the next periodic check.
+                        pass
                 mail_agent.kick()
                 mail_agent.notifier.kick()
                 project_events.kick()

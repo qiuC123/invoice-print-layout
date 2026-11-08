@@ -224,6 +224,18 @@ class IntakeQueue:
             return [self._visible_entry(json.loads(row['data']))
                     for row in db.execute('SELECT data FROM intake_queue ORDER BY rowid DESC')]
 
+    def pending_organize_ids(self, project_id: str) -> builtins.list[str]:
+        with self.store.connect() as db:
+            attached = {row['digest'] for row in db.execute(
+                'SELECT digest FROM attachments UNION SELECT digest FROM automatic_ride_files')}
+            entries = [json.loads(row['data']) for row in db.execute(
+                'SELECT data FROM intake_queue WHERE json_extract(data,\'$.project_id\')=?', (project_id,))]
+        return [entry['id'] for entry in entries
+                if entry['status'] in {'received', 'review'} and not entry.get('item_id')
+                and not entry.get('duplicate_of') and not entry.get('material_match_id')
+                and entry.get('qr_status') != 'converted' and not entry.get('replacement_id')
+                and entry['digest'] not in attached]
+
     @staticmethod
     def _visible_entry(data: dict[str, Any]) -> dict[str, Any]:
         # Hide this retired diagnostic in old rows without rewriting their
