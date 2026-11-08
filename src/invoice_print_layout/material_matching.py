@@ -727,6 +727,9 @@ class MaterialMatching:
                     or entry.get('duplicate_of') or entry.get('item_id') or entry.get('qr_status') == 'converted' or entry['digest'] in attached):
                 continue
             card = self._queue_card(entry)
+            if (entry['status'] == 'received' and not entry.get('text') and not entry.get('fields')
+                    and entry.get('result') == '已保存，等待识别'):
+                card['pending_recognition'] = True
             card['intake_note'] = card['intake_note'] or mail_notes.get(entry['id'], '')
             if entry.get('status') == 'deleted':
                 result['deleted'].append(card)
