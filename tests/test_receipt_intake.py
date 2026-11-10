@@ -75,6 +75,86 @@ def test_payment_and_invoice_not_purchase_details(text: str, role: str) -> None:
     assert intake.parse_receipt(lines(text))['role'] == role
 
 
+@pytest.mark.parametrize('texts,merchant,expense_date', [
+    (['支付成功', '广州测试便利店', '￥23.50', '完成'], '广州测试便利店', ''),
+    (['广州测试便利店', '-23.50', '当前状态 支付成功', '支付时间 2026年11月10日12:41:05',
+      '商品 便利店消费', '商户全称 广州测试便利店有限公司', '收单机构 财付通支付科技有限公司',
+      '支付方式 零钱', '交易单号 4200001234202611101234567890', '商户单号 TEST20261110001'],
+     '广州测试便利店有限公司', '2026-11-10'),
+    (['付款成功', '-23.50', '广州测试便利店'], '广州测试便利店', ''),
+])
+def test_payment_screenshot_fields(texts: list[str], merchant: str, expense_date: str) -> None:
+    result = intake.parse_receipt(lines(*texts))
+    assert result['role'] == 'payment'
+    assert result['fields']['amount'] == '23.50'
+    assert result['fields']['merchant'] == merchant
+    assert result['fields']['expense_date'] == expense_date
+    assert result['evidence']['amount'] in texts
+    assert merchant in result['evidence']['merchant']
+    assert not any('未能确定' in warning for warning in result['warnings'] if '金额' in warning or '商家' in warning)
+
+
+@pytest.mark.parametrize('amount', ['￥1,023.50', '¥1,023.50', '-1,023.50', '1,023.50元'])
+def test_payment_standalone_amount_formats(amount: str) -> None:
+    result = intake.parse_receipt(lines('交易成功', amount, '广州测试便利店'))
+    assert result['role'] == 'payment'
+    assert result['fields']['amount'] == '1023.50'
+    assert result['evidence']['amount'] == amount
+
+
+@pytest.mark.parametrize('amount_rows,expected', [
+    (['￥23.50', '-24.50'], ''),
+    (['￥23.50', '-23.50'], '23.50'),
+    (['￥23.50', '实付24.50'], '24.50'),
+    (['￥23.50', '实付24.50', '实付25.50'], ''),
+])
+def test_payment_amount_uniqueness_and_label_priority(amount_rows: list[str], expected: str) -> None:
+    result = intake.parse_receipt(lines('支付成功', *amount_rows))
+    assert result['fields']['amount'] == expected
+    assert any('多个金额无法确定' in warning for warning in result['warnings']) == (not expected)
+
+
+@pytest.mark.parametrize('field', ['交易单号 4200001234202611101234567890',
+                                  '商户单号 TEST20261110001', '收单机构 测试机构', '支付方式 零钱'])
+def test_payment_bill_fields_identify_role_without_inventing_amount(field: str) -> None:
+    result = intake.parse_receipt(lines(field, '支付时间 2026年11月10日12:41:05', '银行卡尾号 2350', '2350'))
+    assert result['role'] == 'payment'
+    assert result['fields']['amount'] == ''
+    assert result['fields']['merchant'] == ''
+
+
+@pytest.mark.parametrize('neighbours', [
+    ['完成', '查看账单'], ['当前状态 支付成功', '返回商家'], ['12:41:05', '银行卡尾号2350'],
+    ['支付宝', '更多'], ['微信支付', '收款方名片'],
+    ['淘宝闪购', '交易成功'],
+    ['广州测试便利店', '另一家测试店'], ['商户全称 广州测试便利店', '商户全称 另一家测试店'],
+])
+def test_uncertain_payment_merchant_stays_blank(neighbours: list[str]) -> None:
+    result = intake.parse_receipt(lines('付款成功', neighbours[0], '-23.50', neighbours[1]))
+    assert result['fields']['merchant'] == ''
+    assert 'merchant' not in result['evidence']
+
+
+@pytest.mark.parametrize('texts,role,merchant', [
+    (['电子发票', '发票号码12345678901234567890', '销售方名称：测试销方', '（小写）￥24.60'], 'invoice', '测试销方'),
+    (['收据', '收款方：测试收款方', '合计24.60'], 'receipt', '测试收款方'),
+    (['闪购测试超市', '口罩', '实付款24.60', '价格明细'], 'purchase', '测试超市'),
+    (['闪购测试咖啡', '实付款24.60', '订单已送达'], 'order', '测试咖啡'),
+])
+def test_payment_fallback_does_not_change_other_document_types(texts: list[str], role: str, merchant: str) -> None:
+    result = intake.parse_receipt(lines(*texts, '付款成功', '￥23.50', '支付方式 零钱'))
+    assert result['role'] == role
+    assert result['fields']['amount'] == '24.60'
+    assert result['fields']['merchant'] == merchant
+
+
+@pytest.mark.parametrize('status', ['付款成功', '交易成功'])
+def test_new_payment_success_marker_requires_amount_or_bill_fields(status: str) -> None:
+    result = intake.parse_receipt(lines(status, '广州测试便利店'))
+    assert result['role'] == 'other'
+    assert result['fields']['merchant'] == ''
+
+
 @pytest.mark.parametrize('name,payload', [('fake.png', b'\x89PNG\r\n\x1a\n'), ('wrong.jpg', picture()),
     ('source.pdf', b'%PDF-1.7'), ('large.png', b'x'*(20*1024*1024+1))], ids=['corrupt', 'wrong-format', 'pdf', 'oversize'])
 def test_invalid_images_rejected(name: str, payload: bytes) -> None:

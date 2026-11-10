@@ -19,7 +19,7 @@ from rapidocr_onnxruntime import RapidOCR
 from invoice_print_layout.takeout import OcrLine, _ocr_lines, TakeoutError
 from invoice_print_layout.workbench import ExpenseStore, MAX_BYTES, ROLES, amount_cents, now, expense_identifier_keys
 from invoice_print_layout.transaction_evidence import extract_transaction_evidence, record_identifier_keys
-from invoice_print_layout.local_payment_fields import is_payment_payee_metadata, payment_title_payee
+from invoice_print_layout.local_payment_fields import is_label_only_payee, is_payment_payee_metadata, payment_title_payee
 from invoice_print_layout.ocr_cache import CACHE_VERSION, ReceiptOcrCache
 
 _engine: Any = None
@@ -189,6 +189,16 @@ def parse_receipt(lines: list[OcrLine]) -> dict[str, Any]:
     evidence: dict[str, str] = {}
     role = 'other'
     purchase_start: int | None = None
+    payment_amounts: dict[int, str] = {}
+    for index, row in enumerate(compact):
+        match = re.fullmatch(r'(?:[¥-]((?:\d{1,3}(?:,\d{3})+|\d+)\.\d{1,2})|'
+                             r'((?:\d{1,3}(?:,\d{3})+|\d+)\.\d{1,2})元)', row)
+        if match:
+            payment_amounts[index] = (match[1] or match[2]).replace(',', '')
+    payment_screen = (bool(payment_amounts) and any(row in {'付款成功', '支付成功', '交易成功'} for row in compact)
+                      or any(word in text for word in ('商户单号', '收单机构', '支付方式')))
+    payment_screen = payment_screen and not any(word in text for word in ('收据', '收款凭证')) and not any(
+        re.match(r'^(?:闪购|商家[:：]|店铺[:：])', row) for row in compact)
 
     # Keep payment/invoice screenshots out of the purchase-details role.
     if '发票号码' in text and ('电子发票' in text or '增值税' in text):
@@ -200,7 +210,7 @@ def parse_receipt(lines: list[OcrLine]) -> dict[str, Any]:
         elif sellers:
             warnings.append('销售方名称待核对')
         warnings.append('这是发票图片，建议关联已有事项；开票日期不是消费日期。')
-    elif any(word in text for word in ('交易单号', '微信支付', '支付宝', '支付成功')) and not any(word in text for word in ('价格明细', '订单已送达', '商品明细')):
+    elif (any(word in text for word in ('交易单号', '微信支付', '支付宝', '支付成功')) or payment_screen) and not any(word in text for word in ('价格明细', '订单已送达', '商品明细')):
         role = 'payment'
         warnings.append('这是支付凭证，不能替代购买明细；建议关联已有事项。')
     else:
@@ -257,6 +267,8 @@ def parse_receipt(lines: list[OcrLine]) -> dict[str, Any]:
             if role == 'invoice' and label == '小写':
                 priority = 4
             amounts.append((priority, number, row))
+    if not amounts and role == 'payment':
+        amounts = [(0, number, rows[index]) for index, number in payment_amounts.items()]
     if amounts:
         best = max(x[0] for x in amounts)
         choices = {f'{amount_cents(x[1])/100:.2f}' for x in amounts if x[0] == best}
@@ -271,8 +283,9 @@ def parse_receipt(lines: list[OcrLine]) -> dict[str, Any]:
     goods, goods_quote = labelled_goods(rows)
     if goods:
         fields['goods'], evidence['goods'] = goods, goods_quote
-    if ('收据' in text or '收款凭证' in text) and role not in {'invoice', 'payment'}:
-        role = 'receipt'
+    if role == 'payment' or (('收据' in text or '收款凭证' in text) and role != 'invoice'):
+        if role != 'payment':
+            role = 'receipt'
         merchant, merchant_quote, merchant_conflict = labelled_counterparty(rows)
         if merchant:
             fields['merchant'], evidence['merchant'] = merchant, merchant_quote
@@ -283,6 +296,24 @@ def parse_receipt(lines: list[OcrLine]) -> dict[str, Any]:
     fields.update(transaction['fields'])
     if fields.get('shop_name') and not fields['merchant']:
         fields['merchant'] = fields['shop_name']
+    if role == 'payment' and not fields['merchant'] and not merchant_conflict:
+        neighbours: dict[str, str] = {}
+        for index in payment_amounts:
+            for adjacent in (index - 1, index + 1):
+                if not 0 <= adjacent < len(compact):
+                    continue
+                candidate = compact[adjacent]
+                if (2 <= len(candidate) <= 40 and re.search(r'[A-Za-z\u4e00-\u9fff]', candidate)
+                        and candidate != fields.get('shopping_platform')
+                        and adjacent not in payment_amounts and not is_payment_payee_metadata(candidate)
+                        and not is_label_only_payee(candidate)
+                        and not re.match(r'^(?:支付|付款|交易|当前状态|商户单号|收单机构|订单|商品|'
+                                         r'完成|返回|关闭|查看|继续|再来|确定|分享|账单|申请|对订单|银行卡|卡号|'
+                                         r'更多|帮助|好的|知道了|联系|进入|优惠|领取|推荐)', candidate)
+                        and not re.search(r'[:：¥\d]', candidate)):
+                    neighbours[candidate] = rows[adjacent]
+        if len(neighbours) == 1:
+            fields['merchant'], evidence['merchant'] = next(iter(neighbours.items()))
     fields['transaction_identifiers'] = transaction['identifiers']
     fields['transaction_evidence'] = transaction['evidence']
     for key, label in [('amount', '总实付金额'), ('expense_date', '消费日期'), ('order_number', '订单号'), ('merchant', '商家')]:
