@@ -74,8 +74,8 @@ def environment(tmp_path, monkeypatch):
                             message_text=lambda module, row: row['message_content'])
     collector = SimpleNamespace(scoped_reader=scoped_reader, open_named=lambda reader, name: connect(db_paths[name]))
     original_import = bridge.importlib.import_module
-    monkeypatch.setattr(bridge.importlib, 'import_module', lambda name, *args: (
-        probe if name == 'probe_filehelper' else collector if name == 'collect_sender' else original_import(name, *args)))
+    monkeypatch.setattr(bridge.importlib, 'import_module', lambda name, *args, **kwargs: (
+        probe if name == 'probe_filehelper' else collector if name == 'collect_sender' else original_import(name, *args, **kwargs)))
 
     class Clock(datetime):
         @classmethod
