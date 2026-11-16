@@ -4,11 +4,13 @@ async function run(pw){
  const output=process.env.INVOICE_BROWSER_EVIDENCE;const python=process.env.PHOTO_TEST_PYTHON||path.resolve('.venv/Scripts/python.exe');
  const child=spawn(python,['-m','tests.organize_nonblocking_browser_server'],{cwd:path.resolve(__dirname,'..'),env:{...process.env,PYTHONUTF8:'1'},windowsHide:true,stdio:['pipe','pipe','pipe']});
  let stderr='';child.stderr.on('data',value=>stderr+=value);
+ let browser;
+ try{
  const fixture=await new Promise((resolve,reject)=>{let data='';const timer=setTimeout(()=>reject(Error('fixture timeout: '+stderr)),30000);child.once('exit',code=>{clearTimeout(timer);reject(Error('fixture exit '+code+': '+stderr));});child.stdout.on('data',value=>{data+=value;const line=data.split(/\r?\n/).find(row=>row.startsWith('{'));if(line){clearTimeout(timer);resolve(JSON.parse(line));}});});
- const browser=await pw.chromium.launch({headless:true}),page=await browser.newPage({viewport:{width:1500,height:1050}}),errors=[];
+ browser=await pw.chromium.launch({headless:true});
+ const page=await browser.newPage({viewport:{width:1500,height:1050}}),errors=[];
  page.on('pageerror',error=>errors.push(error.message));
  if(output)await fs.mkdir(output,{recursive:true});
- try{
   await page.goto(fixture.base+'/?project='+fixture.project);
   await page.waitForFunction(()=>typeof loadCompleted!=='undefined'&&loadCompleted);
   await page.waitForFunction(()=>!!document.querySelector('#manualAgent .mia-settings'));
@@ -48,7 +50,12 @@ async function run(pw){
   if(output)await page.screenshot({path:path.join(output,'offline-local-fallback.png'),fullPage:true});
   assert.deepEqual(errors,[]);
   return {passed:true,completedPanelHidden:true,noQuestions:true,materialReason:true,expenseMarker:true,passengerInvoiceIncludesTrip:true,offlineLocalFallback:true,base:fixture.base};
- }finally{await browser.close();await new Promise(resolve=>{const timer=setTimeout(()=>{child.kill();resolve();},5000);child.once('exit',()=>{clearTimeout(timer);resolve();});child.stdin.end('stop\n');});}
+ }finally{
+  try{if(browser)await browser.close();}
+  finally{
+   if(child.exitCode===null)await new Promise(resolve=>{const timer=setTimeout(()=>{child.kill();resolve();},5000);child.once('exit',()=>{clearTimeout(timer);resolve();});child.stdin.end('stop\n');});
+  }
+ }
 }
 module.exports=run;
 if(require.main===module)run(require('playwright')).then(result=>console.log(JSON.stringify(result))).catch(error=>{console.error(error);process.exitCode=1;});

@@ -15,11 +15,15 @@
 
 - 4 次是运行被取消后，旧 `always()` 汇总仍运行，将 `needs.python.result == 'cancelled'` 报为失败。本次调整汇总条件及 main 并发分组；不放宽成功条件。
 - 4 次是 PR 上真实回归，汇总正确拦截：类别打印的期望未同步（2 次）、Browser contracts 失败（1 次）、手机连接二维码断言（1 次，已由 `9bbbd9b` 修复）。这些已在合并前修复，不在本次重复修改。
-- 其余 3 次涉及 PowerShell 子进程超时、mail kick 的 0.5 秒时序断言和 report review HTTP 超时，均在 #4 合并前。`3203145` 将 PowerShell 测试串行化，`e989a44` 降低 worker 数并将 mail 测试改为事件顺序断言。体检第 3 项处理的是同类历史偶发失败；本次不修改测试文件、分片、超时或重试。
+- 其余 3 次涉及 PowerShell 子进程超时、mail kick 的 0.5 秒时序断言和 report review HTTP 超时，均在 #4 合并前。`3203145` 将 PowerShell 测试串行化，`e989a44` 降低 worker 数并将 mail 测试改为事件顺序断言。体检第 3 项处理的是同类历史偶发失败；本次不重复修改这些 Python 测试、分片、超时或重试。
 
 本轮只读复核：[run 42461640628](https://github.com/qiuC123/invoice-print-layout/actions/runs/42461640628) 整体为 `cancelled`，Python checks 为 `failure`，失败日志明确执行了 `if ('cancelled' -ne 'success')`。基线 main 提交 `25bc167` 的 [run 42764829214](https://github.com/qiuC123/invoice-print-layout/actions/runs/42764829214) 两个必需检查均成功；这是改动前的结果，不代表本补丁已通过 Actions。
 
-本轮本地验证：YAML 解析及 mypy（123 个源文件）通过；两阶段 pytest 覆盖 5,400 项且无重复，PowerShell 为 75 passed，其余为 5,238 passed、81 failed、6 skipped。失败集中在邮件原件和人员交接的长路径写入（已确认一个失败路径为 283 字符）；改用扩展长度临时路径复验这 81 项时，80 passed，另 1 项邮件来源校验仍失败。因此本地完整 pytest 未通过，不将路径实验记为全绿；本次保持产品和测试不变，仍需验收方确认最新分支的真实 Actions 结果。
+初次提交的本地验证：YAML 解析及 mypy（123 个源文件）通过；两阶段 pytest 覆盖 5,400 项且无重复，PowerShell 为 75 passed，其余为 5,238 passed、81 failed、6 skipped。失败集中在邮件原件和人员交接的长路径写入（已确认一个失败路径为 283 字符）；改用扩展长度临时路径复验这 81 项时，80 passed，另 1 项邮件来源校验仍失败。因此本地完整 pytest 未通过，不将路径实验记为全绿。
+
+随后提交 `d6eb2fc` 的 [run 43802972739](https://github.com/qiuC123/invoice-print-layout/actions/runs/43802972739) 中，Python checks 实际为 `success`；Browser contracts 为 83 passed、1 failed。唯一失败是 `organize_nonblocking_browser.cjs` 等待 Python fixture 的 30 秒启动超时，随后因启动阶段位于清理区外，子进程一直存活到外层 180 秒超时。返工将 fixture 等待、浏览器启动及操作统一纳入清理区；浏览器关闭失败也会关闭自己的 fixture，并增加启动阶段日志。新增 `organize_fixture_lifecycle.cjs` 覆盖启动超时、浏览器启动失败和关闭失败的清理。本机已复现旧版泄漏并验证修复；云端最初启动超时的具体阶段尚未复现，需结合新日志继续核对。不增加超时、不重试、不放宽原断言。
+
+本次返工的完整浏览器套件为 85 passed、0 failed（276.64 秒），其中原失败合约为 8.01 秒；mypy 再次通过 123 个源文件。未重复运行未改动的完整 pytest，沿用上述本地失败记录及 `d6eb2fc` 的云端 Python 全绿结果；最新返工提交的 Actions 尚待控制器推送后验证。
 
 待验收方在本分支推送后执行真实 Actions 验证（本地检查不能替代）：
 
