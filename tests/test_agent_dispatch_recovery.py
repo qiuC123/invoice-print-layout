@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import hashlib
+from functools import partial
 import json
 import multiprocessing
 import os
@@ -19,7 +20,7 @@ from tests.test_invoice_agent import environment, material, start
 from tests.test_invoice_agent_confirmations import persisted_confirmation_state, question
 
 
-def confirmation_barrier_worker(workspace: str, key: str) -> None:
+def confirmation_barrier_worker(workspace: str, key: str, *, paused: Any, release: Any) -> None:
     """Pause a real process after publishing a valid question but before exit."""
     root = Path(workspace)
     store = ExpenseStore(root)
@@ -31,11 +32,9 @@ def confirmation_barrier_worker(workspace: str, key: str) -> None:
         barrier = root / 'old-worker-paused.tmp'
         barrier.write_text(json.dumps({'pid': os.getpid(), 'id': key}), encoding='utf-8')
         barrier.replace(root / 'old-worker-paused.json')
-        deadline = time.monotonic() + 8
-        while not (root / 'release-old-worker').exists():
-            if time.monotonic() >= deadline:
-                raise TimeoutError('Test barrier was not released')
-            time.sleep(.01)
+        paused.set()
+        if not release.wait(8):
+            raise TimeoutError('Test barrier was not released')
         return
     (root / 'continuation-worker.json').write_text(json.dumps({
         'pid': os.getpid(), 'id': key, 'queue_revision': job.get('queue_revision'),
@@ -67,14 +66,15 @@ def test_answer_while_previous_spawn_worker_exits_continues_same_job(environment
             db.execute('UPDATE invoice_agent_jobs SET data=? WHERE id=?', (json.dumps(old), waiting['id']))
     original_bytes = {e['path']: hashlib.sha256(Path(e['path']).read_bytes()).hexdigest()
                       for e in [tools.intake.get(i) for i in waiting['material_ids']]}
-    service = AgentService(tools.store, worker=confirmation_barrier_worker)
+    context = multiprocessing.get_context('spawn')
+    paused, release = context.Event(), context.Event()
+    service = AgentService(tools.store, worker=partial(confirmation_barrier_worker, paused=paused, release=release))
     root = tools.store.workspace
     try:
         service.kick()
-        deadline = time.monotonic() + 8
-        while not (root / 'old-worker-paused.json').exists() and time.monotonic() < deadline:
-            time.sleep(.01)
-        assert (root / 'old-worker-paused.json').exists()
+        supervisor = service._thread
+        assert supervisor is not None
+        assert paused.wait(8), 'Old worker did not publish its question'
         old_worker = json.loads((root / 'old-worker-paused.json').read_text('utf-8'))
         assert any(p.pid == old_worker['pid'] and p.is_alive() for p in multiprocessing.active_children())
         checkpoint = jobs.get(waiting['id'])
@@ -88,13 +88,12 @@ def test_answer_while_previous_spawn_worker_exits_continues_same_job(environment
         # Reproduce the exact race: kick sees the old thread still alive, then
         # that old process exits while the accepted job is already queued.
         service.kick()
-        (root / 'release-old-worker').touch()
-        deadline = time.monotonic() + 15
-        while time.monotonic() < deadline:
-            done = jobs.get(waiting['id'])
-            if done['state'] in {'ready', 'failed', 'stopped', 'cancelled'}:
-                break
-            time.sleep(.02)
+        assert service._thread is supervisor
+        release.set()
+        # Observe dispatch completion; the real pipeline owns its existing execution budget.
+        supervisor.join(accepted['limits']['seconds'])
+        assert not supervisor.is_alive(), 'Supervisor did not finish within the job budget'
+        done = jobs.get(waiting['id'])
         assert done['state'] == 'ready', done['message']
         continuation = json.loads((root / 'continuation-worker.json').read_text('utf-8'))
         assert continuation['id'] == done['id'] == waiting['id']
@@ -110,7 +109,7 @@ def test_answer_while_previous_spawn_worker_exits_continues_same_job(environment
         assert len(expense['attachments']) == 2
         assert all(hashlib.sha256(Path(path).read_bytes()).hexdigest() == value for path, value in original_bytes.items())
     finally:
-        (root / 'release-old-worker').touch()
+        release.set()
         service.close()
 
 
