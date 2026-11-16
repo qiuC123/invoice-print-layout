@@ -1,13 +1,31 @@
 # CI 与本机验证
 
-`.github/workflows/ci.yml` 在所有 PR 和推送到 main 时运行；不部署、不合并、不使用密钥或自托管运行机。32 个 pytest 分组加一个浏览器 Windows job，按账户并发额度调度，测试 job 限时 25 分钟，缓存 pip 和 npm 下载。目标是每组 pytest 在 8 分钟内完成，为测试增长和运行机波动留余量；25 分钟是故障上限，不是目标时长。
+`.github/workflows/ci.yml` 在所有 PR 和推送到 main 时运行，也支持手动触发；不部署、不合并、不使用密钥或自托管运行机。main 推送按提交 SHA 分组，每个合并提交都跑完，不再因后续提交自动取消；PR 和手动触发仍按 ref 分组，新运行取消同组旧运行。32 个 pytest 分组加一个浏览器 Windows job，按账户并发额度调度，测试 job 限时 25 分钟，缓存 pip 和 npm 下载。目标是每组 pytest 在 8 分钟内完成，为测试增长和运行机波动留余量；25 分钟是故障上限，不是目标时长。
 
 ## 云端检查
 
 - **Python tests (1/32) 至 (32/32)**：Python 3.12，建立应用启动器要求的 `.venv` 并安装 `.[dev]`。第一组先运行 `python -m pytest -m powershell -n 0 -ra --junitxml=.runtime/ci/powershell.xml`，统一串行所有直接调用 PowerShell/脚本替身的模块，保留原断言和 40/60 秒子进程限时。随后各组 `python -m pytest -p tests.ci_shard -m "not powershell" -n 2 -ra --junitxml=...` 先按标记反选，再分片其余用例；每台运行机使用2个worker，减少4个worker下已观察到的短时限/HTTP争用，不延长请求超时。参数化大文件也会分散，包含 `tests/test_agent_rules.py`。32 份分组 XML 加 powershell.xml 的并集为完整套件，交付时核对无缺失、无重复。其他组用例显示为 deselected，不算跳过。分组索引和总数取 `strategy`；未加载分片插件或无分组环境变量时，本机收集不变。第一组另跑 `python -m mypy src`。
-- **Python checks**：固定名称的汇总检查，`always()` 等待全部 Python 分组；任何分组或 mypy 失败、取消或跳过都会失败。分组数变化不需要改这个必需检查名。
+- **Python checks**：固定名称的汇总检查，`!cancelled()` 在工作流未取消时等待全部 Python 分组，仍严格要求 `needs.python.result == 'success'`；任何分组或 mypy 未通过都会失败。取消工作流时不再通过 `always()` 强制启动汇总并抛错。取消后的实际 job conclusion 必须按下文在 Actions 实测，不能把 `skipped` 当成取消验收通过。分组数变化不需要改这个必需检查名。
 - **Browser contracts**：Node 24，`npm ci`、`npx playwright install chromium`，然后 `node scripts/run-browser-tests.mjs --output=.runtime/ci/browser`。运行公开 Git 文件中的全部 `tests/*.cjs`；Python 服务使用临时合成工作区和临时端口，其他界面契约使用模拟响应。它们不能代替真实 OCR、Excel 或 Android 真机验收。
 - pytest XML、浏览器逐项日志和结果 JSON 保留为 Actions artifacts 七天；失败时也上传。没有真实发票、私有模板或台账。
+
+## 2026-11-16 体检：汇总失败的三类原因
+
+体检记录中的 11 次 Python checks 失败不都属于 flaky：
+
+- 4 次是运行被取消后，旧 `always()` 汇总仍运行，将 `needs.python.result == 'cancelled'` 报为失败。本次调整汇总条件及 main 并发分组；不放宽成功条件。
+- 4 次是 PR 上真实回归，汇总正确拦截：类别打印的期望未同步（2 次）、Browser contracts 失败（1 次）、手机连接二维码断言（1 次，已由 `9bbbd9b` 修复）。这些已在合并前修复，不在本次重复修改。
+- 其余 3 次涉及 PowerShell 子进程超时、mail kick 的 0.5 秒时序断言和 report review HTTP 超时，均在 #4 合并前。`3203145` 将 PowerShell 测试串行化，`e989a44` 降低 worker 数并将 mail 测试改为事件顺序断言。体检第 3 项处理的是同类历史偶发失败；本次不修改测试文件、分片、超时或重试。
+
+本轮只读复核：[run 42461640628](https://github.com/qiuC123/invoice-print-layout/actions/runs/42461640628) 整体为 `cancelled`，Python checks 为 `failure`，失败日志明确执行了 `if ('cancelled' -ne 'success')`。基线 main 提交 `25bc167` 的 [run 42764829214](https://github.com/qiuC123/invoice-print-layout/actions/runs/42764829214) 两个必需检查均成功；这是改动前的结果，不代表本补丁已通过 Actions。
+
+本轮本地验证：YAML 解析及 mypy（123 个源文件）通过；两阶段 pytest 覆盖 5,400 项且无重复，PowerShell 为 75 passed，其余为 5,238 passed、81 failed、6 skipped。失败集中在邮件原件和人员交接的长路径写入（已确认一个失败路径为 283 字符）；改用扩展长度临时路径复验这 81 项时，80 passed，另 1 项邮件来源校验仍失败。因此本地完整 pytest 未通过，不将路径实验记为全绿；本次保持产品和测试不变，仍需验收方确认最新分支的真实 Actions 结果。
+
+待验收方在本分支推送后执行真实 Actions 验证（本地检查不能替代）：
+
+1. 确认 PR 正常 CI 的 **Python checks** 和 **Browser contracts** 均为 `success`，记录 run 编号。
+2. 用 `gh workflow run ci.yml --ref <分支>` 触发一次，等 Python 分片开始运行后执行 `gh run cancel <run编号>`，再用 `gh run view <run编号> --json jobs` 核对 **Python checks** 的 conclusion。预期为 `cancelled`；`failure`、`success`、`skipped` 均不能算本方案验收通过。
+3. 若实测为 `skipped`，须调整取消处理使其明确为 `cancelled` 或 `failure`，保留 main 按 SHA 分组及严格成功条件，重新实测并将 run 编号、结果和修法写入 PR。未完成此项前，不宣称取消语义已验证。
 
 ## PowerShell 测试的唯一分类来源
 

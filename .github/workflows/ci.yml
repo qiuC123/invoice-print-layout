@@ -15,7 +15,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: ci-${{ github.workflow }}-${{ github.ref }}
+  group: ci-${{ github.workflow }}-${{ github.event_name == 'push' && github.sha || github.ref }}
   cancel-in-progress: true
 
 env:
@@ -94,7 +94,7 @@ jobs:
   python-success:
     name: Python checks
     needs: python
-    if: ${{ always() }}
+    if: ${{ !cancelled() }}
     runs-on: windows-latest
     timeout-minutes: 5
     steps:
