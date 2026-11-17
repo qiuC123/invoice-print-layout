@@ -14,6 +14,7 @@ guard_personal_agent(event_guard, blocked_events)
 
 print('fixture: importing application', file=sys.stderr, flush=True)
 
+from invoice_print_layout import phone_link
 from invoice_print_layout.agent_jobs import AgentLoop, Jobs
 from invoice_print_layout.agent_tools import InvoiceTools
 from invoice_print_layout.glm_invoice_ai import GlmAIError, GlmInvoiceAI
@@ -22,6 +23,9 @@ from invoice_print_layout.workbench import ExpenseStore
 from invoice_print_layout.workbench_web import make_server
 from tests.test_invoice_agent import material, start
 from tests.test_organize_recovery import passenger_rows
+
+# Standalone fixtures do not load conftest's synthetic-interface isolation.
+event_guard.setattr(phone_link, 'addresses', lambda: [])
 
 
 def no_network(*args, **kwargs):
@@ -75,7 +79,9 @@ with tempfile.TemporaryDirectory(prefix='organize-nonblocking-ui-') as directory
     try:
         server.serve_forever()
     finally:
+        print('fixture: closing server', file=sys.stderr, flush=True)
         server.server_close()
+        print('fixture: reading outbox', file=sys.stderr, flush=True)
         with store.connect() as db:
             rows = db.execute("SELECT status,payload FROM invoice_event_outbox").fetchall()
         attention = [json.loads(row['payload']) for row in rows

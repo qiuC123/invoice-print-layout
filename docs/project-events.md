@@ -31,3 +31,24 @@
 - 较早运行出现一次派发恢复失败（49 passed / 1 failed，failed != ready），单文件复跑 11 passed，最终合跑 136 passed；未修改该测试或放宽断言。
 - 最终合跑首次因未预建 basetemp 父目录出现 setup errors，补建后得到上述 136 passed；不属于产品回归。
 - 未运行全量 pytest 或完整 OCR/Excel 验收；未修改正式工作区或发送真实端口请求。
+
+## 2026-11-17 浏览器夹具退出超时
+
+PR #14 的 Browser contracts 在夹具退出时得到 `exitCode=null`。独立夹具没有加载
+`conftest.synthetic_interfaces`，`ReceiptDevices` 构造时会启动真实网卡枚举，Windows
+PowerShell 探针自身限时 15 秒；`server_close()` 会等待该线程，而浏览器驱动只给退出留 5 秒。
+本机将网卡枚举模拟为 15 秒后复现同样失败；退出线程栈停在
+`ReceiptDevices.close()` 的 `address_worker.join()`，尚未执行 outbox 查询。
+原 CI 没有线程栈，不能断言其每个耗时阶段，但该遗漏可确定地重现退出失败。
+
+夹具现在复用原有 MonkeyPatch，将 `phone_link.addresses` 替换为合成空列表；
+保留真实后台服务关闭、outbox 查询、四条疑点/两个项目/全部 disabled 断言及端口防线，
+不改变 5 秒退出时限。增加独立子进程回归，原生枚举若被调用即失败；撤掉隔离后该测试实际失败。
+保留关闭和读取 outbox 的阶段日志，便于以后区分卡点。产品代码未改。
+
+修复后的 `organize_nonblocking_browser.cjs` 连续三次通过（6.06、6.20、6.05 秒），
+`organize_fixture_lifecycle.cjs` 通过；上述六个 Python 文件全部 137 项通过（含新增回归），
+mypy 123 个源文件通过，`git diff --check` 通过。本机未跑全量，未推送，云端复验待推送后进行。
+PowerShell 递归清理被执行策略拒绝，未切换工具绕过；本次遗留
+`.runtime/event-optin-exit-mypy`、`%TEMP%/pytest-of-Mayn/pytest-0` 和
+`%TEMP%/organize-nonblocking-ui-idb6c7b7`。未产生 `.pytest_cache` 或 `.mypy_cache`。

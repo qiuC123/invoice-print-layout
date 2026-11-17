@@ -1,6 +1,8 @@
 """Synthetic-only acceptance for nonblocking organizing and legacy completion."""
 import copy
 import json
+import subprocess
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -12,6 +14,23 @@ from invoice_print_layout.agent_review import leave_for_review
 from tests.test_invoice_agent import environment, material, start
 from tests.test_invoice_agent_content import draft
 from tests.test_agent_transport import entry, bill, trip
+
+
+def test_browser_fixture_isolates_native_interfaces() -> None:
+    result = subprocess.run([sys.executable, '-c', '''
+import runpy
+from invoice_print_layout import phone_link
+attempts = []
+def native_addresses():
+    attempts.append(True)
+    raise AssertionError('Standalone fixture must not enumerate native interfaces')
+phone_link.addresses = native_addresses
+runpy.run_module('tests.organize_nonblocking_browser_server', run_name='__main__')
+assert not attempts, 'Standalone fixture attempted native interface discovery'
+'''], input='stop\n', capture_output=True, text=True, encoding='utf-8',
+        cwd=Path(__file__).resolve().parents[1], timeout=30)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert 'four attention events in two projects disabled; no event-port attempts' in result.stderr
 
 
 def test_content_question_keeps_draft_and_processes_rest(environment: Any) -> None:
