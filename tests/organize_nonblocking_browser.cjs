@@ -54,6 +54,7 @@ async function run(pw){
   try{if(browser)await browser.close();}
   finally{
    if(child.exitCode===null)await new Promise(resolve=>{const timer=setTimeout(()=>{child.kill();resolve();},5000);child.once('exit',()=>{clearTimeout(timer);resolve();});child.stdin.end('stop\n');});
+   assert.equal(child.exitCode,0,'fixture failed: '+stderr);
   }
  }
 }

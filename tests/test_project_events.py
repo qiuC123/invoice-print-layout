@@ -21,6 +21,7 @@ def scenario(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[ExpenseSt
     clock = [100000.0]
     monkeypatch.setattr(events, 'time', SimpleNamespace(time=lambda: clock[0]))
     store = ExpenseStore(tmp_path / 'synthetic')
+    (store.root / 'project-events.json').write_text(json.dumps({'url': 'http://127.0.0.1:1/events'}), encoding='utf-8')
     project = ExpenseProjects(store).create('合成项目')
     return store, project['id'], clock
 
@@ -236,3 +237,98 @@ def test_configured_event_address_is_local(tmp_path: Path, url: Any) -> None:
     (store.root / 'project-events.json').write_text(json.dumps({'url': url}), encoding='utf-8')
     with pytest.raises(ValueError):
         events.event_url(store)
+
+
+@pytest.mark.parametrize('config', [None, {}, {'url': ''}])
+def test_unconfigured_workspace_never_queues_or_sends(tmp_path: Path, config: Any) -> None:
+    from invoice_print_layout.invoice_attention import emit
+    store = ExpenseStore(tmp_path)
+    if config is not None:
+        (store.root / 'project-events.json').write_text(json.dumps(config), encoding='utf-8')
+    project = ExpenseProjects(store).create('合成未启用项目')['id']
+    fee(store, project)
+    with store.connect() as db:
+        emit(store, db, 'invoice.needs_attention', 'invoice-item:synthetic', 'v', 'test', '合成疑点', {})
+    assert events.event_url(store) is None
+    assert not outbox(store) and len(outbox(store, 'disabled')) == 2
+    sender = events.ProjectEvents(store, sender=lambda *_: pytest.fail('Unconfigured sender called'))
+    sender.deliver_pending()
+    sender.close()
+    assert not outbox(store)
+
+
+def test_removed_config_disables_old_pending_without_replay(scenario: Any) -> None:
+    store, project, clock = scenario
+    fee(store, project)
+    config = store.root / 'project-events.json'
+    content = config.read_text(encoding='utf-8')
+    config.unlink()
+    sender = events.ProjectEvents(store, clock=lambda: clock[0], sender=lambda *_: pytest.fail('Old event replayed'))
+    sender.deliver_pending()
+    assert not outbox(store) and outbox(store, 'disabled')[0]['error'] == 'not_configured'
+    config.write_text(content, encoding='utf-8')
+    sender.deliver_pending()
+    sender.close()
+    assert not outbox(store)
+
+
+def test_configured_workspace_delivers_to_temporary_receiver(scenario: Any) -> None:
+    store, project, clock = scenario
+    received = []
+    class Receiver(BaseHTTPRequestHandler):
+        def do_POST(self):
+            payload = json.loads(self.rfile.read(int(self.headers['Content-Length'])))
+            received.append(payload)
+            self.send_response(202)
+            self.end_headers()
+            self.wfile.write(json.dumps({'id': payload['id'], 'accepted': True}).encode())
+        def log_message(self, *_):
+            pass
+    server = ThreadingHTTPServer(('127.0.0.1', 0), Receiver)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    sender = events.ProjectEvents(store, clock=lambda: clock[0])
+    try:
+        (store.root / 'project-events.json').write_text(
+            json.dumps({'url': f'http://127.0.0.1:{server.server_port}/events'}), encoding='utf-8')
+        fee(store, project)
+        sender.deliver_pending()
+        assert len(received) == 1 and len(outbox(store, 'sent')) == 1
+    finally:
+        sender.close()
+        server.shutdown()
+        server.server_close()
+        thread.join()
+
+
+def test_transport_guard_blocks_even_when_delivery_swallows_error(tmp_path: Path, monkeypatch: Any) -> None:
+    from tests.event_safety import guard_personal_agent
+    blocked = []
+    guard_personal_agent(monkeypatch, blocked)
+    store = ExpenseStore(tmp_path)
+    (store.root / 'project-events.json').write_text(
+        json.dumps({'url': 'http://127.0.0.1:25820/events'}), encoding='utf-8')
+    project = ExpenseProjects(store).create('合成防线检查')['id']
+    fee(store, project)
+    sender = events.ProjectEvents(store)
+    sender.deliver_pending()
+    sender.close()
+    assert blocked and blocked[0][1] == 25820
+    assert outbox(store)[0]['error'] == 'AssertionError'
+
+
+def test_autouse_guard_fails_test_even_if_network_error_is_caught(tmp_path: Path) -> None:
+    import subprocess
+    import sys
+    (tmp_path / 'conftest.py').write_text(
+        Path(__file__).with_name('conftest.py').read_text(encoding='utf-8'), encoding='utf-8')
+    (tmp_path / 'test_blocked.py').write_text(
+        "import socket\ndef test_swallowed():\n"
+        "    with socket.socket() as sock:\n"
+        "        try: sock.connect(('127.0.0.1', 25820))\n"
+        "        except AssertionError: pass\n", encoding='utf-8')
+    result = subprocess.run([sys.executable, '-m', 'pytest', str(tmp_path),
+                             '--confcutdir', str(tmp_path), '-p', 'no:cacheprovider'],
+                            capture_output=True, text=True, timeout=30)
+    assert result.returncode == 1, result.stdout + result.stderr
+    assert 'Test attempted real event delivery' in result.stdout

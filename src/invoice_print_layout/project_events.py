@@ -121,15 +121,25 @@ def capture_changes(store: ExpenseStore, db: sqlite3.Connection, *, at: float | 
                    'ref': snapshot, 'occurred_at': datetime.fromtimestamp(at, timezone.utc).isoformat()}
         db.execute('INSERT INTO invoice_event_outbox '
                    '(id,project_id,version,created,retry_at,status,payload) VALUES (?,?,?,?,?,?,?) '
-                   "ON CONFLICT(id) DO UPDATE SET status='pending',payload=excluded.payload,retry_at=excluded.retry_at "
+                   "ON CONFLICT(id) DO UPDATE SET status=excluded.status,payload=excluded.payload,retry_at=excluded.retry_at "
                    "WHERE invoice_event_outbox.status='superseded'",
-                   (event_id, project_id, snapshot['version'], at, max(at, last_attempt + 60), 'pending',
+                   (event_id, project_id, snapshot['version'], at, max(at, last_attempt + 60), queue_status(store),
                     json.dumps(payload, ensure_ascii=False)))
     db.execute('DELETE FROM invoice_project_dirty')
 
 
-def event_url(store: ExpenseStore) -> str:
-    url = read_json(store.root / 'project-events.json').get('url', 'http://127.0.0.1:25820/events')
+def queue_status(store: ExpenseStore) -> str:
+    # Keep local deduplication/rate-limit history without scheduling disabled events.
+    try:
+        return 'pending' if event_url(store) else 'disabled'
+    except (ValueError, OSError):
+        return 'disabled'
+
+
+def event_url(store: ExpenseStore) -> str | None:
+    url = read_json(store.root / 'project-events.json').get('url')
+    if url is None or url == '':
+        return None
     if not isinstance(url, str):
         raise ValueError('事件地址必须为本机 HTTP 地址')
     parsed = urlparse(url)
@@ -189,6 +199,12 @@ class ProjectEvents:
             pass
 
     def deliver_pending(self) -> None:
+        url = event_url(self.store)
+        if url is None:
+            with self.store.connect() as db:
+                db.execute("UPDATE invoice_event_outbox SET status='disabled',error='not_configured' "
+                           "WHERE status='pending'")
+            return
         with self.store.connect() as db:
             db.execute('BEGIN IMMEDIATE')
             expired = db.execute("SELECT id FROM invoice_event_outbox WHERE status='pending' AND created<=?",
@@ -217,7 +233,7 @@ class ProjectEvents:
                                (self.clock(), row['project_id']))
             error = ''
             try:
-                self.sender(event_url(self.store), json.loads(row['payload']))
+                self.sender(url, json.loads(row['payload']))
             except Exception as exc:
                 error = type(exc).__name__
             with self.store.connect() as db:

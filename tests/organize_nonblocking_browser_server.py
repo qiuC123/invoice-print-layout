@@ -5,6 +5,13 @@ import tempfile
 import sys
 import threading
 
+import pytest
+from tests.event_safety import guard_personal_agent
+
+event_guard = pytest.MonkeyPatch()
+blocked_events = []
+guard_personal_agent(event_guard, blocked_events)
+
 print('fixture: importing application', file=sys.stderr, flush=True)
 
 from invoice_print_layout.agent_jobs import AgentLoop, Jobs
@@ -69,3 +76,13 @@ with tempfile.TemporaryDirectory(prefix='organize-nonblocking-ui-') as directory
         server.serve_forever()
     finally:
         server.server_close()
+        with store.connect() as db:
+            rows = db.execute("SELECT status,payload FROM invoice_event_outbox").fetchall()
+        attention = [json.loads(row['payload']) for row in rows
+                     if json.loads(row['payload'])['type'] == 'invoice.needs_attention']
+        assert len(attention) == 4, attention
+        assert len({event['ref']['project_id'] for event in attention}) == 2
+        assert all(row['status'] == 'disabled' for row in rows), rows
+        assert not blocked_events, blocked_events
+        print('fixture: four attention events in two projects disabled; no event-port attempts', file=sys.stderr)
+        event_guard.undo()

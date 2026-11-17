@@ -14,8 +14,8 @@ async function check(mode) {
   child.stdin = {end(value) {
     assert.equal(value, 'stop\n');
     stopped = true;
-    child.exitCode = 0;
-    child.emit('exit', 0);
+    child.exitCode = mode === 'fixture-exit' ? 1 : 0;
+    child.emit('exit', child.exitCode);
   }};
   child.kill = () => {throw Error('cooperative shutdown should not require killing');};
   const load = name => name === 'node:child_process' ? {spawn() {
@@ -35,11 +35,11 @@ async function check(mode) {
   await assert.rejects(sandbox.module.exports({chromium: {async launch() {
     if (mode === 'launch') throw Error('launch failed');
     return browser;
-  }}}), mode === 'timeout' ? /fixture timeout/ : mode === 'launch' ? /launch failed/ : /close failed/);
+  }}}), mode === 'timeout' ? /fixture timeout/ : mode === 'launch' ? /launch failed/ : mode === 'fixture-exit' ? /fixture failed/ : /close failed/);
   assert.equal(stopped, true, mode + ' must stop the fixture');
 }
 
 (async () => {
-  for (const mode of ['timeout', 'launch', 'close']) await check(mode);
+  for (const mode of ['timeout', 'launch', 'close', 'fixture-exit']) await check(mode);
   console.log('Fixture cleanup contracts passed');
 })().catch(error => {console.error(error); process.exitCode = 1;});

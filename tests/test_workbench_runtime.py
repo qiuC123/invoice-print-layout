@@ -42,6 +42,14 @@ def test_runtime_identity_is_frozen_after_server_creation(tmp_path, monkeypatch)
         monkeypatch.setattr(web, 'STARTUP_BUILD_ID', 'changed-later')
         assert read() == before
         assert before['build_id'] != 'changed-on-disk'
+        assert before['event_push'] == '未配置'
+        config = tmp_path / '工作台' / 'project-events.json'
+        config.write_text(json.dumps({'url': 'http://127.0.0.1:1/events'}), encoding='utf-8')
+        assert read()['event_push'] == '已开启'
+        config.write_text(json.dumps({'url': 'https://example.com/events'}), encoding='utf-8')
+        assert read()['event_push'] == '配置无效'
+        config.unlink()
+        assert read()['event_push'] == '未配置'
         assert before['ready'] and before['started_at']
         assert before['workspace_id'] == identity(tmp_path, '')['workspace_id']
         assert 'category_suggestion' in before['capabilities']

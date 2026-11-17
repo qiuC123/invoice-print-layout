@@ -332,7 +332,12 @@ def make_server(workspace: Path, port: int = 8765, *, mode: str = 'workbench',
                 elif path == '/api/phone-link/receipt-app':
                     self.respond(receipt_devices.status())
                 elif path == '/api/runtime':
-                    self.respond(runtime)
+                    from invoice_print_layout.project_events import event_url
+                    try:
+                        event_push = '已开启' if event_url(store) else '未配置'
+                    except (ValueError, OSError):
+                        event_push = '配置无效'
+                    self.respond({**runtime, 'event_push': event_push})
                 elif path == '/api/attention':
                     from invoice_print_layout.invoice_attention import Attention
                     from invoice_print_layout import knowledge_read

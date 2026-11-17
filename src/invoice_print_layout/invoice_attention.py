@@ -37,6 +37,7 @@ def install(db: sqlite3.Connection) -> None:
 
 def emit(store: ExpenseStore, db: sqlite3.Connection, event_type: str, obj: str,
          version: str, reason: str, summary: str, ref: dict[str, Any]) -> dict[str, Any]:
+    from invoice_print_layout.project_events import queue_status
     at = time.time()
     workspace_id = identity(store.workspace, '', 'invoice')['workspace_id']
     event_id = 'invoice-attention-' + _hash([workspace_id, obj, version, reason])
@@ -55,7 +56,7 @@ def emit(store: ExpenseStore, db: sqlite3.Connection, event_type: str, obj: str,
                'occurred_at': datetime.fromtimestamp(at, timezone.utc).isoformat()}
     db.execute('INSERT INTO invoice_event_outbox '
                '(id,project_id,version,created,retry_at,status,payload) VALUES (?,?,?,?,?,?,?)',
-               (event_id, ref.get('project_id', ''), version, at, at, 'pending', _json(payload)))
+               (event_id, ref.get('project_id', ''), version, at, at, queue_status(store), _json(payload)))
     return {'event_id': event_id, 'emission': sequence, 'suppressed': False}
 
 
