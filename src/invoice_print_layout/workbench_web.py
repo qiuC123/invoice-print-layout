@@ -332,7 +332,8 @@ def make_server(workspace: Path, port: int = 8765, *, mode: str = 'workbench',
                 elif path == '/api/phone-link/receipt-app':
                     self.respond(receipt_devices.status())
                 elif path == '/api/runtime':
-                    self.respond(runtime)
+                    from invoice_print_layout.project_events import push_status
+                    self.respond({**runtime, 'event_push': push_status(store)})
                 elif path == '/api/attention':
                     from invoice_print_layout.invoice_attention import Attention
                     from invoice_print_layout import knowledge_read

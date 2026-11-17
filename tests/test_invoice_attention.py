@@ -20,6 +20,13 @@ from tests.test_invoice_agent import environment, material, start
 from tests.test_auto_verify import prepared
 
 
+@pytest.fixture(autouse=True)
+def configure_events(environment: Any) -> None:
+    store = environment[1].store
+    (store.root / 'project-events.json').write_text(
+        json.dumps({'url': 'http://127.0.0.1:1/events'}), encoding='utf-8')
+
+
 EVIDENCE = {'method': '原件逐字段核实', 'reference': 'synthetic.pdf 第1页', 'statement': '合成原件明确列出这些事实。'}
 
 

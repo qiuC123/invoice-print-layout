@@ -42,6 +42,7 @@ def test_runtime_identity_is_frozen_after_server_creation(tmp_path, monkeypatch)
         monkeypatch.setattr(web, 'STARTUP_BUILD_ID', 'changed-later')
         assert read() == before
         assert before['build_id'] != 'changed-on-disk'
+        assert before['event_push'] == '未配置'
         assert before['ready'] and before['started_at']
         assert before['workspace_id'] == identity(tmp_path, '')['workspace_id']
         assert 'category_suggestion' in before['capabilities']
