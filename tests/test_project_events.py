@@ -239,6 +239,18 @@ def test_configured_event_address_is_local(tmp_path: Path, url: Any) -> None:
         events.event_url(store)
 
 
+def test_push_status_reports_config_state(tmp_path: Path) -> None:
+    # Checked without a live server: its delivery thread reads the same file,
+    # and rewriting it under that reader fails on Windows.
+    store = ExpenseStore(tmp_path)
+    config = store.root / 'project-events.json'
+    assert events.push_status(store) == '未配置'
+    config.write_text(json.dumps({'url': 'http://127.0.0.1:1/events'}), encoding='utf-8')
+    assert events.push_status(store) == '已开启'
+    config.write_text(json.dumps({'url': 'https://example.com/events'}), encoding='utf-8')
+    assert events.push_status(store) == '配置无效'
+
+
 @pytest.mark.parametrize('config', [None, {}, {'url': ''}])
 def test_unconfigured_workspace_never_queues_or_sends(tmp_path: Path, config: Any) -> None:
     from invoice_print_layout.invoice_attention import emit

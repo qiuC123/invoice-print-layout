@@ -136,6 +136,13 @@ def queue_status(store: ExpenseStore) -> str:
         return 'disabled'
 
 
+def push_status(store: ExpenseStore) -> str:
+    try:
+        return '已开启' if event_url(store) else '未配置'
+    except (ValueError, OSError):
+        return '配置无效'
+
+
 def event_url(store: ExpenseStore) -> str | None:
     url = read_json(store.root / 'project-events.json').get('url')
     if url is None or url == '':
