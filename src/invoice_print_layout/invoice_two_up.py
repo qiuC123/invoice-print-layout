@@ -2,10 +2,8 @@
 from __future__ import annotations
 
 from contextlib import ExitStack
-from dataclasses import dataclass
 import hashlib
 import math
-from pathlib import Path
 import re
 from typing import Any
 
@@ -13,7 +11,7 @@ import pymupdf
 
 from invoice_print_layout.layout import A4_HEIGHT, A4_WIDTH
 from invoice_print_layout.payment_layout import _same_printed_content
-from invoice_print_layout.rail_print_layout import append_rail_tickets, rail_pairable
+from invoice_print_layout.rail_print_layout import _SourcePdf, _open_invoice_pdf, append_rail_tickets, rail_pairable
 from invoice_print_layout.report_types import infer_report_choice, validate_report_choice
 from invoice_print_layout.workbench import CATEGORIES, ExpenseStore
 
@@ -24,13 +22,6 @@ CELL_HEIGHT = (A4_HEIGHT - MARGIN * 2 - GAP) / 2
 _INVOICE_HEADING = re.compile(
     r'电子发票[（(](?:增值税)?(?:普通|专用)发票[）)]|'
     r'(?:增值税)?电子(?:普通|专用)发票|增值税(?:普通|专用)发票')
-
-
-@dataclass(frozen=True)
-class _Invoice:
-    document: pymupdf.Document
-    path: Path
-    digest: str
 
 
 def _item_key(item: dict[str, Any]) -> tuple[str, ...] | None:
@@ -60,27 +51,18 @@ def _item_key(item: dict[str, Any]) -> tuple[str, ...] | None:
     return (item['project_id'], item['category'], choice['report_section'], choice['project_type'], subitem)
 
 
-def _invoice(stack: ExitStack, store: ExpenseStore, item: dict[str, Any]) -> _Invoice | None:
+def _invoice(stack: ExitStack, store: ExpenseStore, item: dict[str, Any]) -> _SourcePdf | None:
     if _item_key(item) is None:
         return None
-    attachment = item['attachments'][0]
-    with store.connect() as db:
-        row = db.execute('SELECT item_id,role,path,digest FROM attachments WHERE id=?',
-                         (attachment['id'],)).fetchone()
-    path, _ = store.attachment_path(attachment['id'])
-    if (row is None or row['item_id'] != item['id'] or row['role'] != 'invoice' or
-            Path(row['path']).resolve() != path or path.suffix.lower() != '.pdf'):
+    invoice = _open_invoice_pdf(stack, store, item, '发票原件与保存时不一致，请重新核对材料')
+    if invoice is None:
         return None
-    payload = path.read_bytes()
-    digest = hashlib.sha256(payload).hexdigest()
-    if not row['digest'] or digest != row['digest']:
-        raise ValueError('发票原件与保存时不一致，请重新核对材料')
-    source = stack.enter_context(pymupdf.open(stream=payload, filetype='pdf'))  # type: ignore[no-untyped-call]
+    source = invoice.document
     if (source.needs_pass or source.is_encrypted or not source.is_pdf or len(source) != 1 or
             (source.metadata or {}).get('encryption')):
         return None
     page = source[0]
-    if page.rotation or list(page.widgets()):
+    if page.rotation or list(page.widgets()):  # type: ignore[no-untyped-call]
         return None
     boxes = (page.rect, page.mediabox, page.cropbox)
     if (any(box.is_empty or not all(math.isfinite(value) for value in box) for box in boxes) or
@@ -90,7 +72,7 @@ def _invoice(stack: ExitStack, store: ExpenseStore, item: dict[str, Any]) -> _In
     if not all(math.isfinite(value) and value > 0 for value in (width, height)):
         return None
     header_rect = pymupdf.Rect(0, 0, width, height * .45)  # type: ignore[no-untyped-call]
-    heading = re.sub(r'\s+', '', page.get_text(clip=header_rect))
+    heading = re.sub(r'\s+', '', page.get_text(clip=header_rect))  # type: ignore[no-untyped-call]
     if not _INVOICE_HEADING.search(heading):
         return None
     full_scale = min(PRINT_WIDTH / width, (A4_HEIGHT - 2 * MARGIN) / height)
@@ -98,7 +80,7 @@ def _invoice(stack: ExitStack, store: ExpenseStore, item: dict[str, Any]) -> _In
     if abs(full_scale - half_scale) > 1e-8 or height * full_scale > CELL_HEIGHT + 1e-6:
         return None
     source.bake(annots=True, widgets=False)
-    return _Invoice(source, path, digest)
+    return invoice
 
 
 def invoice_pairable(store: ExpenseStore, item: dict[str, Any]) -> bool:
