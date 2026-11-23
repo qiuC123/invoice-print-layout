@@ -97,10 +97,35 @@ jobs:
     if: ${{ !cancelled() }}
     runs-on: windows-latest
     timeout-minutes: 5
+    permissions:
+      actions: read
     steps:
       - name: Require every pytest shard and mypy to pass
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PYTHON_RESULT: ${{ needs.python.result }}
         run: |
-          if ('${{ needs.python.result }}' -ne 'success') { throw 'Python tests or mypy did not pass' }
+          if ($env:PYTHON_RESULT -eq 'success') { exit 0 }
+
+          $runUrl = "$env:GITHUB_SERVER_URL/$env:GITHUB_REPOSITORY/actions/runs/$env:GITHUB_RUN_ID/attempts/$env:GITHUB_RUN_ATTEMPT"
+          try {
+            $pages = gh api --paginate --slurp "repos/$env:GITHUB_REPOSITORY/actions/runs/$env:GITHUB_RUN_ID/attempts/$env:GITHUB_RUN_ATTEMPT/jobs?per_page=100"
+            if ($LASTEXITCODE -ne 0) { throw "gh api exited with code $LASTEXITCODE" }
+            $failedJobs = $pages | ConvertFrom-Json | ForEach-Object { $_.jobs } | Where-Object {
+              $_.name -like 'Python tests (*' -and $_.conclusion -ne 'success'
+            }
+            if (-not $failedJobs) { throw 'The API returned no unsuccessful Python jobs' }
+            foreach ($job in $failedJobs) {
+              $failedSteps = ($job.steps | Where-Object conclusion -eq 'failure').name -join ', '
+              $line = "$($job.name) [$($job.conclusion)] $(if ($failedSteps) { "$failedSteps " })$($job.html_url)"
+              $annotation = $line.Replace('%', '%25').Replace("`r", '%0D').Replace("`n", '%0A')
+              Write-Output "::error title=Python matrix check failed::$annotation"
+              Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Value "- $line" -Encoding utf8
+            }
+          } catch {
+            Write-Output "::warning::Could not report unsuccessful Python jobs. $($_.Exception.Message) $runUrl"
+          }
+          throw "Python tests or mypy did not pass (matrix result: $env:PYTHON_RESULT)"
 
   browser:
     name: Browser contracts
