@@ -23,7 +23,7 @@ PRINT_WIDTH = A4_WIDTH - 2 * MARGIN
 
 
 @dataclass(frozen=True)
-class _Ticket:
+class _SourcePdf:
     document: pymupdf.Document
     path: Path
     digest: str
@@ -48,9 +48,8 @@ def _rail_item(item: dict[str, Any]) -> bool:
                 attachments[0].get('role') == 'invoice' and attachments[0].get('available'))
 
 
-def _ticket(stack: ExitStack, store: ExpenseStore, item: dict[str, Any]) -> _Ticket | None:
-    if not _rail_item(item):
-        return None
+def _open_invoice_pdf(stack: ExitStack, store: ExpenseStore, item: dict[str, Any],
+                      changed_message: str) -> _SourcePdf | None:
     attachment = item['attachments'][0]
     with store.connect() as db:
         row = db.execute('SELECT item_id,role,path,digest FROM attachments WHERE id=?',
@@ -62,19 +61,29 @@ def _ticket(stack: ExitStack, store: ExpenseStore, item: dict[str, Any]) -> _Tic
     payload = path.read_bytes()
     digest = hashlib.sha256(payload).hexdigest()
     if not row['digest'] or digest != row['digest']:
-        raise ValueError('高铁原件与保存时不一致，请重新检查材料')
+        raise ValueError(changed_message)
     source = stack.enter_context(pymupdf.open(stream=payload, filetype='pdf'))  # type: ignore[no-untyped-call]
+    return _SourcePdf(source, path, digest)
+
+
+def _ticket(stack: ExitStack, store: ExpenseStore, item: dict[str, Any]) -> _SourcePdf | None:
+    if not _rail_item(item):
+        return None
+    ticket = _open_invoice_pdf(stack, store, item, '高铁原件与保存时不一致，请重新检查材料')
+    if ticket is None:
+        return None
+    source = ticket.document
     if source.needs_pass or not source.is_pdf or len(source) != 1:
         return None
     source.bake(annots=True, widgets=False)
     page = source[0]
-    if page.rotation or list(page.widgets()):
+    if page.rotation or list(page.widgets()):  # type: ignore[no-untyped-call]
         return None
     boxes = (page.rect, page.mediabox, page.cropbox)
     if (any(box.is_empty or not all(math.isfinite(value) for value in box) for box in boxes) or
             any(abs(left - right) > .01 for box in boxes[1:] for left, right in zip(boxes[0], box, strict=True))):
         return None
-    text = re.sub(r'\s+', '', page.get_text())
+    text = re.sub(r'\s+', '', page.get_text())  # type: ignore[no-untyped-call]
     if '铁路电子客票' not in text:
         return None
     width, height = page.rect.width, page.rect.height
@@ -84,7 +93,7 @@ def _ticket(stack: ExitStack, store: ExpenseStore, item: dict[str, Any]) -> _Tic
     half_scale = min(PRINT_WIDTH / width, CELL_HEIGHT / height)
     if abs(half_scale - baseline_scale) > 1e-8 or height * baseline_scale > CELL_HEIGHT + 1e-6:
         return None
-    return _Ticket(source, path, digest)
+    return ticket
 
 
 def rail_pairable(store: ExpenseStore, item: dict[str, Any]) -> bool:
